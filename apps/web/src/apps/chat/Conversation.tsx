@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
@@ -16,50 +16,18 @@ interface Props {
 export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
 
   const onSend = async (text: string) => {
     setMsgs((m) => [...m, { who: 'user', text }, { who: 'assistant', text: '', pending: true }]);
     setBusy(true);
 
     try {
-      const { stream_id } = await api.startChat({ thread_id: threadId, message: text });
-      const es = new EventSource(`/api/chat/stream?stream_id=${encodeURIComponent(stream_id)}`);
-      esRef.current = es;
-
-      es.addEventListener('token', (e) => {
-        const d = JSON.parse(e.data) as { text: string };
-        setMsgs((m) => {
-          const next = [...m];
-          const last = next[next.length - 1]!;
-          next[next.length - 1] = { ...last, text: last.text + d.text };
-          return next;
-        });
-      });
-
-      es.addEventListener('tool', (e) => {
-        const d = JSON.parse(e.data) as { name: string; preview: string };
-        setMsgs((m) => {
-          const next = [...m];
-          const last = next[next.length - 1]!;
-          next[next.length - 1] = { ...last, text: last.text + `\n[使用工具：${d.name} · ${d.preview}]\n` };
-          return next;
-        });
-      });
-
-      es.addEventListener('done', () => {
-        setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, pending: false } : x));
-        es.close();
-        setBusy(false);
-      });
-
-      es.addEventListener('error', () => {
-        setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: x.text + '\n[连接错误]', pending: false } : x));
-        es.close();
-        setBusy(false);
-      });
+      const { reply } = await api.sendChat({ thread_id: threadId, message: text });
+      setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: reply, pending: false } : x));
     } catch (err) {
-      setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: '[请求失败]' + (err instanceof Error ? err.message : ''), pending: false } : x));
+      const errMsg = err instanceof Error ? err.message : '请求失败';
+      setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: `[错误] ${errMsg}`, pending: false } : x));
+    } finally {
       setBusy(false);
     }
   };
@@ -83,7 +51,7 @@ export const Conversation = ({ threadId }: Props) => {
               borderTopLeftRadius: m.who === 'user' ? 14 : 4,
               borderTopRightRadius: m.who === 'user' ? 4 : 14,
             }}>
-              {m.text || (m.pending ? '…' : '')}
+              {m.text || (m.pending ? <span className="pulse">灵犀正在思考…</span> : '')}
             </div>
           </div>
         ))}

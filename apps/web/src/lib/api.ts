@@ -6,8 +6,8 @@ import type {
   ThreadCreateRequest,
   ThreadCreateResponse,
   ThreadListItem,
-  WebChatStartRequest,
-  WebChatStartResponse,
+  WebChatRequest,
+  WebChatResponse,
 } from '@lingxi/shared';
 
 export class AuthError extends Error {
@@ -62,5 +62,5 @@ export const deleteThread = (id: string): Promise<{ ok: true }> =>
   json(`/api/threads/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 // === Chat ===
-export const startChat = (body: WebChatStartRequest): Promise<WebChatStartResponse> =>
-  json('/api/chat/start', { method: 'POST', body: JSON.stringify(body) });
+export const sendChat = (body: WebChatRequest): Promise<WebChatResponse> =>
+  json('/api/chat', { method: 'POST', body: JSON.stringify(body) });

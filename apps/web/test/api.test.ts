@@ -55,11 +55,11 @@ describe('api client', () => {
     expect(res[0]!.id).toBe('thr_1');
   });
 
-  it('startChat returns stream_id', async () => {
+  it('sendChat returns reply', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ stream_id: 'stm_abc' })),
+      new Response(JSON.stringify({ reply: '你好' })),
     );
-    const res = await api.startChat({ thread_id: 'thr_1', message: 'hi' });
-    expect(res.stream_id).toBe('stm_abc');
+    const res = await api.sendChat({ thread_id: 'thr_1', message: 'hi' });
+    expect(res.reply).toBe('你好');
   });
 });

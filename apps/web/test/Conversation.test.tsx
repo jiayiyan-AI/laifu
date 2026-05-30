@@ -1,44 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Conversation } from '../src/apps/chat/Conversation.js';
 
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-  url: string;
-  listeners: Record<string, ((e: MessageEvent) => void)[]> = {};
-  closed = false;
-
-  constructor(url: string) {
-    this.url = url;
-    MockEventSource.instances.push(this);
-  }
-  addEventListener(type: string, fn: (e: MessageEvent) => void) {
-    (this.listeners[type] ||= []).push(fn);
-  }
-  dispatch(type: string, data: object) {
-    const evt = new MessageEvent(type, { data: JSON.stringify(data) });
-    this.listeners[type]?.forEach((fn) => fn(evt));
-  }
-  close() { this.closed = true; }
-}
-
 describe('Conversation', () => {
-  let OrigES: any;
   beforeEach(() => {
-    OrigES = (global as any).EventSource;
-    (global as any).EventSource = MockEventSource;
-    MockEventSource.instances = [];
     vi.restoreAllMocks();
   });
-  afterEach(() => {
-    (global as any).EventSource = OrigES;
-  });
 
-  it('sending a message: posts /chat/start, opens EventSource, renders tokens, then done', async () => {
+  it('sending a message: posts /api/chat, shows pending, renders reply', async () => {
     const user = userEvent.setup();
-    vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ stream_id: 'stm_outer' })),
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ reply: '你好,我是灵犀' })),
     );
 
     render(<Conversation threadId="thr_1" />);
@@ -46,17 +19,28 @@ describe('Conversation', () => {
     await user.type(screen.getByPlaceholderText(/继续和灵犀对话/), 'hello');
     await user.click(screen.getByRole('button', { name: /发送/ }));
 
+    // user message rendered
     await waitFor(() => expect(screen.getByText('hello')).toBeInTheDocument());
 
-    const es = await waitFor(() => MockEventSource.instances[0]!);
-    expect(es.url).toContain('/api/chat/stream');
-    expect(es.url).toContain('stm_outer');
+    // POST hit /api/chat with thread_id + message
+    const call = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/api/chat'));
+    expect(call).toBeDefined();
+    const body = JSON.parse((call![1] as any).body);
+    expect(body.thread_id).toBe('thr_1');
+    expect(body.message).toBe('hello');
 
-    es.dispatch('token', { text: '你' });
-    es.dispatch('token', { text: '好' });
-    es.dispatch('done', { full_reply: '你好', session_id: 'web:thr_1' });
+    // assistant reply appears
+    await waitFor(() => expect(screen.getByText('你好,我是灵犀')).toBeInTheDocument());
+  });
 
-    await waitFor(() => expect(screen.getByText('你好')).toBeInTheDocument());
-    expect(es.closed).toBe(true);
+  it('shows error message when fetch fails', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
+
+    render(<Conversation threadId="thr_1" />);
+    await user.type(screen.getByPlaceholderText(/继续和灵犀对话/), 'hi');
+    await user.click(screen.getByRole('button', { name: /发送/ }));
+
+    await waitFor(() => expect(screen.getByText(/\[错误\] network down/)).toBeInTheDocument());
   });
 });
