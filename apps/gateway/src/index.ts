@@ -1,19 +1,43 @@
 import express, { type Express } from 'express';
 import { healthzRouter } from './api/healthz.js';
+import { buildStatusRouter } from './api/status.js';
+import { ContainerMappingCache } from './db/cache.js';
 import { config, validateConfig } from './config.js';
+import { getSupabase } from './db/supabase.js';
 
-export const createApp = (): Express => {
+export interface CreateAppOptions {
+  cache?: ContainerMappingCache;
+}
+
+export const createApp = (opts: CreateAppOptions = {}): Express => {
   const app = express();
   app.use(express.json());
+
   app.use(healthzRouter);
+
+  // Unit test 可以传入预设的 cache；正式跑用真实 Supabase（懒加载，避免测试时报错）
+  let _cache: ContainerMappingCache | undefined = opts.cache;
+  const getCache = (): ContainerMappingCache => {
+    if (!_cache) _cache = new ContainerMappingCache(getSupabase());
+    return _cache;
+  };
+
+  app.use(buildStatusRouter(getCache));
+
   return app;
 };
 
-// 入口（仅在直接运行时启动，单元测试 import 不会触发）
 if (import.meta.url === `file://${process.argv[1]}`) {
   validateConfig();
-  const app = createApp();
-  app.listen(config.port, () => {
-    console.log(`[gateway] listening on :${config.port}`);
+  const sb = getSupabase();
+  const cache = new ContainerMappingCache(sb);
+  cache.loadAll().then(() => {
+    const app = createApp({ cache });
+    app.listen(config.port, () => {
+      console.log(`[gateway] listening on :${config.port}`);
+    });
+  }).catch((err) => {
+    console.error('[gateway] failed to load cache:', err);
+    process.exit(1);
   });
 }
