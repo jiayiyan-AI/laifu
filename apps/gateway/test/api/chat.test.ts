@@ -116,3 +116,78 @@ describe('POST /api/chat/start', () => {
     expect(res.status).toBe(503);
   });
 });
+
+describe('GET /api/chat/stream', () => {
+  let mockSb: any;
+  let cache: ContainerMappingCache;
+  let registry: StreamRegistry;
+  let fetchSpy: any;
+
+  beforeEach(() => {
+    mockSb = {
+      from: vi.fn(() => mockSb),
+      select: vi.fn(() => mockSb),
+      eq: vi.fn(() => mockSb),
+      single: vi.fn(() => Promise.resolve({
+        data: { id: 'thr_1', user_id: 'u1' },
+        error: null,
+      })),
+      then: (resolve: any) => resolve({ data: null, error: null }),
+    };
+    cache = new ContainerMappingCache(mockSb);
+    registry = new StreamRegistry();
+  });
+
+  const makeApp = () => {
+    const app = express();
+    app.use(express.json());
+    app.use(cookieParser());
+    const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
+    app.use(buildChatRouter(mockSb, cache, registry, mw));
+    return app;
+  };
+
+  it('401 when no session', async () => {
+    const res = await request(makeApp()).get('/api/chat/stream?stream_id=stm_x');
+    expect(res.status).toBe(401);
+  });
+
+  it('404 when stream_id unknown', async () => {
+    const res = await request(makeApp())
+      .get('/api/chat/stream?stream_id=stm_unknown')
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(404);
+  });
+
+  it('pipes container SSE bytes through to client', async () => {
+    const outer = registry.register({
+      containerUrl: 'http://localhost:8080',
+      innerStreamId: 'inner_x',
+    });
+
+    const sseBody = [
+      'event: token\ndata: {"text":"h"}\n\n',
+      'event: token\ndata: {"text":"i"}\n\n',
+      'event: done\ndata: {"full_reply":"hi","session_id":"web:thr_1"}\n\n',
+    ].join('');
+
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(sseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    );
+
+    const res = await request(makeApp())
+      .get(`/api/chat/stream?stream_id=${outer}`)
+      .set('Cookie', validCookie('u1'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/event-stream/);
+    expect(res.text).toContain('event: token');
+    expect(res.text).toContain('event: done');
+    expect(res.text).toContain('"text":"h"');
+
+    fetchSpy.mockRestore();
+  });
+});

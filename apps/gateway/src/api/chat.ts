@@ -52,5 +52,43 @@ export const buildChatRouter = (
     res.json({ stream_id: outer });
   });
 
+  r.get('/api/chat/stream', sessionMw, async (req: Request, res: Response) => {
+    const outerSid = req.query['stream_id'] as string | undefined;
+    if (!outerSid) return res.status(400).json({ error: 'stream_id required' });
+
+    const entry = registry.resolve(outerSid);
+    if (!entry) return res.status(404).json({ error: 'stream not found or expired' });
+
+    const upstream = await fetch(
+      `${entry.containerUrl}/api/chat/stream?stream_id=${encodeURIComponent(entry.innerStreamId)}`,
+    );
+    if (!upstream.ok || !upstream.body) {
+      registry.release(outerSid);
+      return res.status(502).json({ error: 'container stream failed' });
+    }
+
+    // 透传 SSE 字节流
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const reader = upstream.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+    } catch (err) {
+      console.error('[chat/stream] pipe error:', err);
+    } finally {
+      registry.release(outerSid);
+      res.end();
+    }
+  });
+
   return r;
 };
