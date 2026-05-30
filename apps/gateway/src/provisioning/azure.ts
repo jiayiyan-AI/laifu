@@ -126,7 +126,7 @@ export const createContainerApp = async (params: {
         ],
         secrets: [
           { name: 'acr-password', value: acrPwd },
-          { name: 'openai-api-key', value: config.azure.openaiApiKey },
+          { name: 'anthropic-api-key', value: config.azure.anthropicApiKey },
         ],
       },
       template: {
@@ -135,7 +135,7 @@ export const createContainerApp = async (params: {
             name: 'hermes',
             image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
             resources: { cpu: 1, memory: '2Gi' },
-            env: [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }],
+            env: [{ name: 'ANTHROPIC_API_KEY', secretRef: 'anthropic-api-key' }],
             volumeMounts: [{ volumeName: 'hermes-home', mountPath: '/home/hermes' }],
           },
         ],

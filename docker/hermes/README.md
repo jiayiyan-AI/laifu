@@ -25,9 +25,9 @@
 cd <repo root>
 docker build -t hermes-local docker/hermes/
 
-# 准备 DashScope key (一次性)
+# 准备 Anthropic Claude key (一次性)
 cp docker/hermes/.env.example docker/hermes/.env
-# 编辑 docker/hermes/.env 把 OPENAI_API_KEY 改成 DashScope key
+# 编辑 docker/hermes/.env 把 ANTHROPIC_API_KEY 改成 Anthropic Claude key
 
 # 跑(单用户本地 dev,挂个本地目录当 volume)
 docker run --rm -p 8080:8080 \
@@ -119,7 +119,7 @@ jobs:
 
 1. **Hermes 必须装到 `/opt/hermes-agent`** (镜像只读层)。装到 home 会被 volume 覆盖,老用户跑不到新版本
 2. **`PIP_USER` + `PYTHONUSERBASE` + `NPM_CONFIG_PREFIX` 三个 env 必须设**——少一个就会出现"用户装的工具重启后丢失"
-3. **`api_key: ${OPENAI_API_KEY}` 占位符**——明文 key 不能落 volume
+3. **`api_key: ${ANTHROPIC_API_KEY}` 占位符**——明文 key 不能落 volume
 4. **`ThreadingHTTPServer` 必须用**——单线程在 ACA 必被 probe 5 次失败强杀
 5. **构建时 `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`** ——否则 uv 拉 Python 落到 /root/.local (权限 700),非 root 用户的 venv python 软链悬空
 

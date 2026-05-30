@@ -40,10 +40,10 @@ echo ""
 echo "[配置文件]"
 if [ -f apps/gateway/.env.local ]; then ok "apps/gateway/.env.local"; else fail "apps/gateway/.env.local 缺失"; fi
 if [ -f docker/hermes/.env ]; then
-  if grep -q 'sk-your-dashscope-key' docker/hermes/.env 2>/dev/null; then
-    warn "docker/hermes/.env 存在但 OPENAI_API_KEY 是占位符"
+  if grep -q 'sk-ant-your-anthropic-key' docker/hermes/.env 2>/dev/null; then
+    warn "docker/hermes/.env 存在但 ANTHROPIC_API_KEY 是占位符"
   else
-    ok "docker/hermes/.env (含 OPENAI_API_KEY)"
+    ok "docker/hermes/.env (含 ANTHROPIC_API_KEY)"
   fi
 else
   warn "docker/hermes/.env 缺失 → cp docker/hermes/.env.example docker/hermes/.env 填 key"

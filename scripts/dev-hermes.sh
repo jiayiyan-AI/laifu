@@ -11,19 +11,17 @@ HOME_VOL="${HOME}/.hermes-dev"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "⚠️  $ENV_FILE 不存在"
-  echo "   填 OPENAI_API_KEY 然后重跑:"
+  echo "   填 ANTHROPIC_API_KEY 然后重跑:"
   echo "     cp docker/hermes/.env.example $ENV_FILE"
-  echo "     vim $ENV_FILE   # 把 OPENAI_API_KEY 改成你的 DashScope key"
+  echo "     vim $ENV_FILE   # 把 ANTHROPIC_API_KEY 改成你的 Anthropic key"
   exit 1
 fi
 
-if ! grep -q '^OPENAI_API_KEY=sk-' "$ENV_FILE" 2>/dev/null && \
-   ! grep -q '^OPENAI_API_KEY=' "$ENV_FILE" | grep -v 'sk-your-dashscope-key' 2>/dev/null; then
-  if grep -q 'sk-your-dashscope-key' "$ENV_FILE"; then
-    echo "⚠️  $ENV_FILE 里 OPENAI_API_KEY 还是占位符 sk-your-dashscope-key"
-    echo "   换成真的 DashScope key 后再跑"
-    exit 1
-  fi
+if grep -q 'sk-ant-your-anthropic-key' "$ENV_FILE"; then
+  echo "⚠️  $ENV_FILE 里 ANTHROPIC_API_KEY 还是占位符"
+  echo "   申请 key: https://console.anthropic.com/settings/keys"
+  echo "   换成真的 (形如 sk-ant-xxxx) 后再跑"
+  exit 1
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
