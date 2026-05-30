@@ -32,7 +32,9 @@ export const config = {
     containerAppsEnv: process.env['AZURE_CONTAINER_APPS_ENV'] ?? '',
     storageAccount: process.env['AZURE_STORAGE_ACCOUNT'] ?? '',
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
-    hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes-base:v1',
+    acrName: process.env['AZURE_ACR_NAME'] ?? '',           // 用来拿 listCredentials
+    hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes:v1',
+    openaiApiKey: process.env['OPENAI_API_KEY'] ?? '',       // DashScope key,作 secret 注入容器
   },
 };
 
@@ -43,6 +45,11 @@ export const validateConfig = () => {
   if (config.provisioner === 'azure') {
     required('AZURE_SUBSCRIPTION_ID');
     required('AZURE_RESOURCE_GROUP');
+    required('AZURE_CONTAINER_APPS_ENV');
+    required('AZURE_STORAGE_ACCOUNT');
+    required('AZURE_ACR_LOGIN_SERVER');
+    required('AZURE_ACR_NAME');
+    required('OPENAI_API_KEY');
   }
   if (config.auth.mode === 'wechat') {
     required('WECHAT_APPID');
