@@ -1,17 +1,16 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
-import type { StreamRegistry } from '../chat/stream-registry.js';
+import type { ContainerChatResponse, WebChatResponse } from '@lingxi/shared';
 
 export const buildChatRouter = (
   sb: SupabaseClient,
   cache: ContainerMappingCache,
-  registry: StreamRegistry,
   sessionMw: RequestHandler,
 ): RouterType => {
   const r = Router();
 
-  r.post('/api/chat/start', sessionMw, async (req: Request, res: Response) => {
+  r.post('/api/chat', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
     const { thread_id, message } = (req.body ?? {}) as { thread_id?: string; message?: string };
     if (!thread_id || !message) {
@@ -29,65 +28,23 @@ export const buildChatRouter = (
       return res.status(503).json({ error: 'assistant not ready' });
     }
 
-    // 3. 调 container 的 /api/chat/start
+    // 3. 调容器同步 /chat,等结果
     const sessionId = `web:${thread_id}`;
-    const cResp = await fetch(`${mapping.container_url}/api/chat/start`, {
+    const cResp = await fetch(`${mapping.container_url}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, message, source: 'web' }),
+      body: JSON.stringify({ message, session_id: sessionId, source: 'web' }),
     });
     if (!cResp.ok) {
       return res.status(502).json({ error: `container returned ${cResp.status}` });
     }
-    const cBody = await cResp.json() as { stream_id?: string };
-    if (!cBody.stream_id) {
-      return res.status(502).json({ error: 'container missing stream_id' });
+    const cBody = await cResp.json() as ContainerChatResponse;
+    if (typeof cBody.reply !== 'string') {
+      return res.status(502).json({ error: 'container missing reply' });
     }
 
-    // 4. 注册映射，返回外层 stream_id
-    const outer = registry.register({
-      containerUrl: mapping.container_url,
-      innerStreamId: cBody.stream_id,
-    });
-    res.json({ stream_id: outer });
-  });
-
-  r.get('/api/chat/stream', sessionMw, async (req: Request, res: Response) => {
-    const outerSid = req.query['stream_id'] as string | undefined;
-    if (!outerSid) return res.status(400).json({ error: 'stream_id required' });
-
-    const entry = registry.resolve(outerSid);
-    if (!entry) return res.status(404).json({ error: 'stream not found or expired' });
-
-    const upstream = await fetch(
-      `${entry.containerUrl}/api/chat/stream?stream_id=${encodeURIComponent(entry.innerStreamId)}`,
-    );
-    if (!upstream.ok || !upstream.body) {
-      registry.release(outerSid);
-      return res.status(502).json({ error: 'container stream failed' });
-    }
-
-    // 透传 SSE 字节流
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-
-    const reader = upstream.body.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
-      }
-    } catch (err) {
-      console.error('[chat/stream] pipe error:', err);
-    } finally {
-      registry.release(outerSid);
-      res.end();
-    }
+    const body: WebChatResponse = { reply: cBody.reply };
+    res.json(body);
   });
 
   return r;

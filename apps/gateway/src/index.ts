@@ -6,7 +6,6 @@ import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
 import { buildThreadsRouter } from './api/threads.js';
 import { buildChatRouter } from './api/chat.js';
-import { StreamRegistry } from './chat/stream-registry.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
@@ -68,8 +67,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     cookieName: config.session.cookieName,
   });
 
-  const streamRegistry = new StreamRegistry();
-
   // try to resolve sb without crashing healthz when env is missing
   let sbResolved: SupabaseClient | null;
   try {
@@ -89,7 +86,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));
-    app.use(buildChatRouter(sbResolved, getCache(), streamRegistry, sessionMw));
+    app.use(buildChatRouter(sbResolved, getCache(), sessionMw));
   }
   app.use(buildStatusRouter(getCache, sessionMw));
 

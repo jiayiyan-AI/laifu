@@ -1,33 +1,16 @@
 // === Container HTTP 契约 (Gateway → Container) ===
+// 沿用同事 Hermes Container (docker/hermes/server.py) 的同步 /chat 契约
 
-export interface ChatStartRequest {
-  session_id: string;          // e.g. "web:thr_abc123" or "wechat:main"
+export interface ContainerChatRequest {
   message: string;
+  session_id: string;          // e.g. "web:thr_abc123" / "wechat:main"
   source: 'web' | 'wechat';
 }
 
-export interface ChatStartResponse {
-  stream_id: string;
-}
-
-// SSE event payloads
-export interface SSEEventToken {
-  text: string;
-}
-
-export interface SSEEventTool {
-  name: string;
-  preview: string;
-}
-
-export interface SSEEventDone {
-  full_reply: string;
+export interface ContainerChatResponse {
+  reply: string;
   session_id: string;
-}
-
-export interface SSEEventError {
-  message: string;
-  trace?: string;
+  exit_code: number;
 }
 
 // === Gateway Web API 契约 (Web → Gateway) ===
@@ -85,13 +68,13 @@ export interface ThreadListItem {
   archived: boolean;
 }
 
-// === Web chat 契约（浏览器 ↔ Gateway）===
+// === Web chat 契约（浏览器 ↔ Gateway,同步）===
 
-export interface WebChatStartRequest {
+export interface WebChatRequest {
   thread_id: string;
   message: string;
 }
 
-export interface WebChatStartResponse {
-  stream_id: string;         // outer stream_id（不暴露 container 的内层 ID）
+export interface WebChatResponse {
+  reply: string;
 }
