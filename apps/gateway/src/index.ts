@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { healthzRouter } from './api/healthz.js';
 import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
+import { buildThreadsRouter } from './api/threads.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
@@ -83,6 +84,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       wechat: config.auth.wechat,
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
+    app.use(buildThreadsRouter(sbResolved, sessionMw));
   }
   app.use(buildStatusRouter(getCache, sessionMw));
 
