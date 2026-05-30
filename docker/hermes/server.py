@@ -32,6 +32,7 @@ import re
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
+from urllib.parse import urlparse, parse_qs
 
 HERMES_BIN = os.environ.get("HERMES_BIN", "hermes")
 HERMES_TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "300"))  # 秒
@@ -129,6 +130,77 @@ def _detect_new_session_id(stdout: str, stderr: str, source: str) -> str | None:
     return _newest_session_id_via_list(source)
 
 
+def _clean_reply(stdout: str) -> str:
+    """剔除 Hermes 的 warning/info 行,只留真正的 LLM 回复。
+
+    Hermes -Q 模式会输出:
+      ⚠️ Normalized model 'anthropic/claude-sonnet-4-20250514' to
+      'claude-sonnet-4-20250514' for anthropic.            ← wrap 续行,无缩进
+        ⚠ tirith security scanner enabled but not available ...
+      session_id: YYYYMMDD_HHMMSS_<hash>
+      <真正的回复>
+
+    策略:
+    - ⚠️ / ⚠ / [server] 开头的行 → 整行丢
+    - 如果该 warning 行末尾以 " to" / " to " 结束,显式吞掉下一行 (wrap 续接)
+    - session_id 元信息行 → 丢"""
+    lines = stdout.splitlines()
+    keep: list[str] = []
+    skip_next = False
+    for line in lines:
+        if skip_next:
+            skip_next = False
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith(("⚠️", "⚠", "[server]")):
+            # 末尾以 " to" 结束的 warning 是换行 wrap 的,下一行属于同一个 warning
+            if line.rstrip().endswith(" to"):
+                skip_next = True
+            continue
+        if stripped.startswith(("session_id:", "Session ID:")):
+            continue
+        keep.append(line)
+    return "\n".join(keep).strip()
+
+
+def load_history(session_name: str) -> list[dict]:
+    """读出某 gateway session_name 的全部 user/assistant 消息。
+
+    照搬 Hermes 上游 web_server.py 的 /api/sessions/{id}/messages 写法 ——
+    直接 from hermes_state import SessionDB, db.get_messages(uuid)。
+    比 subprocess 调 'hermes sessions export' 快几个数量级,也省解析。
+
+    返回形如 [{"role": "user"|"assistant", "content": "...", "ts": float}],
+    按时间排序。空 session (从未发过消息) 返回 []。"""
+    uuid = _get_hermes_id(session_name)
+    if not uuid:
+        return []
+    # 延迟 import:hermes_state 比较重,只在调到 /history 时再加载
+    from hermes_state import SessionDB  # type: ignore
+    db = SessionDB()
+    try:
+        rows = db.get_messages(uuid)
+    finally:
+        db.close()
+    out: list[dict] = []
+    for r in rows:
+        role = r.get("role")
+        content = r.get("content")
+        # 跳过 tool 调用 (assistant 带 tool_calls 但 content 是占位)、tool 返回
+        if role not in ("user", "assistant"):
+            continue
+        if r.get("tool_calls"):
+            continue
+        if not content:
+            continue
+        out.append({
+            "role": role,
+            "content": content,
+            "ts": r.get("timestamp"),
+        })
+    return out
+
+
 def call_hermes(message: str, session_name: str, source: str) -> tuple[str, str, int, str | None]:
     """返回 (stdout, stderr, returncode, resolved_hermes_id)。"""
     existing = _get_hermes_id(session_name)
@@ -166,10 +238,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             self._json(200, {"status": "ok"})
-        else:
-            self._json(404, {"error": "not found"})
+            return
+        if parsed.path == "/history":
+            q = parse_qs(parsed.query)
+            session_name = (q.get("session_id", [DEFAULT_SESSION])[0] or "").strip()
+            if not session_name:
+                self._json(400, {"error": "missing 'session_id'"})
+                return
+            try:
+                msgs = load_history(session_name)
+            except Exception as e:  # noqa: BLE001
+                print(f"[server] load_history failed: {e}", flush=True)
+                self._json(500, {"error": "load_history failed"})
+                return
+            self._json(200, {"messages": msgs})
+            return
+        self._json(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
         if self.path != "/chat":
@@ -200,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"hermes binary not found ({HERMES_BIN})"})
             return
 
-        reply = stdout.strip() or stderr.strip()
+        reply = _clean_reply(stdout) or stderr.strip()
         self._json(200, {
             "reply": reply,
             "session_id": session_id,           # gateway 视角的 name

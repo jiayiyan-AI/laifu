@@ -10,7 +10,8 @@ export const ChatApp = () => {
       <ThreadList selected={active} onSelect={setActive} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {active
-          ? <Conversation threadId={active} />
+          // key={active} 强制 Conversation 重挂载,触发其 useEffect 重拉历史
+          ? <Conversation key={active} threadId={active} />
           : <div className="dim" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>左侧选一个对话或新建一个</div>
         }
       </div>

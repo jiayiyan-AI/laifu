@@ -6,8 +6,10 @@ import type {
   ThreadCreateRequest,
   ThreadCreateResponse,
   ThreadListItem,
+  ThreadMessage,
   WebChatRequest,
   WebChatResponse,
+  WebThreadMessagesResponse,
 } from '@lingxi/shared';
 
 export class AuthError extends Error {
@@ -64,3 +66,10 @@ export const deleteThread = (id: string): Promise<{ ok: true }> =>
 // === Chat ===
 export const sendChat = (body: WebChatRequest): Promise<WebChatResponse> =>
   json('/api/chat', { method: 'POST', body: JSON.stringify(body) });
+
+export const fetchHistory = async (threadId: string): Promise<ThreadMessage[]> => {
+  const { messages } = await json<WebThreadMessagesResponse>(
+    `/api/threads/${encodeURIComponent(threadId)}/messages`,
+  );
+  return messages;
+};

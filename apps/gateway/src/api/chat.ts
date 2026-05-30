@@ -1,7 +1,12 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
-import type { ContainerChatResponse, WebChatResponse } from '@lingxi/shared';
+import type {
+  ContainerChatResponse,
+  ContainerHistoryResponse,
+  WebChatResponse,
+  WebThreadMessagesResponse,
+} from '@lingxi/shared';
 
 export const buildChatRouter = (
   sb: SupabaseClient,
@@ -44,6 +49,31 @@ export const buildChatRouter = (
     }
 
     const body: WebChatResponse = { reply: cBody.reply };
+    res.json(body);
+  });
+
+  // 读取 thread 历史消息 (从 Hermes SQLite 经容器 /history 端点取)
+  // 路由放这里而非 threads.ts,因为依赖 cache + container 转发,跟 POST /api/chat 同形
+  r.get('/api/threads/:id/messages', sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+    const threadId = req.params['id'] as string;
+
+    const { data: thread, error: thErr } = await sb
+      .from('threads').select('*').eq('id', threadId).eq('user_id', userId).single();
+    if (thErr || !thread) return res.status(404).json({ error: 'thread not found' });
+
+    const mapping = cache.get(userId);
+    if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
+      return res.status(503).json({ error: 'assistant not ready' });
+    }
+
+    const url = `${mapping.container_url}/history?session_id=${encodeURIComponent(`web:${threadId}`)}`;
+    const cResp = await fetch(url);
+    if (!cResp.ok) {
+      return res.status(502).json({ error: `container returned ${cResp.status}` });
+    }
+    const cBody = await cResp.json() as ContainerHistoryResponse;
+    const body: WebThreadMessagesResponse = { messages: cBody.messages ?? [] };
     res.json(body);
   });
 

@@ -124,3 +124,95 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(502);
   });
 });
+
+describe('GET /api/threads/:id/messages', () => {
+  let mockSb: any;
+  let cache: ContainerMappingCache;
+  let fetchSpy: any;
+
+  beforeEach(() => {
+    mockSb = {
+      from: vi.fn(() => mockSb),
+      select: vi.fn(() => mockSb),
+      eq: vi.fn(() => mockSb),
+      single: vi.fn(() => Promise.resolve({
+        data: { id: 'thr_1', user_id: 'u1', source: 'web' },
+        error: null,
+      })),
+      then: (resolve: any) => resolve({ data: null, error: null }),
+    };
+    cache = new ContainerMappingCache(mockSb);
+    cache.set({
+      user_id: 'u1',
+      container_name: 'hermes-u1',
+      container_url: 'http://localhost:8080',
+      status: 'ready',
+      provisioning_step: null,
+      progress_pct: 100,
+      error_message: null,
+      azure_files_share: 'user-u1',
+      created_at: new Date().toISOString(),
+      ready_at: new Date().toISOString(),
+    });
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: [
+          { role: 'user', content: 'hi', ts: 1700000000 },
+          { role: 'assistant', content: 'hello', ts: 1700000001 },
+        ],
+      })),
+    );
+  });
+
+  const makeApp = () => {
+    const app = express();
+    app.use(express.json());
+    app.use(cookieParser());
+    const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
+    app.use(buildChatRouter(mockSb, cache, mw));
+    return app;
+  };
+
+  it('returns messages from container with web:thread_id session_id', async () => {
+    const res = await request(makeApp())
+      .get('/api/threads/thr_1/messages')
+      .set('Cookie', validCookie('u1'));
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(2);
+    expect(res.body.messages[0]).toEqual({ role: 'user', content: 'hi', ts: 1700000000 });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:8080/history?session_id=web%3Athr_1',
+    );
+  });
+
+  it('401 without session', async () => {
+    const res = await request(makeApp()).get('/api/threads/thr_1/messages');
+    expect(res.status).toBe(401);
+  });
+
+  it('404 when thread not owned by user', async () => {
+    mockSb.single = vi.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }));
+    const res = await request(makeApp())
+      .get('/api/threads/thr_999/messages')
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(404);
+  });
+
+  it('503 when user has no ready container', async () => {
+    cache.delete('u1');
+    const res = await request(makeApp())
+      .get('/api/threads/thr_1/messages')
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(503);
+  });
+
+  it('502 when container returns non-OK', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+    const res = await request(makeApp())
+      .get('/api/threads/thr_1/messages')
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(502);
+  });
+});

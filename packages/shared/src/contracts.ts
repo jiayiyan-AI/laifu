@@ -13,6 +13,16 @@ export interface ContainerChatResponse {
   exit_code: number;
 }
 
+export interface ContainerHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  ts: number;                  // unix epoch (seconds, float)
+}
+
+export interface ContainerHistoryResponse {
+  messages: ContainerHistoryMessage[];
+}
+
 // === Gateway Web API 契约 (Web → Gateway) ===
 
 export interface PurchaseRequest {
@@ -77,4 +87,12 @@ export interface WebChatRequest {
 
 export interface WebChatResponse {
   reply: string;
+}
+
+// 历史消息(浏览器从 gateway 拉);形状跟 ContainerHistoryMessage 一致,
+// 单独起名是为了 Web 端可以单方向加字段(比如本地的 pending 标记)
+export type ThreadMessage = ContainerHistoryMessage;
+
+export interface WebThreadMessagesResponse {
+  messages: ThreadMessage[];
 }
