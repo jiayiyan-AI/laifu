@@ -8,6 +8,7 @@ import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
 import { provisionContainer } from './provisioning/manager.js';
 import * as azureModule from './provisioning/azure.js';
+import { recoverProvisioning } from './provisioning/recovery.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -67,12 +68,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   validateConfig();
   const sb = getSupabase();
   const cache = new ContainerMappingCache(sb);
-  cache.loadAll().then(() => {
+
+  (async () => {
+    console.log('[gateway] recovering stuck provisioning rows...');
+    await recoverProvisioning(sb, azureModule);
+    console.log('[gateway] loading cache...');
+    await cache.loadAll();
     const app = createApp({ cache, sb });
     app.listen(config.port, () => {
       console.log(`[gateway] listening on :${config.port}`);
     });
-  }).catch((err) => {
+  })().catch((err) => {
     console.error('[gateway] startup failed:', err);
     process.exit(1);
   });
