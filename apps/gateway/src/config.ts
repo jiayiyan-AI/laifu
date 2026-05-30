@@ -6,6 +6,8 @@ const required = (key: string): string => {
 
 export const config = {
   port: parseInt(process.env['PORT'] ?? '3000', 10),
+  provisioner: (process.env['PROVISIONER'] ?? 'local') as 'local' | 'azure',
+  localContainerUrl: process.env['LOCAL_CONTAINER_URL'] ?? 'http://localhost:8080',
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
     serviceRoleKey: process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
@@ -25,6 +27,8 @@ export const config = {
 export const validateConfig = () => {
   required('SUPABASE_URL');
   required('SUPABASE_SERVICE_ROLE_KEY');
-  required('AZURE_SUBSCRIPTION_ID');
-  required('AZURE_RESOURCE_GROUP');
+  if (config.provisioner === 'azure') {
+    required('AZURE_SUBSCRIPTION_ID');
+    required('AZURE_RESOURCE_GROUP');
+  }
 };

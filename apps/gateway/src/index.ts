@@ -9,6 +9,7 @@ import { getSupabase } from './db/supabase.js';
 import { provisionContainer } from './provisioning/manager.js';
 import * as azureModule from './provisioning/azure.js';
 import { recoverProvisioning } from './provisioning/recovery.js';
+import { provisionContainerLocal } from './provisioning/local.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -36,12 +37,21 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   };
 
   const defaultProvisioner: ProvisionerFn = async (args) => {
-    await provisionContainer({
-      ...args,
-      sb: getSb(),
-      cache: getCache(),
-      azure: azureModule,
-    });
+    if (config.provisioner === 'local') {
+      await provisionContainerLocal({
+        userId: args.userId,
+        sb: getSb(),
+        cache: getCache(),
+        localContainerUrl: config.localContainerUrl,
+      });
+    } else {
+      await provisionContainer({
+        ...args,
+        sb: getSb(),
+        cache: getCache(),
+        azure: azureModule,
+      });
+    }
   };
 
   const provisioner = opts.provisioner ?? defaultProvisioner;
@@ -70,8 +80,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const cache = new ContainerMappingCache(sb);
 
   (async () => {
-    console.log('[gateway] recovering stuck provisioning rows...');
-    await recoverProvisioning(sb, azureModule);
+    if (config.provisioner === 'azure') {
+      console.log('[gateway] recovering stuck provisioning rows...');
+      await recoverProvisioning(sb, azureModule);
+    }
     console.log('[gateway] loading cache...');
     await cache.loadAll();
     const app = createApp({ cache, sb });
