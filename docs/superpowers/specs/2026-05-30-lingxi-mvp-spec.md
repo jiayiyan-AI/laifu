@@ -623,6 +623,82 @@ Resource Group: rg-lingxi-prod
 
 > VNet 是 ACA Environment 配 VNet 后的固定成本（~€2/天）。这是无应用层 auth 的代价。如果将来想省，再切换到 API Key auth + 公网 ingress。
 
+### 10.5 本地开发栈（local-first 验证策略）
+
+MVP 的开发原则：**所有功能在本地端到端跑通后再上云**。Azure 部署推迟到 Phase 1.5，避免 dev cycle 受云上 provisioning 速度拖累。
+
+#### 本地等价替代
+
+| 云上组件 | 本地替代 |
+|---|---|
+| App Service 跑的 Gateway | `pnpm dev` 直接跑 Node 进程 |
+| Container Apps 创建容器 | 走 stub provisioner，不动云；container 由 `docker run` 直接起 |
+| Hermes Container（在云上的 ACA） | 本地 `docker run -p 8080:8080 hermes-base:vX` 起一个，端口固定 |
+| Azure Files volume | 本地目录 `-v ~/.hermes-local:/home/hermes` |
+| Azure Container Registry | 本地有 image，不用 pull |
+| Supabase Cloud (US 机房) | `supabase start` 起本地 Postgres+Auth Docker stack |
+| Azure OpenAI | （Phase 1.1 同事在 Hermes 里配） |
+
+#### 关键架构 seam：provisioner 抽象
+
+我们在 `apps/gateway/src/provisioning/` 下并存两个 provisioner：
+
+```
+apps/gateway/src/provisioning/
+  ├── azure.ts        ← Azure SDK 调用
+  ├── manager.ts      ← provisionContainer（用 azure）
+  ├── local.ts        ← provisionContainerLocal（本地 stub，新增）
+  └── recovery.ts
+```
+
+启动时根据 `PROVISIONER` env var 切换：
+
+```
+PROVISIONER=local    → 走 local.ts，container_url 写 http://localhost:8080
+PROVISIONER=azure    → 走 manager.ts，真创建 Container App
+```
+
+stub provisioner 的"6 步进度"用 `setTimeout` 模拟（每步 ~800ms 假装在干活），最终 status=ready, container_url=localhost。这样前端体验跟真实情况一致。
+
+#### 本地全栈一键起步骤
+
+```bash
+# 1. 起本地 Supabase（在 infra/supabase/ 下）
+supabase start
+# 自动应用 infra/supabase/migrations/0001_init.sql
+# 输出 SUPABASE_URL + service_role key
+
+# 2. 填 apps/gateway/.env.local
+PORT=3000
+PROVISIONER=local
+LOCAL_CONTAINER_URL=http://localhost:8080
+SUPABASE_URL=http://localhost:54321
+SUPABASE_SERVICE_ROLE_KEY=<from supabase output>
+
+# 3. 起 Hermes container（同事的 image）
+docker run -p 8080:8080 -v ~/.hermes-local:/home/hermes hermes-base:v1
+
+# 4. 起 Gateway
+cd apps/gateway && pnpm dev
+```
+
+此时整套灵犀栈完全跑在你的 Mac 上。Azure / Supabase Cloud 都不用碰。
+
+#### local ↔ azure 切换的兼容性
+
+Gateway 的代码对两个 provisioner 是无感的（`ProvisionerFn` 接口统一）。从本地切到云上只改 `.env.local`：
+
+```diff
+- PROVISIONER=local
+- SUPABASE_URL=http://localhost:54321
++ PROVISIONER=azure
++ SUPABASE_URL=https://<project>.supabase.co
++ AZURE_SUBSCRIPTION_ID=...
++ ... (其它 Azure 配置)
+```
+
+整套业务逻辑代码、DB schema、UI 全不变。
+
 ---
 
 ## 11. MVP 实施分片
@@ -640,19 +716,32 @@ Resource Group: rg-lingxi-prod
 
 **完成标志**：本地一行命令起容器，Gateway 调它能从一条 message 拿到完整 SSE 流和最终回复。
 
-### Phase 1.2 — Azure 基础设施 + Gateway 骨架（我方，并行）
+### Phase 1.2 — Local-first Gateway + Provisioning 骨架（我方）
+
+**修订（2026-05-30 后）**：本 Phase 全部在**本地**完成，Azure 真实部署推迟到 Phase 1.5。
 
 **产出**：
 - **初始化 monorepo**：根 `package.json` + `pnpm-workspace.yaml` + `tsconfig.base.json` + `apps/gateway/` + `apps/web/` + `packages/shared/` + `infra/` 占位
-- `packages/shared` 把 §3 / §6 的类型先落地（API 请求响应、DB row）
-- Resource Group + ACR + Container Apps Environment（VNet 接入）+ Storage Account
-- App Service B1 + Node 项目骨架（Express/Fastify）部署到 `apps/gateway/`
-- Supabase 项目 + 表结构 + RLS（如需）
+- `packages/shared` 把 §3 / §6 的类型落地（API 请求响应、DB row）
+- 本地 Supabase 栈：`supabase init` + `supabase start` + 自动应用 `infra/supabase/migrations/0001_init.sql`
+- App Service Node 项目骨架（Express + Vitest）位于 `apps/gateway/`
 - §5 的目录结构和模块占位
-- Azure SDK 实现 `provisioning/manager.ts`
-- 测试：模拟一个 user_id，从 Gateway 调 Azure 起一个 Container 成功，状态写进 DB
+- Azure SDK wrappers（`provisioning/azure.ts`，**仅写代码不调用**）
+- **本地 stub provisioner**（`provisioning/local.ts`）+ env-driven 切换
+- `provisioning/manager.ts`（Azure 模式编排）+ `recovery.ts`（启动恢复）
+- Bicep 模板（写好放 `infra/bicep/`，不部署）
+- 完整单元测试覆盖
 
-**完成标志**：在 Postman 里 POST /api/purchase，能看到 container_mapping 状态从 provisioning → ready，Azure Portal 里看到 Container App 已创建。
+**完成标志**：本地 `pnpm dev` + 本地 Supabase 跑通：
+- POST /api/purchase 立刻返 200 + status=provisioning
+- 本地 stub provisioner 走完 6 步（约 5s），最终 status=ready, container_url=http://localhost:8080
+- GET /api/status 实时反映进度
+- 重启 Gateway 后启动恢复正常工作
+
+**显式排除**：
+- 真实 Azure 资源创建 → Phase 1.5
+- 真实 Hermes Image build/push → 同事 Phase 1.1 完成后再 docker run 验证
+- VPC / VNet 配置 → Phase 1.5
 
 ### Phase 1.3 — Web 端到端（最优先）
 
@@ -679,13 +768,17 @@ Resource Group: rg-lingxi-prod
 
 **完成标志**：用购买者本人的微信扫码绑定，在微信对话框跟 bot 聊天能拿到回复。
 
-### Phase 1.5 — 部署 + E2E 验证
+### Phase 1.5 — Azure 真实部署 + E2E 验证
 
 **产出**：
-- VNet + ACA Environment + App Service VNet Integration 真实配置
-- ACR 推 Hermes Image，Container App 用 ACR 镜像
+- **Bicep 部署**：az login → `./infra/bicep/deploy.sh dev` 真创建 RG + ACR + ACA Env + Storage + App Service
+- **VNet + Internal Ingress**：ACA Environment 配 VNet + App Service VNet Integration
+- **Hermes Image 推 ACR**：同事的 image push 到 acrlingxidev
+- **Supabase 切云**：Supabase Cloud 项目 + 应用 `0001_init.sql`
+- **切 PROVISIONER=azure**：`.env.local` 改云上配置
+- **App Service 部署 Gateway**：Node app 推到 App Service
+- **真实端到端验证**：公网注册 → 购买（真创建 Container App）→ 绑微信 → 两端聊天
 - 域名 + SSL（App Service 自带）
-- 真实部署后端到端验证：从公网注册 → 购买 → 绑微信 → 两端都能聊
 
 ### 关键 milestone
 

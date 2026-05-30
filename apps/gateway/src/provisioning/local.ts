@@ -29,6 +29,10 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
       await sb.from('container_mapping')
         .update({ provisioning_step: s.step, progress_pct: s.pct })
         .eq('user_id', userId);
+      // 同步刷 cache 让 /api/status 看到中间进度（否则 cache 卡在 0% 直到 ready）
+      const { data: stepRow } = await sb.from('container_mapping')
+        .select('*').eq('user_id', userId).single();
+      if (stepRow) cache.set(stepRow as ContainerMapping);
       if (stepDelayMs > 0) await sleep(stepDelayMs);
     }
 
