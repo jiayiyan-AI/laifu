@@ -1,0 +1,26 @@
+# ============================================================================
+# Hermes 模型配置 —— 接阿里云百炼 DashScope (OpenAI 兼容模式)
+# ============================================================================
+# DashScope 提供 OpenAI 兼容端点，Hermes 通过 provider: "custom" 接入。
+# Hermes 读 OPENAI_API_KEY 作为该 endpoint 的鉴权 key（由 .env 注入）。
+# ============================================================================
+
+model:
+  # 通义千问 qwen-plus（性价比款）。其他可选：qwen-max / qwen-turbo / qwen3-coder-plus 等
+  default: "qwen-plus"
+
+  # custom = 任意 OpenAI 兼容端点
+  provider: "custom"
+
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+  # Hermes 支持在 config.yaml 中用 ${VAR} 语法插值环境变量，启动时自动替换。
+  # 这样 key 永远不会以明文形式写入 volume 内的 config.yaml。
+  # 注意：必须用 ${VAR} 写法，裸 $VAR 不会被插值。
+  api_key: "${OPENAI_API_KEY}"
+
+# 给 DashScope 更宽松的超时（国内大模型首字延迟通常比 OpenRouter 大）
+providers:
+  custom:
+    request_timeout_seconds: 120
+    stale_timeout_seconds: 300
