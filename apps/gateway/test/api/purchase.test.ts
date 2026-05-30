@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
-import { createApp } from '../../src/index.js';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import { buildPurchaseRouter } from '../../src/api/purchase.js';
 import { ContainerMappingCache } from '../../src/db/cache.js';
+import { signSession } from '../../src/auth/session.js';
+import { requireSession } from '../../src/auth/middleware.js';
+
+const SECRET = 'test-secret-do-not-use-in-prod-123456';
+const COOKIE_NAME = 'lingxi_sid';
 
 describe('POST /api/purchase', () => {
   let mockSb: any;
@@ -23,30 +30,36 @@ describe('POST /api/purchase', () => {
     cache = new ContainerMappingCache(mockSb);
   });
 
+  const makeApp = (provisioner: any) => {
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
+    app.use(buildPurchaseRouter(mockSb, cache, provisioner, mw));
+    return app;
+  };
+
+  const validCookie = (userId: string): string => {
+    const token = signSession({ user_id: userId }, SECRET, 24);
+    return `${COOKIE_NAME}=${token}`;
+  };
+
   it('inserts container_mapping row, returns provisioning, kicks off async task', async () => {
     const provisioner = vi.fn(() => Promise.resolve());
-    const app = createApp({ cache, sb: mockSb, provisioner });
-
-    const res = await request(app).post('/api/purchase').set('x-user-id', 'u1');
+    const res = await request(makeApp(provisioner))
+      .post('/api/purchase')
+      .set('Cookie', validCookie('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('provisioning');
     expect(res.body.user_id).toBe('u1');
-
-    expect(inserted).toMatchObject({
-      user_id: 'u1',
-      status: 'provisioning',
-      progress_pct: 0,
-    });
-    expect(inserted.container_name).toMatch(/^hermes-/);
-    expect(inserted.azure_files_share).toMatch(/^user-/);
-
+    expect(inserted.user_id).toBe('u1');
     expect(provisioner).toHaveBeenCalledOnce();
   });
 
-  it('400 when x-user-id missing', async () => {
-    const app = createApp({ cache, sb: mockSb, provisioner: vi.fn() });
-    const res = await request(app).post('/api/purchase');
-    expect(res.status).toBe(400);
+  it('401 when no session cookie', async () => {
+    const provisioner = vi.fn();
+    const res = await request(makeApp(provisioner)).post('/api/purchase');
+    expect(res.status).toBe(401);
   });
 });

@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PurchaseResponse } from '@lingxi/shared';
 import type { ContainerMappingCache } from '../db/cache.js';
@@ -11,18 +11,16 @@ export const buildPurchaseRouter = (
   sb: SupabaseClient,
   cache: ContainerMappingCache,
   provisioner: ProvisionerFn,
-): ReturnType<typeof Router> => {
+  sessionMw: RequestHandler,
+): RouterType => {
   const router = Router();
 
-  router.post('/api/purchase', async (req: Request, res: Response) => {
-    const userId = req.header('x-user-id');
-    if (!userId) return res.status(400).json({ error: 'x-user-id required' });
-
+  router.post('/api/purchase', sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
     const hash = shortHash(userId);
     const containerName = `hermes-${hash}`;
     const shareName = `user-${hash}`;
 
-    // 幂等：用 ON CONFLICT 防止重复 INSERT
     const { error: insErr } = await sb
       .from('container_mapping')
       .insert({
@@ -34,21 +32,17 @@ export const buildPurchaseRouter = (
       });
 
     if (insErr) {
-      // 已经存在 → 直接返回当前状态
       const existing = cache.get(userId);
       if (existing) {
         const body: PurchaseResponse = { user_id: userId, status: existing.status };
         return res.json(body);
       }
-      // 真正的写入错误
       return res.status(500).json({ error: (insErr as Error).message ?? 'insert failed' });
     }
 
-    // 同步更新 cache（先放一个 provisioning 占位）
     const { data } = await sb.from('container_mapping').select('*').eq('user_id', userId).single();
     if (data) cache.set(data as any);
 
-    // 异步触发 provisioning（fire-and-forget）
     provisioner({ userId, containerName, shareName }).catch((err) => {
       console.error(`[purchase] provisioner error for ${userId}:`, err);
     });

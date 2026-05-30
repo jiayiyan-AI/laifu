@@ -1,4 +1,5 @@
 import express, { type Express } from 'express';
+import cookieParser from 'cookie-parser';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { healthzRouter } from './api/healthz.js';
 import { buildStatusRouter } from './api/status.js';
@@ -7,9 +8,11 @@ import { ContainerMappingCache } from './db/cache.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
 import { provisionContainer } from './provisioning/manager.js';
-import * as azureModule from './provisioning/azure.js';
-import { recoverProvisioning } from './provisioning/recovery.js';
 import { provisionContainerLocal } from './provisioning/local.js';
+import { recoverProvisioning } from './provisioning/recovery.js';
+import * as azureModule from './provisioning/azure.js';
+import { requireSession } from './auth/middleware.js';
+import { buildOAuthRouter } from './auth/oauth.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -20,6 +23,7 @@ export interface CreateAppOptions {
 export const createApp = (opts: CreateAppOptions = {}): Express => {
   const app = express();
   app.use(express.json());
+  app.use(cookieParser());
 
   app.use(healthzRouter);
 
@@ -56,20 +60,31 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
   const provisioner = opts.provisioner ?? defaultProvisioner;
 
-  app.use(buildStatusRouter(getCache));
+  const sessionMw = requireSession({
+    secret: config.session.secret,
+    cookieName: config.session.cookieName,
+  });
 
-  // 尝试解析 sb；若 opts.sb 未提供且 env 未配置则跳过 purchase 路由注册
-  // 这样 healthz 测试（无 env、无 opts.sb）不会因为 getSupabase() 抛出而崩溃
+  // try to resolve sb without crashing healthz when env is missing
   let sbResolved: SupabaseClient | null;
   try {
     sbResolved = opts.sb ?? getSupabase();
   } catch {
-    sbResolved = null; // env not configured; purchase will be unavailable
+    sbResolved = null;
   }
 
   if (sbResolved) {
-    app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner));
+    app.use(buildOAuthRouter({
+      sb: sbResolved,
+      sessionSecret: config.session.secret,
+      cookieName: config.session.cookieName,
+      ttlHours: config.session.ttlHours,
+      mode: config.auth.mode,
+      wechat: config.auth.wechat,
+    }));
+    app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
   }
+  app.use(buildStatusRouter(getCache, sessionMw));
 
   return app;
 };
