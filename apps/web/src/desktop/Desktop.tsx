@@ -7,10 +7,12 @@ import { Window } from './Window.js';
 import { Onboarding } from '../onboarding/Onboarding.js';
 import * as api from '../lib/api.js';
 import { IconSpark, IconGrid, IconMessage } from '../lib/icons.js';
+import { ChatApp } from '../apps/chat/ChatApp.js';
 
-const AppPlaceholder = ({ id }: { id: DockAppId }) => (
-  <div style={{ padding: 24 }}>App "{id}" — 后续 task 实现内容</div>
-);
+const renderApp = (id: DockAppId) => {
+  if (id === 'chat') return <ChatApp />;
+  return <div style={{ padding: 24 }}>App "{id}" — 后续 task 实现内容</div>;
+};
 
 const titles: Record<DockAppId, { title: string; icon: ReactNode; w: number; h: number }> = {
   chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
@@ -63,7 +65,7 @@ export const Desktop = () => {
           const meta = titles[id];
           return (
             <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} onClose={() => closeApp(id)}>
-              <AppPlaceholder id={id} />
+              {renderApp(id)}
             </Window>
           );
         })}
