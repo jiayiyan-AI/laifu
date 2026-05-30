@@ -1,24 +1,28 @@
 # ============================================================================
-# Hermes 模型配置 —— 接 Anthropic Claude
+# Hermes 模型配置 — env 驱动,多 provider 并存
 # ============================================================================
-# Anthropic 是 Hermes 内置 provider,不需要 base_url / custom 配置。
-# Hermes 读 ANTHROPIC_API_KEY 作为鉴权 key（由 .env 注入）。
+# 切换模型只需改 .env 里的 HERMES_MODEL,无需改这个文件。
+# 已支持:
+#   anthropic/claude-sonnet-4-6  → 走 anthropic provider (Hermes 内置)
+#   qwen-plus / qwen-max / ...   → 走 custom provider (DashScope OpenAI 兼容端点)
+# 加新 provider:在下面 providers: 块加一节,设好 base_url + api_key 即可。
 # ============================================================================
 
 model:
-  # Claude Sonnet 4.6 (2026 最新一代)
-  default: "anthropic/claude-sonnet-4-6"
+  # 默认 Claude Sonnet 4.6。改 .env 的 HERMES_MODEL 即可覆盖。
+  default: "${HERMES_MODEL}"
 
-  # Hermes 内置 anthropic provider,不需要 provider/base_url
-  # 仅靠 model 前缀 "anthropic/" 自动路由
-
-  # Hermes 支持在 config.yaml 中用 ${VAR} 语法插值环境变量,启动时自动替换。
-  # 这样 key 永远不会以明文形式写入 volume 内的 config.yaml。
-  # 注意:必须用 ${VAR} 写法,裸 $VAR 不会被插值。
-  api_key: "${ANTHROPIC_API_KEY}"
-
-# Anthropic 端点默认超时已经合理,这里给一份显式配置方便后续调整
 providers:
+  # ── Anthropic (内置,无需 base_url) ────────────────────────────────
   anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    request_timeout_seconds: 120
+    stale_timeout_seconds: 300
+
+  # ── DashScope (OpenAI 兼容端点,通过 custom provider 接入) ─────────
+  # 只有 HERMES_MODEL 选 qwen-* 时才会用到。key 没填不影响 Anthropic 路径。
+  custom:
+    base_url: "${DASHSCOPE_BASE_URL}"
+    api_key: "${DASHSCOPE_API_KEY}"
     request_timeout_seconds: 120
     stale_timeout_seconds: 300

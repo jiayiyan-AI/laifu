@@ -40,10 +40,21 @@ echo ""
 echo "[配置文件]"
 if [ -f apps/gateway/.env.local ]; then ok "apps/gateway/.env.local"; else fail "apps/gateway/.env.local 缺失"; fi
 if [ -f docker/hermes/.env ]; then
-  if grep -q 'sk-ant-your-anthropic-key' docker/hermes/.env 2>/dev/null; then
-    warn "docker/hermes/.env 存在但 ANTHROPIC_API_KEY 是占位符"
+  model=$(grep -E '^HERMES_MODEL=' docker/hermes/.env | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+  if [ -z "$model" ]; then
+    warn "docker/hermes/.env: HERMES_MODEL 未设"
   else
-    ok "docker/hermes/.env (含 ANTHROPIC_API_KEY)"
+    case "$model" in
+      anthropic/*)
+        key=$(grep -E '^ANTHROPIC_API_KEY=' docker/hermes/.env | head -1 | cut -d= -f2-)
+        if [ -n "$key" ]; then ok "HERMES_MODEL=$model + ANTHROPIC_API_KEY 已填"
+        else warn "HERMES_MODEL=$model 但 ANTHROPIC_API_KEY 空"; fi ;;
+      qwen-*|qwen3-*)
+        key=$(grep -E '^DASHSCOPE_API_KEY=' docker/hermes/.env | head -1 | cut -d= -f2-)
+        if [ -n "$key" ]; then ok "HERMES_MODEL=$model + DASHSCOPE_API_KEY 已填"
+        else warn "HERMES_MODEL=$model 但 DASHSCOPE_API_KEY 空"; fi ;;
+      *) warn "HERMES_MODEL=$model (自定义模型,key 校验跳过)" ;;
+    esac
   fi
 else
   warn "docker/hermes/.env 缺失 → cp docker/hermes/.env.example docker/hermes/.env 填 key"

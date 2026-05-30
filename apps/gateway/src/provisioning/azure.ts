@@ -127,6 +127,7 @@ export const createContainerApp = async (params: {
         secrets: [
           { name: 'acr-password', value: acrPwd },
           { name: 'anthropic-api-key', value: config.azure.anthropicApiKey },
+          { name: 'dashscope-api-key', value: config.azure.dashscopeApiKey },
         ],
       },
       template: {
@@ -135,7 +136,13 @@ export const createContainerApp = async (params: {
             name: 'hermes',
             image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
             resources: { cpu: 1, memory: '2Gi' },
-            env: [{ name: 'ANTHROPIC_API_KEY', secretRef: 'anthropic-api-key' }],
+            env: [
+              // LLM 多 provider 并存,容器内 hermes-config.yaml 根据 HERMES_MODEL 自动选
+              { name: 'HERMES_MODEL', value: config.azure.hermesModel },
+              { name: 'ANTHROPIC_API_KEY', secretRef: 'anthropic-api-key' },
+              { name: 'DASHSCOPE_API_KEY', secretRef: 'dashscope-api-key' },
+              { name: 'DASHSCOPE_BASE_URL', value: config.azure.dashscopeBaseUrl },
+            ],
             volumeMounts: [{ volumeName: 'hermes-home', mountPath: '/home/hermes' }],
           },
         ],

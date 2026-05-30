@@ -34,7 +34,12 @@ export const config = {
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
     acrName: process.env['AZURE_ACR_NAME'] ?? '',           // 用来拿 listCredentials
     hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes:v1',
-    anthropicApiKey: process.env['ANTHROPIC_API_KEY'] ?? '', // Claude key,作 secret 注入容器
+    // LLM 多 provider 并存,Container 内 hermes-config.yaml 根据 HERMES_MODEL 自动选。
+    // Gateway 把所有 LLM env 透传作 secret,容器各取所需。
+    hermesModel: process.env['HERMES_MODEL'] ?? 'anthropic/claude-sonnet-4-6',
+    anthropicApiKey: process.env['ANTHROPIC_API_KEY'] ?? '',
+    dashscopeApiKey: process.env['DASHSCOPE_API_KEY'] ?? '',
+    dashscopeBaseUrl: process.env['DASHSCOPE_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   },
 };
 
@@ -49,7 +54,14 @@ export const validateConfig = () => {
     required('AZURE_STORAGE_ACCOUNT');
     required('AZURE_ACR_LOGIN_SERVER');
     required('AZURE_ACR_NAME');
-    required('ANTHROPIC_API_KEY');
+    // HERMES_MODEL 决定哪个 key 必填
+    const model = config.azure.hermesModel;
+    if (model.startsWith('anthropic/') && !config.azure.anthropicApiKey) {
+      throw new Error(`HERMES_MODEL=${model} 但 ANTHROPIC_API_KEY 未设`);
+    }
+    if ((model.startsWith('qwen-') || model.startsWith('qwen3-')) && !config.azure.dashscopeApiKey) {
+      throw new Error(`HERMES_MODEL=${model} 但 DASHSCOPE_API_KEY 未设`);
+    }
   }
   if (config.auth.mode === 'wechat') {
     required('WECHAT_APPID');
