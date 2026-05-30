@@ -8,9 +8,11 @@ import { Onboarding } from '../onboarding/Onboarding.js';
 import * as api from '../lib/api.js';
 import { IconSpark, IconGrid, IconMessage } from '../lib/icons.js';
 import { ChatApp } from '../apps/chat/ChatApp.js';
+import { ManageApp } from '../apps/manage/ManageApp.js';
 
 const renderApp = (id: DockAppId) => {
   if (id === 'chat') return <ChatApp />;
+  if (id === 'manage') return <ManageApp />;
   return <div style={{ padding: 24 }}>App "{id}" — 后续 task 实现内容</div>;
 };
 
