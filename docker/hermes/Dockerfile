@@ -48,6 +48,14 @@ RUN export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
     && ln -sf /opt/hermes-agent/venv/bin/hermes /usr/local/bin/hermes \
     && chmod -R a+rX /opt/hermes-agent /usr/local/share/uv
 
+# ============ 装 LLM provider 客户端 (Anthropic SDK) ============
+# Hermes 默认装 OpenAI/DashScope 路径用的依赖,Anthropic provider 需另外装。
+# uv 创建的 venv 不自带 pip,先 ensurepip 引导,再 pip install。
+# 装到 venv (read-only 层),所有用户共享。
+RUN /opt/hermes-agent/venv/bin/python -m ensurepip --upgrade \
+    && /opt/hermes-agent/venv/bin/python -m pip install --no-cache-dir 'anthropic>=0.39.0' \
+    && chmod -R a+rX /opt/hermes-agent
+
 # ============ 准备 hermes 用户的初始 home 骨架 ============
 # install.sh 在 /tmp/install-home 下创建了完整 .hermes/{cron,sessions,logs,memories,...}
 # 把这份骨架（不含 hermes-agent 源码）拷给 hermes 用户作为初始 home
