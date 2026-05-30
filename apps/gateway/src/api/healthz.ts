@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 
 const startedAt = Date.now();
 
-export const healthzRouter = Router();
+export const healthzRouter: ReturnType<typeof Router> = Router();
 
 healthzRouter.get('/healthz', (_req: Request, res: Response) => {
   res.json({
