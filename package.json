@@ -6,13 +6,19 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "dev": "concurrently -n hermes,gateway,web -c yellow,cyan,magenta --kill-others-on-fail 'pnpm dev:hermes' 'pnpm dev:gateway' 'pnpm dev:web'",
+    "dev:hermes": "scripts/dev-hermes.sh",
+    "dev:gateway": "cd apps/gateway && DOTENV_CONFIG_PATH=.env.local pnpm exec tsx -r dotenv/config src/index.ts",
+    "dev:web": "pnpm --filter @lingxi/web dev",
+    "dev:check": "scripts/dev-check.sh"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=24"
   },
   "devDependencies": {
+    "concurrently": "^10.0.0",
     "typescript": "^5.4.0"
   }
 }
