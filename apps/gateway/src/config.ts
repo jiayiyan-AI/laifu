@@ -8,6 +8,19 @@ export const config = {
   port: parseInt(process.env['PORT'] ?? '3000', 10),
   provisioner: (process.env['PROVISIONER'] ?? 'local') as 'local' | 'azure',
   localContainerUrl: process.env['LOCAL_CONTAINER_URL'] ?? 'http://localhost:8080',
+  session: {
+    secret: process.env['SESSION_SECRET'] ?? 'dev-only-insecure-secret',
+    cookieName: process.env['SESSION_COOKIE_NAME'] ?? 'lingxi_sid',
+    ttlHours: parseInt(process.env['SESSION_TTL_HOURS'] ?? '168', 10),
+  },
+  auth: {
+    mode: (process.env['AUTH_MODE'] ?? 'dev') as 'dev' | 'wechat',
+    wechat: {
+      appId: process.env['WECHAT_APPID'] ?? '',
+      secret: process.env['WECHAT_SECRET'] ?? '',
+      redirectUri: process.env['WECHAT_REDIRECT_URI'] ?? '',
+    },
+  },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
     serviceRoleKey: process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
@@ -30,5 +43,13 @@ export const validateConfig = () => {
   if (config.provisioner === 'azure') {
     required('AZURE_SUBSCRIPTION_ID');
     required('AZURE_RESOURCE_GROUP');
+  }
+  if (config.auth.mode === 'wechat') {
+    required('WECHAT_APPID');
+    required('WECHAT_SECRET');
+    required('WECHAT_REDIRECT_URI');
+  }
+  if ((process.env['SESSION_SECRET'] ?? '').length < 16) {
+    console.warn('[config] SESSION_SECRET is short or unset — dev only');
   }
 };
