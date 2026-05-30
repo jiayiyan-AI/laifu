@@ -1,0 +1,23 @@
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --panel2: #fafafc;
+  --hover: #f1f0f7;
+  --border: #e7e8ed;
+  --border2: #eef0f3;
+  --text: #1b1c20;
+  --text2: #5a5c66;
+  --text3: #9b9da6;
+  --accent: #7c3aed;
+  --accent-d: #6d28d9;
+  --accent-weak: #f2ecfe;
+  --accent-weak2: #f7f3ff;
+  --ok: #16a34a;
+  --ok-w: #e7f6ec;
+  --run: #2563eb;
+  --run-w: #e8f0fe;
+  --bad: #dc2626;
+  --bad-w: #fdecec;
+  --shadow: 0 1px 2px rgba(16, 18, 30, 0.05), 0 4px 16px rgba(16, 18, 30, 0.07);
+  --shadow-l: 0 12px 44px rgba(16, 18, 30, 0.2);
+}
