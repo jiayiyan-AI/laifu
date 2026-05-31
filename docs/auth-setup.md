@@ -23,7 +23,8 @@
 5. 回到「Credentials」→「Create Credentials」→「OAuth client ID」:
    - Application type:**Web application**
    - **Authorized JavaScript origins**:`http://localhost:3000` (前端 origin)
-   - **Authorized redirect URIs**:`http://localhost:9000/api/auth/google/callback` (后端回调,注意是 :9000)
+   - **Authorized redirect URIs**:`http://localhost:3000/api/auth/google/callback`
+     (走 Vite 代理,所有请求都是 :3000 入口,Vite 再代理 /api/* 到 gateway :9000)
 6. 创建后拿:
    - `Client ID` 形如 `xxx.apps.googleusercontent.com`
    - `Client Secret` 形如 `GOCSPX-xxx`
@@ -37,7 +38,7 @@
 ```
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
-PUBLIC_BASE_URL=http://localhost:9000
+PUBLIC_BASE_URL=http://localhost:3000
 ```
 
 ### 3. 用
@@ -53,7 +54,8 @@ PUBLIC_BASE_URL=http://localhost:9000
 把生产域名加到 Console 同一个 OAuth Client(也可建新的):
 
 - Authorized JavaScript origins 加:`https://<your-domain>`
-- Authorized redirect URIs 加:`https://<your-gateway-domain>/api/auth/google/callback`
+- Authorized redirect URIs 加:`https://<your-domain>/api/auth/google/callback`
+  (生产环境前端和 gateway 通常在同一域名下,通过反向代理把 /api/* 转给 gateway)
 - 部署时设 `PUBLIC_BASE_URL=https://<your-gateway-domain>`
 
 ---
@@ -77,8 +79,10 @@ PUBLIC_BASE_URL=http://localhost:9000
 
 | 服务 | 默认端口 | 备注 |
 |---|---|---|
-| Web (前端) | 3000 | http://localhost:3000 |
-| Gateway (后端) | 9000 | http://localhost:9000 |
+| Web (前端 + Vite 代理) | 3000 | http://localhost:3000 (所有用户入口) |
+| Gateway (后端) | 9000 | 不直接暴露,Vite 代理 /api/* 转发到这 |
 | Hermes 容器 | 8080 | 本地共享 |
 
-回调 URL 永远是 **gateway 端口**(9000),不是前端端口(3000)。
+OAuth 回调 URL **永远填前端入口** (`http://localhost:3000/api/auth/google/callback`),
+浏览器从来不需要直接看到 :9000。这样后端发相对 redirect 就能跳前端路由,
+也不用维护「前端 URL」配置项。
