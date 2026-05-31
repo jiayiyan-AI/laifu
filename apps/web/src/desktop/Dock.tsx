@@ -1,15 +1,14 @@
 import type { ReactNode } from 'react';
-import { IconSpark, IconGrid, IconMessage } from '../lib/icons.js';
+import { IconSpark, IconGrid } from '../lib/icons.js';
 
-export type DockAppId = 'chat' | 'manage' | 'wechat';
+export type DockAppId = 'chat' | 'manage';
 
 const apps: { id: DockAppId; name: string; icon: ReactNode; c1: string; c2: string }[] = [
-  { id: 'chat',   name: '灵犀助理', icon: <IconSpark size={24} />,   c1: '#8b5cf6', c2: '#6d28d9' },
-  { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,    c1: '#3b82f6', c2: '#1d4ed8' },
-  { id: 'wechat', name: '微信绑定', icon: <IconMessage size={24} />, c1: '#34d399', c2: '#059669' },
+  { id: 'chat',   name: '灵犀助理', icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
+  { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,  c1: '#3b82f6', c2: '#1d4ed8' },
 ];
 
-export const Dock = ({ onOpen, openApps }: { onOpen: (id: DockAppId) => void; openApps: Set<DockAppId> }) => (
+export const Dock = ({ onOpen, openApps }: { onOpen: (id: DockAppId) => void; openApps: ReadonlySet<string> }) => (
   <div style={{
     position: 'absolute', bottom: 9, left: '50%', transform: 'translateX(-50%)',
     display: 'flex', alignItems: 'flex-end', gap: 11, padding: '8px 11px',

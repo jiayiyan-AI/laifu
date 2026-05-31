@@ -9,6 +9,7 @@ const SECRET = 'test-secret-do-not-use-in-prod-1234567';
 const COOKIE_NAME = 'lingxi_sid';
 const STATE_COOKIE = 'lingxi_oauth_state';
 const PUBLIC_BASE = 'http://localhost:9000';
+const FRONTEND_BASE = 'http://localhost:3000';
 
 const makeMockProvider = (): OAuthProvider => ({
   buildAuthUrl: vi.fn((state, redirectUri) =>
@@ -55,6 +56,7 @@ const makeApp = (providers: Record<string, OAuthProvider>, sb: any = makeSb()) =
     cookieName: COOKIE_NAME,
     ttlHours: 24,
     publicBaseUrl: PUBLIC_BASE,
+    frontendBaseUrl: FRONTEND_BASE,
   }));
   return { app, sb };
 };
@@ -102,7 +104,7 @@ describe('oauth-router', () => {
         .set('Cookie', `${STATE_COOKIE}=${state}`);
 
       expect(res.status).toBe(302);
-      expect(res.headers['location']).toBe('/desktop');
+      expect(res.headers['location']).toBe(`${FRONTEND_BASE}/desktop`);
       expect(provider.exchangeCode).toHaveBeenCalledWith('the_code', `${PUBLIC_BASE}/api/auth/mock/callback`);
       expect(provider.fetchUserinfo).toHaveBeenCalledWith('mock-token');
       // upsert call shape

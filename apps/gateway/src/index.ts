@@ -20,6 +20,8 @@ import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
 import { providers } from './auth/providers/index.js';
+import { buildWechatBindRouter } from './api/wechat-bind.js';
+import { makeMpClient } from './wechat/mp-client.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -96,10 +98,23 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,
       publicBaseUrl: config.auth.publicBaseUrl,
+      frontendBaseUrl: config.auth.frontendBaseUrl,
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));
     app.use(buildChatRouter(sbResolved, getCache(), sessionMw));
+    // 微信公众号扫码绑定 (Phase 1.4 B) — 三项凭证齐了才挂载
+    const mp = config.wechatMp;
+    if (mp.appId && mp.appSecret && mp.token) {
+      app.use(buildWechatBindRouter({
+        sb: sbResolved,
+        mpClient: makeMpClient({ appId: mp.appId, appSecret: mp.appSecret }),
+        mpToken: mp.token,
+        sessionMw,
+      }));
+    } else {
+      console.warn('[config] WeChat MP 配置不全 (WECHAT_MP_APPID/APPSECRET/TOKEN),/api/wechat/* 路由未挂载');
+    }
   }
   app.use(buildStatusRouter(getCache, sessionMw));
 

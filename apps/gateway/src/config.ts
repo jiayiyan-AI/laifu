@@ -21,9 +21,22 @@ export const config = {
         clientSecret: process.env['GOOGLE_CLIENT_SECRET'] ?? '',
       },
     },
-    // gateway 自己的对外 URL(用于构造 OAuth redirect_uri、webhook URL 等)
-    // 本地 = http://localhost:9000,云上 = https://<your-domain>
+    // gateway 自己对外暴露的 base URL,用于构造 OAuth redirect_uri。
+    // 本地开发: gateway 直连端口 :9000。Google 把浏览器 302 到这里命中 callback,
+    // gateway 处理完再 302 到 frontendBaseUrl/desktop。
+    // 生产: 跟 frontendBaseUrl 同域 (反代分发 /api/*)。
     publicBaseUrl: process.env['PUBLIC_BASE_URL'] ?? 'http://localhost:9000',
+    // 前端应用的 base URL,用于 OAuth 成功后跳回 /desktop。
+    // 本地开发: Vite (:3000)。生产: 跟 publicBaseUrl 同域,可填 '' 让 gateway 发相对路径。
+    frontendBaseUrl: process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:3000',
+  },
+  // 微信公众号测试号 (Phase 1.4 B 扫码绑定)。
+  // 三项缺一不可,validateConfig 在 wechat-bind 路由实际挂载时再断言。
+  wechatMp: {
+    appId: process.env['WECHAT_MP_APPID'] ?? '',
+    appSecret: process.env['WECHAT_MP_APPSECRET'] ?? '',
+    // 自定义 token,用于校验 webhook 请求的 signature (微信侧管理页配同一个值)。
+    token: process.env['WECHAT_MP_TOKEN'] ?? '',
   },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
