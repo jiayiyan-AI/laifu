@@ -43,12 +43,6 @@ export interface StatusResponse {
 
 // === Auth 契约 ===
 
-export interface DevLoginRequest {
-  external_id: string;       // 任意字符串,用作 (provider='dev', external_id) 复合主键
-  nickname?: string;
-  email?: string;
-}
-
 export interface AuthMeResponse {
   user_id: string;
   provider: string;          // 'google' | 'dev' | 'github' | ...

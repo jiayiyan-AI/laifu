@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import type { AuthMeResponse, DevLoginRequest } from '@lingxi/shared';
+import type { AuthMeResponse } from '@lingxi/shared';
 import * as api from '../lib/api.js';
 
 type AuthState =
@@ -10,7 +10,6 @@ type AuthState =
 interface AuthCtx {
   status: AuthState['status'];
   user?: AuthMeResponse;
-  devLogin: (body: DevLoginRequest) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -33,11 +32,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     void refresh();
   }, []);
 
-  const devLogin = async (body: DevLoginRequest) => {
-    const user = await api.devLogin(body);
-    setState({ status: 'authenticated', user });
-  };
-
   const logout = async () => {
     try { await api.logout(); } catch { /* ignore */ }
     setState({ status: 'unauthenticated' });
@@ -47,7 +41,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     <Ctx.Provider value={{
       status: state.status,
       user: state.status === 'authenticated' ? state.user : undefined,
-      devLogin,
       logout,
       refresh,
     }}>
@@ -57,25 +50,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 };
 
 interface UseAuthLoading { status: 'loading' }
-interface UseAuthUnauthed { status: 'unauthenticated'; devLogin: AuthCtx['devLogin'] }
+interface UseAuthUnauthed { status: 'unauthenticated' }
 interface UseAuthAuthed {
   status: 'authenticated';
   user: AuthMeResponse;
   logout: AuthCtx['logout'];
   refresh: AuthCtx['refresh'];
-  devLogin: AuthCtx['devLogin'];
 }
 
 export const useAuth = (): UseAuthLoading | UseAuthUnauthed | UseAuthAuthed => {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error('useAuth outside AuthProvider');
   if (ctx.status === 'loading') return { status: 'loading' };
-  if (ctx.status === 'unauthenticated') return { status: 'unauthenticated', devLogin: ctx.devLogin };
+  if (ctx.status === 'unauthenticated') return { status: 'unauthenticated' };
   return {
     status: 'authenticated',
     user: ctx.user!,
     logout: ctx.logout,
     refresh: ctx.refresh,
-    devLogin: ctx.devLogin,
   };
 };

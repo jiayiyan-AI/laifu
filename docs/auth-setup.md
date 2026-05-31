@@ -3,8 +3,7 @@
 灵犀的认证系统:**provider registry 模式**。一个动态路由 `/api/auth/:provider/{start,callback}` 跑所有 OAuth 平台。加新 provider 只要在 `apps/gateway/src/auth/providers/` 加一个文件 + 在 `index.ts` registry 注册一行,不动路由。
 
 当前已接入:
-- **Google OAuth** (生产推荐)
-- **Dev login** (本地开发用,假登录,`AUTH_MODE=dev` 时启用)
+- **Google OAuth**
 
 ---
 
@@ -36,7 +35,6 @@
 复制 `apps/gateway/.env.example` 到 `apps/gateway/.env.local`(后者 gitignored),填:
 
 ```
-AUTH_MODE=oauth
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 PUBLIC_BASE_URL=http://localhost:9000
@@ -57,16 +55,6 @@ PUBLIC_BASE_URL=http://localhost:9000
 - Authorized JavaScript origins 加:`https://<your-domain>`
 - Authorized redirect URIs 加:`https://<your-gateway-domain>/api/auth/google/callback`
 - 部署时设 `PUBLIC_BASE_URL=https://<your-gateway-domain>`
-
----
-
-## Dev login(本地开发)
-
-`AUTH_MODE=dev` 时,LoginPage 底部展开「开发者快捷登录」可以填:
-- `external_id`:任意字符串,例如 `alice`(用作 `(provider='dev', external_id)` 复合主键)
-- `nickname`:显示名
-
-后端走 `POST /api/auth/dev/login`,直接 upsert `users` 行,发 session cookie。**生产部署一定要把 `AUTH_MODE` 设成 `oauth`**(关掉 dev login)。
 
 ---
 

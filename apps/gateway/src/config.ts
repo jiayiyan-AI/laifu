@@ -14,10 +14,6 @@ export const config = {
     ttlHours: parseInt(process.env['SESSION_TTL_HOURS'] ?? '168', 10),
   },
   auth: {
-    // 'dev'   = 启用 /api/auth/dev/login 假登录(不走真 provider),便于本地开发
-    // 'oauth' = 关掉 dev login,只走 OAuth providers
-    // 两个模式都不影响 OAuth providers 的可用性(provider 由各自 env 凭据决定)
-    mode: (process.env['AUTH_MODE'] ?? 'dev') as 'dev' | 'oauth',
     // 所有 OAuth provider 的凭据集中在这。registry 自己根据这里有没有填决定是否注册。
     providers: {
       google: {
@@ -71,19 +67,17 @@ export const validateConfig = () => {
       throw new Error(`HERMES_MODEL=${model} 但 DASHSCOPE_API_KEY 未设`);
     }
   }
-  if (config.auth.mode === 'oauth') {
-    // 至少要有一个 OAuth provider 启用,否则没人能登录
-    const enabled = Object.entries(config.auth.providers)
-      .filter(([, v]) => v.clientId && v.clientSecret)
-      .map(([k]) => k);
-    if (enabled.length === 0) {
-      throw new Error(
-        'AUTH_MODE=oauth but no OAuth provider configured. ' +
-        'Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (or another provider).',
-      );
-    }
-    console.log(`[config] auth.mode=oauth, providers=${enabled.join(',')}`);
+  // 至少要有一个 OAuth provider 启用,否则没人能登录
+  const enabled = Object.entries(config.auth.providers)
+    .filter(([, v]) => v.clientId && v.clientSecret)
+    .map(([k]) => k);
+  if (enabled.length === 0) {
+    throw new Error(
+      'No OAuth provider configured. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET ' +
+      '(or another provider) in your env.',
+    );
   }
+  console.log(`[config] OAuth providers enabled: ${enabled.join(',')}`);
   if ((process.env['SESSION_SECRET'] ?? '').length < 16) {
     console.warn('[config] SESSION_SECRET is short or unset — dev only');
   }

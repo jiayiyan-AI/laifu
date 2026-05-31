@@ -1,14 +1,12 @@
 /**
  * Session 相关路由(不依赖具体 OAuth provider):
- *   GET  /api/auth/me        — 拿当前登录用户
- *   POST /api/auth/logout    — 清 cookie
- *   POST /api/auth/dev/login — 仅 AUTH_MODE=dev 时启用,创建/找回 (provider='dev', external_id) 身份
+ *   GET  /api/auth/me      — 拿当前登录用户
+ *   POST /api/auth/logout  — 清 cookie
  *
  * 真正的 OAuth provider 流程在 ./oauth-router.ts。
  */
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { signSession, sessionCookieOpts } from './session.js';
 import { requireSession } from './middleware.js';
 import type { AuthMeResponse } from '@lingxi/shared';
 
@@ -17,10 +15,7 @@ export interface SessionRoutesOpts {
   sessionSecret: string;
   cookieName: string;
   ttlHours: number;
-  enableDevLogin: boolean;
 }
-
-const DEV_PROVIDER = 'dev';
 
 interface UserRow {
   id: string;
@@ -39,15 +34,6 @@ const toMeResponse = (row: UserRow): AuthMeResponse => ({
   nickname: row.nickname,
   avatar_url: row.avatar_url,
 });
-
-const setSessionCookie = (
-  res: Response,
-  opts: SessionRoutesOpts,
-  userId: string,
-): void => {
-  const token = signSession({ user_id: userId }, opts.sessionSecret, opts.ttlHours);
-  res.cookie(opts.cookieName, token, sessionCookieOpts(opts.ttlHours));
-};
 
 export const buildSessionRoutes = (opts: SessionRoutesOpts): RouterType => {
   const r = Router();
@@ -68,39 +54,6 @@ export const buildSessionRoutes = (opts: SessionRoutesOpts): RouterType => {
     res.clearCookie(opts.cookieName);
     res.json({ ok: true });
   });
-
-  if (opts.enableDevLogin) {
-    r.post('/api/auth/dev/login', async (req: Request, res: Response) => {
-      const { external_id, nickname, email } = (req.body ?? {}) as {
-        external_id?: string;
-        nickname?: string;
-        email?: string;
-      };
-      if (!external_id) return res.status(400).json({ error: 'external_id required' });
-
-      const { data, error } = await opts.sb
-        .from('users')
-        .upsert(
-          {
-            provider: DEV_PROVIDER,
-            external_id,
-            nickname: nickname ?? null,
-            email: email ?? null,
-          },
-          { onConflict: 'provider,external_id' },
-        )
-        .select('id, provider, external_id, email, nickname, avatar_url')
-        .single();
-
-      if (error || !data) {
-        return res.status(500).json({ error: error?.message ?? 'upsert failed' });
-      }
-
-      const row = data as UserRow;
-      setSessionCookie(res, opts, row.id);
-      res.json(toMeResponse(row));
-    });
-  }
 
   return r;
 };

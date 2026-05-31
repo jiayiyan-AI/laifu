@@ -1,6 +1,5 @@
 import type {
   AuthMeResponse,
-  DevLoginRequest,
   PurchaseResponse,
   StatusResponse,
   ThreadCreateRequest,
@@ -31,9 +30,6 @@ const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
 };
 
 // === Auth ===
-export const devLogin = (body: DevLoginRequest): Promise<AuthMeResponse> =>
-  json('/api/auth/dev/login', { method: 'POST', body: JSON.stringify(body) });
-
 export const me = (): Promise<AuthMeResponse> => json('/api/auth/me');
 
 export const logout = (): Promise<{ ok: true }> =>

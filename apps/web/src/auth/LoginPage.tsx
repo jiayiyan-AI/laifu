@@ -1,13 +1,11 @@
-import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
 import { useAuth } from './AuthContext.js';
 
 /**
- * 登录页:
- *   - 主按钮: 跳到 gateway 的 OAuth 起点 (Google 等)
- *   - 折叠区: dev login (本地 AUTH_MODE=dev 时可用,凭据填 external_id 任意串)
+ * 登录页:目前只接 Google OAuth。
+ * 加新 provider 在这里加一个 <a href="/api/auth/<provider>/start"> 按钮即可。
  */
 export const LoginPage = () => {
   const auth = useAuth();
@@ -32,7 +30,6 @@ export const LoginPage = () => {
           </div>
         </div>
 
-        {/* 主 CTA: Google OAuth ——— gateway 自己把浏览器导走 */}
         <a
           href="/api/auth/google/start"
           className="btn"
@@ -45,60 +42,8 @@ export const LoginPage = () => {
         >
           <GoogleIcon /> 使用 Google 登录
         </a>
-
-        {/* 开发者快捷登录 (dev only) */}
-        <details style={{ marginTop: 18, fontSize: 13 }}>
-          <summary style={{ cursor: 'pointer', color: 'var(--text3)' }}>开发者快捷登录</summary>
-          <DevLoginForm
-            onDone={() => nav('/desktop', { replace: true })}
-          />
-        </details>
       </div>
     </div>
-  );
-};
-
-const DevLoginForm = ({ onDone }: { onDone: () => void }) => {
-  const auth = useAuth();
-  const [externalId, setExternalId] = useState('alice');
-  const [nickname, setNickname] = useState('Alice');
-  const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (auth.status === 'loading') return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      await auth.devLogin({ external_id: externalId.trim(), nickname: nickname.trim() || undefined });
-      onDone();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '登录失败');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-      <input
-        className="input"
-        placeholder="external_id（任意字符串,会跟 provider=dev 配对建用户）"
-        value={externalId}
-        onChange={(e) => setExternalId(e.target.value)}
-      />
-      <input
-        className="input"
-        placeholder="昵称"
-        value={nickname}
-        onChange={(e) => setNickname(e.target.value)}
-      />
-      {err && <div style={{ color: 'var(--bad)', fontSize: 12 }}>{err}</div>}
-      <button type="submit" className="btn btn-primary" style={{ padding: 9 }} disabled={submitting || auth.status === 'loading'}>
-        {submitting ? '登录中…' : '以 dev 身份登录'}
-      </button>
-    </form>
   );
 };
 

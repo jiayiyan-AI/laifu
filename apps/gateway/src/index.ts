@@ -78,13 +78,12 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   }
 
   if (sbResolved) {
-    // Session 路由(/me, /logout, /dev/login if enabled)
+    // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
       sb: sbResolved,
       sessionSecret: config.session.secret,
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,
-      enableDevLogin: config.auth.mode === 'dev',
     }));
     // OAuth provider 路由(动态 :provider 分发到 registry)
     app.use(buildOAuthRouter({
