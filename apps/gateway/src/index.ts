@@ -1,3 +1,6 @@
+// ⚠️ 必须在所有 fetch() 调用之前,否则代理装不上
+import './lib/proxy-bootstrap.js';
+
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
 import type { SupabaseClient } from '@supabase/supabase-js';
