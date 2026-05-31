@@ -30,6 +30,14 @@ export const config = {
     // 本地开发: Vite (:3000)。生产: 跟 publicBaseUrl 同域,可填 '' 让 gateway 发相对路径。
     frontendBaseUrl: process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:3000',
   },
+  // 微信公众号测试号 (Phase 1.4 B 扫码绑定)。
+  // 三项缺一不可,validateConfig 在 wechat-bind 路由实际挂载时再断言。
+  wechatMp: {
+    appId: process.env['WECHAT_MP_APPID'] ?? '',
+    appSecret: process.env['WECHAT_MP_APPSECRET'] ?? '',
+    // 自定义 token,用于校验 webhook 请求的 signature (微信侧管理页配同一个值)。
+    token: process.env['WECHAT_MP_TOKEN'] ?? '',
+  },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
     serviceRoleKey: process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
