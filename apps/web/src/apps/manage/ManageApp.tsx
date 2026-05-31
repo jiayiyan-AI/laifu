@@ -7,7 +7,7 @@ const caps = [
   { id: 'wechat', name: '微信收发', icon: <IconMessage size={22} color="var(--accent)" /> },
 ];
 
-export const ManageApp = () => {
+export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
   const auth = useAuth();
   const nick = auth.status === 'authenticated' ? auth.user.nickname ?? '未命名' : '';
 
@@ -25,6 +25,13 @@ export const ManageApp = () => {
               在线 · {nick} 的助理
             </div>
           </div>
+          <button
+            className="btn btn-primary"
+            style={{ background: '#16a34a' }}
+            onClick={onOpenWechat}
+          >
+            <IconMessage size={15} />绑定微信
+          </button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>

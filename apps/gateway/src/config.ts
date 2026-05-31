@@ -21,11 +21,14 @@ export const config = {
         clientSecret: process.env['GOOGLE_CLIENT_SECRET'] ?? '',
       },
     },
-    // 「公网可见」的 base URL,用于构造 OAuth redirect_uri、webhook URL 等。
-    // 关键: 这里不是 gateway 自己的端口,而是 *用户浏览器看到的入口* —
-    // 本地开发用 Vite (:3000),Vite 代理 /api/* 到 gateway (:9000)。
-    // 同源好处:cookie 不跨 origin,后端发相对 redirect 就能跳前端路由。
-    publicBaseUrl: process.env['PUBLIC_BASE_URL'] ?? 'http://localhost:3000',
+    // gateway 自己对外暴露的 base URL,用于构造 OAuth redirect_uri。
+    // 本地开发: gateway 直连端口 :9000。Google 把浏览器 302 到这里命中 callback,
+    // gateway 处理完再 302 到 frontendBaseUrl/desktop。
+    // 生产: 跟 frontendBaseUrl 同域 (反代分发 /api/*)。
+    publicBaseUrl: process.env['PUBLIC_BASE_URL'] ?? 'http://localhost:9000',
+    // 前端应用的 base URL,用于 OAuth 成功后跳回 /desktop。
+    // 本地开发: Vite (:3000)。生产: 跟 publicBaseUrl 同域,可填 '' 让 gateway 发相对路径。
+    frontendBaseUrl: process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:3000',
   },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',

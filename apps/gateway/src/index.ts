@@ -96,6 +96,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,
       publicBaseUrl: config.auth.publicBaseUrl,
+      frontendBaseUrl: config.auth.frontendBaseUrl,
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));

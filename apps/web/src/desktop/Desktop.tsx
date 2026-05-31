@@ -11,14 +11,16 @@ import { ChatApp } from '../apps/chat/ChatApp.js';
 import { ManageApp } from '../apps/manage/ManageApp.js';
 import { WechatApp } from '../apps/wechat/WechatApp.js';
 
-const renderApp = (id: DockAppId) => {
+type AppId = DockAppId | 'wechat';
+
+const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
   if (id === 'chat') return <ChatApp />;
-  if (id === 'manage') return <ManageApp />;
+  if (id === 'manage') return <ManageApp onOpenWechat={() => openApp('wechat')} />;
   if (id === 'wechat') return <WechatApp />;
   return null;
 };
 
-const titles: Record<DockAppId, { title: string; icon: ReactNode; w: number; h: number }> = {
+const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: number }> = {
   chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
   manage: { title: '我的助理', icon: <IconGrid size={14} />,    w: 780, h: 580 },
   wechat: { title: '微信绑定', icon: <IconMessage size={14} />, w: 560, h: 440 },
@@ -26,7 +28,7 @@ const titles: Record<DockAppId, { title: string; icon: ReactNode; w: number; h: 
 
 export const Desktop = () => {
   const [ready, setReady] = useState<boolean | null>(null);
-  const [openApps, setOpenApps] = useState<DockAppId[]>([]);
+  const [openApps, setOpenApps] = useState<AppId[]>([]);
 
   useEffect(() => {
     void (async () => {
@@ -39,8 +41,8 @@ export const Desktop = () => {
     })();
   }, []);
 
-  const openApp = (id: DockAppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
-  const closeApp = (id: DockAppId) => setOpenApps((s) => s.filter((x) => x !== id));
+  const openApp = (id: AppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
+  const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
 
   if (ready === null) {
     return <div className="dim" style={{ padding: 24 }}>加载中…</div>;
@@ -69,7 +71,7 @@ export const Desktop = () => {
           const meta = titles[id];
           return (
             <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} onClose={() => closeApp(id)}>
-              {renderApp(id)}
+              {renderApp(id, openApp)}
             </Window>
           );
         })}

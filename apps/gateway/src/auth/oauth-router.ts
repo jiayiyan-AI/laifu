@@ -23,7 +23,8 @@ export interface OAuthRouterOpts {
   sessionSecret: string;
   cookieName: string;
   ttlHours: number;
-  publicBaseUrl: string;        // 用于构造 OAuth 回调 redirect_uri
+  publicBaseUrl: string;        // gateway 自己的入口,用来构造 OAuth callback redirect_uri
+  frontendBaseUrl: string;      // 前端入口,OAuth 成功后浏览器 302 跳回的目标
 }
 
 interface UserRow {
@@ -126,9 +127,11 @@ export const buildOAuthRouter = (opts: OAuthRouterOpts): RouterType => {
     if (!row) return res.status(500).json({ error: 'user upsert failed' });
 
     // 6. 发 session cookie + 跳回前端
+    //    跨端口绝对跳转: callback 命中 gateway(:9000),浏览器需要回到前端(:3000)。
+    //    localhost 上 cookie 不分端口,所以 :9000 set 的 cookie 在 :3000 的 fetch 里也会带上。
     const token = signSession({ user_id: row.id }, opts.sessionSecret, opts.ttlHours);
     res.cookie(opts.cookieName, token, sessionCookieOpts(opts.ttlHours));
-    res.redirect('/desktop');
+    res.redirect(`${opts.frontendBaseUrl}/desktop`);
   });
 
   return r;
