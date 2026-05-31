@@ -8,10 +8,14 @@ describe('api client', () => {
 
   it('devLogin POSTs with credentials and returns user', async () => {
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ user_id: 'u1', wx_unionid: 'wx_1', nickname: null, avatar_url: null })),
+      new Response(JSON.stringify({
+        user_id: 'u1', provider: 'dev', external_id: 'alice',
+        email: null, nickname: null, avatar_url: null,
+      })),
     );
-    const res = await api.devLogin({ wx_unionid: 'wx_1' });
+    const res = await api.devLogin({ external_id: 'alice' });
     expect(res.user_id).toBe('u1');
+    expect(res.provider).toBe('dev');
     expect(fetchSpy).toHaveBeenCalledWith('/api/auth/dev/login', expect.objectContaining({
       method: 'POST',
       credentials: 'include',

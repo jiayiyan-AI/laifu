@@ -1,12 +1,13 @@
-// DB row types — 与 infra/supabase/migrations/0001_init.sql 中表结构一一对应
+// DB row types — 与 infra/supabase/migrations/0001_init.sql + 0003_oauth_identities.sql 一致
 
 export type ContainerStatus = 'provisioning' | 'ready' | 'failed';
 export type MessageSource = 'web' | 'wechat';
-export type WechatSessionStatus = 'active' | 'expired' | 'disabled';
 
 export interface User {
   id: string;                  // uuid
-  wx_unionid: string;
+  provider: string;            // 'google' | 'dev' | 'github' | ...
+  external_id: string;         // provider 内稳定 ID
+  email: string | null;
   nickname: string | null;
   avatar_url: string | null;
   created_at: string;
@@ -23,15 +24,6 @@ export interface ContainerMapping {
   azure_files_share: string | null;
   created_at: string;
   ready_at: string | null;
-}
-
-export interface WechatSession {
-  user_id: string;
-  bot_token: string;
-  expires_at: string;
-  status: WechatSessionStatus;
-  bound_wx_nick: string | null;
-  updated_at: string;
 }
 
 export interface ContextToken {

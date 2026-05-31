@@ -44,13 +44,16 @@ export interface StatusResponse {
 // === Auth 契约 ===
 
 export interface DevLoginRequest {
-  wx_unionid: string;        // 模拟一个 unionid（dev 模式跳过真实微信扫码）
+  external_id: string;       // 任意字符串,用作 (provider='dev', external_id) 复合主键
   nickname?: string;
+  email?: string;
 }
 
 export interface AuthMeResponse {
   user_id: string;
-  wx_unionid: string;
+  provider: string;          // 'google' | 'dev' | 'github' | ...
+  external_id: string;
+  email: string | null;
   nickname: string | null;
   avatar_url: string | null;
 }

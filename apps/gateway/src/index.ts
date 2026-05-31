@@ -14,7 +14,9 @@ import { provisionContainerLocal } from './provisioning/local.js';
 import { recoverProvisioning } from './provisioning/recovery.js';
 import * as azureModule from './provisioning/azure.js';
 import { requireSession } from './auth/middleware.js';
-import { buildOAuthRouter } from './auth/oauth.js';
+import { buildSessionRoutes } from './auth/session-routes.js';
+import { buildOAuthRouter } from './auth/oauth-router.js';
+import { providers } from './auth/providers/index.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -76,13 +78,22 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   }
 
   if (sbResolved) {
-    app.use(buildOAuthRouter({
+    // Session 路由(/me, /logout, /dev/login if enabled)
+    app.use(buildSessionRoutes({
       sb: sbResolved,
       sessionSecret: config.session.secret,
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,
-      mode: config.auth.mode,
-      wechat: config.auth.wechat,
+      enableDevLogin: config.auth.mode === 'dev',
+    }));
+    // OAuth provider 路由(动态 :provider 分发到 registry)
+    app.use(buildOAuthRouter({
+      sb: sbResolved,
+      providers,
+      sessionSecret: config.session.secret,
+      cookieName: config.session.cookieName,
+      ttlHours: config.session.ttlHours,
+      publicBaseUrl: config.auth.publicBaseUrl,
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));

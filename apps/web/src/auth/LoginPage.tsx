@@ -1,36 +1,22 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wallpaper } from '../lib/Wallpaper.js';
-import { IconSpark, IconMessage } from '../lib/icons.js';
+import { IconSpark } from '../lib/icons.js';
 import { useAuth } from './AuthContext.js';
 
+/**
+ * 登录页:
+ *   - 主按钮: 跳到 gateway 的 OAuth 起点 (Google 等)
+ *   - 折叠区: dev login (本地 AUTH_MODE=dev 时可用,凭据填 external_id 任意串)
+ */
 export const LoginPage = () => {
   const auth = useAuth();
   const nav = useNavigate();
-  const [unionid, setUnionid] = useState('wx_demo_user');
-  const [nickname, setNickname] = useState('Demo');
-  const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   if (auth.status === 'authenticated') {
     nav('/desktop', { replace: true });
     return null;
   }
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (auth.status === 'loading') return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      await auth.devLogin({ wx_unionid: unionid.trim(), nickname: nickname.trim() || undefined });
-      nav('/desktop', { replace: true });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '登录失败');
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   return (
     <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
@@ -46,35 +32,81 @@ export const LoginPage = () => {
           </div>
         </div>
 
-        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input
-            className="input"
-            placeholder="wx_unionid（dev 模式直接填）"
-            value={unionid}
-            onChange={(e) => setUnionid(e.target.value)}
-          />
-          <input
-            className="input"
-            placeholder="你的称呼"
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-          />
-          {err && <div style={{ color: 'var(--bad)', fontSize: 12 }}>{err}</div>}
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: 11, marginTop: 8 }} disabled={submitting || auth.status === 'loading'}>
-            {submitting ? '登录中…' : '登录'}
-          </button>
-        </form>
-
-        <button
-          type="button"
-          className="btn btn-ghost"
-          style={{ width: '100%', padding: 11, marginTop: 10 }}
-          onClick={() => alert('微信扫码登录：等开放平台资质就绪后启用')}
+        {/* 主 CTA: Google OAuth ——— gateway 自己把浏览器导走 */}
+        <a
+          href="/api/auth/google/start"
+          className="btn"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+            width: '100%', padding: 11, fontSize: 14, fontWeight: 600,
+            border: '1px solid var(--border)', background: '#fff', color: '#1b1c20',
+            borderRadius: 10, textDecoration: 'none',
+          }}
         >
-          <IconMessage size={16} color="#16a34a" />
-          微信扫码登录（敬请期待）
-        </button>
+          <GoogleIcon /> 使用 Google 登录
+        </a>
+
+        {/* 开发者快捷登录 (dev only) */}
+        <details style={{ marginTop: 18, fontSize: 13 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text3)' }}>开发者快捷登录</summary>
+          <DevLoginForm
+            onDone={() => nav('/desktop', { replace: true })}
+          />
+        </details>
       </div>
     </div>
   );
 };
+
+const DevLoginForm = ({ onDone }: { onDone: () => void }) => {
+  const auth = useAuth();
+  const [externalId, setExternalId] = useState('alice');
+  const [nickname, setNickname] = useState('Alice');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (auth.status === 'loading') return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      await auth.devLogin({ external_id: externalId.trim(), nickname: nickname.trim() || undefined });
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '登录失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+      <input
+        className="input"
+        placeholder="external_id（任意字符串,会跟 provider=dev 配对建用户）"
+        value={externalId}
+        onChange={(e) => setExternalId(e.target.value)}
+      />
+      <input
+        className="input"
+        placeholder="昵称"
+        value={nickname}
+        onChange={(e) => setNickname(e.target.value)}
+      />
+      {err && <div style={{ color: 'var(--bad)', fontSize: 12 }}>{err}</div>}
+      <button type="submit" className="btn btn-primary" style={{ padding: 9 }} disabled={submitting || auth.status === 'loading'}>
+        {submitting ? '登录中…' : '以 dev 身份登录'}
+      </button>
+    </form>
+  );
+};
+
+const GoogleIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 18 18">
+    <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+    <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+    <path d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z" fill="#FBBC05"/>
+    <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z" fill="#EA4335"/>
+  </svg>
+);

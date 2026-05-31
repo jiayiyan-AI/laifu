@@ -14,12 +14,20 @@ export const config = {
     ttlHours: parseInt(process.env['SESSION_TTL_HOURS'] ?? '168', 10),
   },
   auth: {
-    mode: (process.env['AUTH_MODE'] ?? 'dev') as 'dev' | 'wechat',
-    wechat: {
-      appId: process.env['WECHAT_APPID'] ?? '',
-      secret: process.env['WECHAT_SECRET'] ?? '',
-      redirectUri: process.env['WECHAT_REDIRECT_URI'] ?? '',
+    // 'dev'   = 启用 /api/auth/dev/login 假登录(不走真 provider),便于本地开发
+    // 'oauth' = 关掉 dev login,只走 OAuth providers
+    // 两个模式都不影响 OAuth providers 的可用性(provider 由各自 env 凭据决定)
+    mode: (process.env['AUTH_MODE'] ?? 'dev') as 'dev' | 'oauth',
+    // 所有 OAuth provider 的凭据集中在这。registry 自己根据这里有没有填决定是否注册。
+    providers: {
+      google: {
+        clientId: process.env['GOOGLE_CLIENT_ID'] ?? '',
+        clientSecret: process.env['GOOGLE_CLIENT_SECRET'] ?? '',
+      },
     },
+    // gateway 自己的对外 URL(用于构造 OAuth redirect_uri、webhook URL 等)
+    // 本地 = http://localhost:9000,云上 = https://<your-domain>
+    publicBaseUrl: process.env['PUBLIC_BASE_URL'] ?? 'http://localhost:9000',
   },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
@@ -63,10 +71,18 @@ export const validateConfig = () => {
       throw new Error(`HERMES_MODEL=${model} 但 DASHSCOPE_API_KEY 未设`);
     }
   }
-  if (config.auth.mode === 'wechat') {
-    required('WECHAT_APPID');
-    required('WECHAT_SECRET');
-    required('WECHAT_REDIRECT_URI');
+  if (config.auth.mode === 'oauth') {
+    // 至少要有一个 OAuth provider 启用,否则没人能登录
+    const enabled = Object.entries(config.auth.providers)
+      .filter(([, v]) => v.clientId && v.clientSecret)
+      .map(([k]) => k);
+    if (enabled.length === 0) {
+      throw new Error(
+        'AUTH_MODE=oauth but no OAuth provider configured. ' +
+        'Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (or another provider).',
+      );
+    }
+    console.log(`[config] auth.mode=oauth, providers=${enabled.join(',')}`);
   }
   if ((process.env['SESSION_SECRET'] ?? '').length < 16) {
     console.warn('[config] SESSION_SECRET is short or unset — dev only');

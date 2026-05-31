@@ -23,7 +23,10 @@ describe('AuthContext', () => {
 
   it('starts loading, then authenticated when /me returns user', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ user_id: 'u1', wx_unionid: 'wx_1', nickname: null, avatar_url: null })),
+      new Response(JSON.stringify({
+        user_id: 'u1', provider: 'google', external_id: 'g_1',
+        email: 'a@b.com', nickname: null, avatar_url: null,
+      })),
     );
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText('u1')).toBeInTheDocument());

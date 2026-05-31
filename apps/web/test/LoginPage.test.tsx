@@ -15,39 +15,48 @@ describe('LoginPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders WeChat button and dev login form', async () => {
+  it('shows Google login CTA pointing to /api/auth/google/start', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 401 }));
     render(wrap(<LoginPage />));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /微信扫码/ })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/wx_unionid/i)).toBeInTheDocument();
+      const link = screen.getByRole('link', { name: /Google/ });
+      expect(link).toBeInTheDocument();
+      expect(link.getAttribute('href')).toBe('/api/auth/google/start');
     });
   });
 
-  it('submits dev login and triggers auth', async () => {
+  it('dev login lives inside collapsed <details>', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 401 }));
+    render(wrap(<LoginPage />));
+    // 默认折叠,所以 external_id input 是 hidden 直到展开
+    await waitFor(() => {
+      expect(screen.getByText(/开发者快捷登录/)).toBeInTheDocument();
+    });
+  });
+
+  it('submits dev login with {external_id, nickname}', async () => {
     const user = userEvent.setup();
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce(new Response(null, { status: 401 }))   // initial /me
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        user_id: 'u1', wx_unionid: 'wx_demo', nickname: 'Demo', avatar_url: null,
+        user_id: 'u1', provider: 'dev', external_id: 'alice',
+        email: null, nickname: 'Alice', avatar_url: null,
       })));   // devLogin
 
     render(wrap(<LoginPage />));
-    await waitFor(() => screen.getByPlaceholderText(/wx_unionid/i));
+    await waitFor(() => screen.getByText(/开发者快捷登录/));
+    // 展开 <details>
+    await user.click(screen.getByText(/开发者快捷登录/));
 
-    const unionidInput = screen.getByPlaceholderText(/wx_unionid/i);
-    const nicknameInput = screen.getByPlaceholderText(/称呼/);
-
-    // The plan pre-fills the inputs with defaults; clear before typing
-    await user.clear(unionidInput);
-    await user.type(unionidInput, 'wx_demo');
-    await user.clear(nicknameInput);
-    await user.type(nicknameInput, 'Demo');
-    await user.click(screen.getByRole('button', { name: /^登录$/ }));
+    const idInput = await screen.findByPlaceholderText(/external_id/i);
+    await user.clear(idInput);
+    await user.type(idInput, 'alice');
+    await user.click(screen.getByRole('button', { name: /dev 身份登录/ }));
 
     const calls = (global.fetch as any).mock.calls;
     const loginCall = calls.find((c: any) => c[0] === '/api/auth/dev/login');
     expect(loginCall).toBeDefined();
-    expect(loginCall[1].body).toContain('wx_demo');
+    const body = JSON.parse(loginCall[1].body);
+    expect(body.external_id).toBe('alice');
   });
 });

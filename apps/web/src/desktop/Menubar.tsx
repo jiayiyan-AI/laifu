@@ -52,7 +52,9 @@ export const Menubar = () => {
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{auth.user.nickname ?? '未命名'}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{auth.user.wx_unionid}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  {auth.user.email ?? `${auth.user.provider}: ${auth.user.external_id}`}
+                </div>
               </div>
             </div>
             <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
