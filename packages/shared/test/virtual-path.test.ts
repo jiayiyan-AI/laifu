@@ -18,6 +18,18 @@ describe('validateVirtualPath', () => {
     it('数字 + 短划线 + 下划线 + 点', () => {
       expect(validateVirtualPath('logs/2026-06-01_run.log.gz')).toEqual({ ok: true });
     });
+
+    it('单段恰好 200 字符（边界）', () => {
+      const seg = 'a'.repeat(200);
+      expect(validateVirtualPath(seg)).toEqual({ ok: true });
+    });
+
+    it('总长恰好 1024 字符（边界）', () => {
+      // 200*5 + 5 separators + 19 = 1000 + 5 + 19 = 1024
+      const path1024 = 'a'.repeat(200) + '/' + 'a'.repeat(200) + '/' + 'a'.repeat(200) + '/' + 'a'.repeat(200) + '/' + 'a'.repeat(200) + '/' + 'a'.repeat(19);
+      expect(path1024.length).toBe(1024);
+      expect(validateVirtualPath(path1024)).toEqual({ ok: true });
+    });
   });
 
   describe('非法路径', () => {
@@ -42,11 +54,13 @@ describe('validateVirtualPath', () => {
     it('单独 .. 段', () => {
       const r = validateVirtualPath('..');
       expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/parent|current/i);
     });
 
     it('. 段（当前目录指代）也禁', () => {
       const r = validateVirtualPath('./report.pdf');
       expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/parent|current/i);
     });
 
     it('空段（连续 //）', () => {
