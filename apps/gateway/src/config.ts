@@ -29,6 +29,9 @@ export const config = {
     // 前端应用的 base URL,用于 OAuth 成功后跳回 /desktop。
     // 本地开发: Vite (:3000)。生产: 跟 publicBaseUrl 同域,可填 '' 让 gateway 发相对路径。
     frontendBaseUrl: process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:3000',
+    // 容器到 gateway 的 JWT 签发密钥；P1 启用后 user_entitlements / refresh-token 都用它。
+    // dev 默认是占位值；生产必须显式设。
+    gatewaySecret: process.env['GATEWAY_SECRET'] ?? 'dev-only-gateway-secret',
   },
   supabase: {
     url: process.env['SUPABASE_URL'] ?? '',
@@ -51,12 +54,7 @@ export const config = {
     dashscopeBaseUrl: process.env['DASHSCOPE_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   },
 
-  // 容器到 gateway 的 JWT 签发密钥；P1 启用后 user_entitlements / refresh-token 都用它。
-  // dev 默认是占位值；生产必须显式设。
-  gatewaySecret: process.env['GATEWAY_SECRET'] ?? 'dev-only-gateway-secret',
-
   cloud: {
-    storageAccount: process.env['AZURE_STORAGE_ACCOUNT'] ?? '',
     container: process.env['AZURE_STORAGE_CONTAINER'] ?? 'laifu-cloud',
     blobEndpoint:
       process.env['AZURE_STORAGE_BLOB_ENDPOINT'] ??
@@ -68,7 +66,7 @@ export const config = {
     // 写 SAS TTL（每个容器拿一次 SAS 用多久）
     writeSasTtlSeconds: parseInt(process.env['AZURE_STORAGE_WRITE_SAS_TTL_SECONDS'] ?? '900', 10),     // 15min
     // 读 SAS TTL（每次 download 签一个）
-    readSasTtlSeconds:  parseInt(process.env['AZURE_STORAGE_READ_SAS_TTL_SECONDS']  ?? '300', 10),     // 5min
+    readSasTtlSeconds: parseInt(process.env['AZURE_STORAGE_READ_SAS_TTL_SECONDS'] ?? '300', 10),     // 5min
   },
 };
 
@@ -83,6 +81,11 @@ export const validateConfig = () => {
     required('AZURE_STORAGE_ACCOUNT');
     required('AZURE_ACR_LOGIN_SERVER');
     required('AZURE_ACR_NAME');
+    if (config.cloud.udkLifetimeSeconds > 7 * 24 * 3600) {
+      throw new Error(
+        `AZURE_STORAGE_UDK_LIFETIME_SECONDS=${config.cloud.udkLifetimeSeconds} exceeds Azure 7-day UDK max (604800)`,
+      );
+    }
     // HERMES_MODEL 决定哪个 key 必填
     const model = config.azure.hermesModel;
     if (model.startsWith('anthropic/') && !config.azure.anthropicApiKey) {
@@ -106,7 +109,7 @@ export const validateConfig = () => {
   if ((process.env['SESSION_SECRET'] ?? '').length < 16) {
     console.warn('[config] SESSION_SECRET is short or unset — dev only');
   }
-  if (config.gatewaySecret === 'dev-only-gateway-secret') {
+  if (config.auth.gatewaySecret === 'dev-only-gateway-secret') {
     console.warn('[config] GATEWAY_SECRET is the dev default — set a real one for prod');
   }
 };
