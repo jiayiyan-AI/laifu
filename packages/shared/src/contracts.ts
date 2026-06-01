@@ -125,3 +125,27 @@ export type WechatBindingInfoResponse =
 export interface WechatUnbindResponse {
   ok: true;
 }
+
+// === Cloud Drive 契约 (P0 起步，P1/P2 继续扩展) ===
+
+/**
+ * Container（hermes 容器内）拿到的写 SAS 配置。
+ * P1 `/api/cloud/sas` 端点返回此 shape。
+ *
+ * `sas_token` 已经是 directory-scoped (sr=d, sdd=1)，授权范围严格限制在
+ * `<container>/<prefix>` 子树。客户端拼 URL 时用：
+ *   `${blob_endpoint}/${container}/${prefix}<virtual_path>?${sas_token}`
+ */
+export interface CloudWriteSasResponse {
+  blob_endpoint: string;      // e.g. "https://laifudev.blob.core.windows.net"
+  container: string;          // "laifu-cloud"
+  prefix: string;             // "<user_id>/", 含尾 /
+  sas_token: string;          // 不含前导 '?' 的 query 字符串
+  expires_at: string;         // ISO-8601
+}
+
+/**
+ * Cloud drive 操作允许的权限集合（spec §五）。
+ * write SAS 通常给 racwl，read SAS 通常只给 r。
+ */
+export type CloudSasPermission = 'r' | 'a' | 'c' | 'w' | 'l' | 'd';
