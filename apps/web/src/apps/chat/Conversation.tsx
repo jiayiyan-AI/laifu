@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
@@ -13,10 +13,16 @@ interface Props {
   threadId: string;
 }
 
+const POLL_INTERVAL_MS = 5000;
+
 export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+
+  // busyRef 让 polling tick 读最新 busy 值,避免依赖变化时重启 interval
+  const busyRef = useRef(false);
+  busyRef.current = busy;
 
   // 挂载时从 gateway 拉历史。父组件用 key={threadId} 强制重挂载,
   // 所以每次切 thread 都会重跑这里 → Hermes SQLite 是单一真相源。
@@ -40,6 +46,27 @@ export const Conversation = ({ threadId }: Props) => {
         if (!cancelled) setLoadingHistory(false);
       });
     return () => { cancelled = true; };
+  }, [threadId]);
+
+  // 5s 轮询历史: 让从外部 (微信入站) 写到 hermes 的消息能自动出现。
+  // 跳过条件:
+  //   - busy=true (用户在发送,本地有乐观 append 不能被 poll 覆盖)
+  //   - document.hidden (标签页不可见,省流量)
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || busyRef.current || document.hidden) return;
+      try {
+        const history = await api.fetchHistory(threadId);
+        if (cancelled || busyRef.current) return;
+        setMsgs(history.map((m) => ({ who: m.role, text: m.content })));
+      } catch (err) {
+        // 静默,下个 tick 会再试
+        console.warn('poll history failed', err);
+      }
+    };
+    const interval = setInterval(tick, POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [threadId]);
 
   const onSend = async (text: string) => {
