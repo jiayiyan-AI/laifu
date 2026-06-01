@@ -131,7 +131,11 @@ importers:
         specifier: ^1.4.0
         version: 1.6.1(@types/node@20.19.41)(jsdom@25.0.1)
 
-  packages/shared: {}
+  packages/shared:
+    devDependencies:
+      vitest:
+        specifier: ^1.4.0
+        version: 1.6.1(@types/node@20.19.41)(jsdom@25.0.1)
 
 packages:
 
