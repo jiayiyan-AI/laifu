@@ -97,8 +97,10 @@ export interface WebThreadMessagesResponse {
 // === 微信 iLink 扫码绑定契约 ===
 
 export interface WechatQrStartResponse {
-  qrcode: string;            // iLink session_key,后续 qr-poll 透传
-  qr_url: string;             // 微信 App 扫的图片 URL
+  qrcode: string;             // iLink session_key,后续 qr-poll 透传
+  qr_content: string;         // ⚠️ 不是 URL 也不是 base64 — 是要编码进 QR 码的 payload 字符串。
+                              //   前端用 QRCodeSVG/QRCodeCanvas 渲染成图。命名跟 iLink 字段
+                              //   qrcode_img_content 对齐。
 }
 
 export interface WechatQrPollRequest {

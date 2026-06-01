@@ -22,17 +22,17 @@ describe('iLink client', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   describe('getBotQrcode', () => {
-    it('GET /ilink/bot/get_bot_qrcode?bot_type=3, returns qrcode + qr_url', async () => {
+    it('GET /ilink/bot/get_bot_qrcode?bot_type=3, returns qrcode + qr_content (raw payload, not URL)', async () => {
       const spy = vi.spyOn(global, 'fetch').mockResolvedValue(
         new Response(JSON.stringify({
           qrcode: 'sess_abc',
-          qrcode_img_content: 'https://x/qr.png',
+          qrcode_img_content: 'ilink://login?token=xyz',
         })),
       );
 
       const result = await getBotQrcode();
 
-      expect(result).toEqual({ qrcode: 'sess_abc', qr_url: 'https://x/qr.png' });
+      expect(result).toEqual({ qrcode: 'sess_abc', qr_content: 'ilink://login?token=xyz' });
       const [url, init] = spy.mock.calls[0]!;
       expect(url).toBe(`${ILINK_DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`);
       expect((init as RequestInit).method ?? 'GET').toBe('GET');

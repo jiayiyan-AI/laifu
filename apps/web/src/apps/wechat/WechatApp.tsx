@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { IconMessage, IconRefresh } from '../../lib/icons.js';
 import {
   startWechatBind,
@@ -13,7 +14,7 @@ type State =
   | { kind: 'loading' }
   | { kind: 'unbound' }
   | { kind: 'starting' }
-  | { kind: 'awaiting_scan'; qrcode: string; qr_url: string; sub: SubStatus }
+  | { kind: 'awaiting_scan'; qrcode: string; qr_content: string; sub: SubStatus }
   | { kind: 'bound'; ilink_bot_id: string; bound_at: string };
 
 const POLL_INTERVAL_MS = 3000;
@@ -83,8 +84,8 @@ export const WechatApp = () => {
   const handleStart = async () => {
     setState({ kind: 'starting' });
     try {
-      const { qrcode, qr_url } = await startWechatBind();
-      setState({ kind: 'awaiting_scan', qrcode, qr_url, sub: 'wait' });
+      const { qrcode, qr_content } = await startWechatBind();
+      setState({ kind: 'awaiting_scan', qrcode, qr_content, sub: 'wait' });
     } catch (e) {
       console.error('[wechat-bind] qr-start failed', e);
       setState({ kind: 'unbound' });
@@ -109,7 +110,7 @@ export const WechatApp = () => {
       {state.kind === 'unbound' && <UnboundView onStart={handleStart} />}
       {state.kind === 'starting' && <div className="dim">正在请求二维码…</div>}
       {state.kind === 'awaiting_scan' && (
-        <ScanView qrUrl={state.qr_url} sub={state.sub} onRefresh={handleStart} />
+        <ScanView qrContent={state.qr_content} sub={state.sub} onRefresh={handleStart} />
       )}
       {state.kind === 'bound' && (
         <BoundView ilinkBotId={state.ilink_bot_id} boundAt={state.bound_at} onUnbind={handleUnbind} />
@@ -135,19 +136,19 @@ const UnboundView = ({ onStart }: { onStart: () => void }) => (
   </div>
 );
 
-const ScanView = ({ qrUrl, sub, onRefresh }: { qrUrl: string; sub: SubStatus; onRefresh: () => void }) => (
+const ScanView = ({ qrContent, sub, onRefresh }: { qrContent: string; sub: SubStatus; onRefresh: () => void }) => (
   <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'center' }}>
-    <div style={{ width: 220, height: 220, background: '#fff', border: '1px solid var(--border)', borderRadius: 14, padding: 6, position: 'relative' }}>
-      {qrUrl ? (
-        <img src={qrUrl} alt="qr" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+    <div style={{ width: 220, height: 220, background: '#fff', border: '1px solid var(--border)', borderRadius: 14, padding: 10, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {qrContent ? (
+        <QRCodeSVG value={qrContent} size={200} level="M" />
       ) : (
-        <div className="dim" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>无 QR</div>
+        <div className="dim">无 QR</div>
       )}
       {(sub === 'expired' || sub === 'redirect') && (
         <div style={{
           position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.85)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 13, color: 'var(--bad)', fontWeight: 600,
+          fontSize: 13, color: 'var(--bad)', fontWeight: 600, borderRadius: 14,
         }}>
           {sub === 'expired' ? '二维码已过期' : '需重试'}
         </div>

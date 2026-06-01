@@ -58,7 +58,7 @@ const BASE_INFO = { channel_version: '1.0.0' };
 
 export interface QrStartResponse {
   qrcode: string;        // session_key,后续轮询用
-  qr_url: string;        // 微信 App 扫的图片 URL
+  qr_content: string;    // 要编码进 QR 码的 payload (不是 URL/不是 base64),前端 QR 库渲染成图
 }
 
 export const getBotQrcode = async (
@@ -74,7 +74,7 @@ export const getBotQrcode = async (
   const data = await resp.json() as { qrcode?: string; qrcode_img_content?: string };
   return {
     qrcode: data.qrcode ?? '',
-    qr_url: data.qrcode_img_content ?? '',
+    qr_content: data.qrcode_img_content ?? '',
   };
 };
 

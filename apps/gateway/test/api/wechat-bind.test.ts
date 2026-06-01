@@ -74,7 +74,7 @@ describe('wechat-bind router', () => {
       vi.spyOn(global, 'fetch').mockResolvedValue(
         new Response(JSON.stringify({
           qrcode: 'sess_xyz',
-          qrcode_img_content: 'https://qr.png',
+          qrcode_img_content: 'ilink://login?token=xyz',
         })),
       );
       const dao = makeMockDao();
@@ -83,7 +83,7 @@ describe('wechat-bind router', () => {
         .post('/api/wechat/bind/qr-start')
         .set('Cookie', userCookie('u_alice'));
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ qrcode: 'sess_xyz', qr_url: 'https://qr.png' });
+      expect(res.body).toEqual({ qrcode: 'sess_xyz', qr_content: 'ilink://login?token=xyz' });
     });
 
     it('401 without session', async () => {
