@@ -93,3 +93,33 @@ export type ThreadMessage = ContainerHistoryMessage;
 export interface WebThreadMessagesResponse {
   messages: ThreadMessage[];
 }
+
+// === 微信 iLink 扫码绑定契约 ===
+
+export interface WechatQrStartResponse {
+  qrcode: string;            // iLink session_key,后续 qr-poll 透传
+  qr_url: string;             // 微信 App 扫的图片 URL
+}
+
+export interface WechatQrPollRequest {
+  qrcode: string;             // 来自 WechatQrStartResponse.qrcode
+}
+
+/**
+ * qr-poll 透传 iLink 状态,confirmed 时附 bound=true + ilink_bot_id。
+ * - wait/scaned/expired: 前端继续轮询(scaned 表示扫了但没确认,UI 提示 "已扫描请确认")
+ * - scaned_but_redirect: iLink 要求换 host (本地不实现重定向,直接报错 UI)
+ * - confirmed: 后端已落库 + 起轮询,前端 UI 切到 bound 态
+ */
+export type WechatQrPollResponse =
+  | { status: 'wait' | 'scaned' | 'expired' }
+  | { status: 'scaned_but_redirect'; redirect_host: string }
+  | { status: 'confirmed'; bound: true; ilink_bot_id: string };
+
+export type WechatBindingInfoResponse =
+  | { bound: false }
+  | { bound: true; ilink_bot_id: string; bound_at: string };
+
+export interface WechatUnbindResponse {
+  ok: true;
+}
