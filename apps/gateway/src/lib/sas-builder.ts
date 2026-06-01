@@ -67,8 +67,27 @@ function sign(stringToSign: string, udkValueBase64: string): string {
  *
  * 字符串构造、签名、URL 编码全在这里完成，**绝对不要**对返回的
  * `sasToken` 再做 `URLSearchParams` 之类的二次组装，那会让签名失效。
+ *
+ * **Trust boundary**: `userId` MUST be resolved from a verified JWT/session by
+ * the caller; never from request body, path, or query — those are
+ * attacker-controlled. The function validates UUID shape as defense-in-depth
+ * but the security boundary is upstream.
  */
 export function buildDirectoryWriteSas(input: DirectoryWriteSasInput): DirectoryWriteSasOutput {
+  // Trust boundary: caller (gateway HTTP routes) MUST resolve userId from a
+  // verified JWT/session, never from request body/path. We still validate here
+  // as defense-in-depth — a malformed userId could otherwise corrupt the
+  // canonicalizedResource and silently shift the SAS scope.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.userId)) {
+    throw new Error('sas-builder: invalid userId — must be canonical UUID');
+  }
+  if (!/^[a-z0-9]{3,24}$/.test(input.account)) {
+    throw new Error('sas-builder: invalid account — must match Azure storage naming rules (3-24 lowercase alphanumeric)');
+  }
+  if (!/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(input.container)) {
+    throw new Error('sas-builder: invalid container — must match Azure container naming rules');
+  }
+
   const now = Date.now();
   const startsOn = new Date(now - 60 * 1000);        // 留 1 分钟时钟漂移
   const expiresOn = new Date(now + input.ttlSeconds * 1000);

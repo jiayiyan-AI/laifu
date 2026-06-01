@@ -181,4 +181,47 @@ describe('buildDirectoryWriteSas', () => {
     // 防御性断言：22 个 '\n' = 23 个字段
     expect((stringToSign.match(/\n/g) ?? []).length).toBe(22);
   });
+
+  describe('input validation', () => {
+    const validUdk = fakeUdk();
+    const validInput = {
+      account: ACCOUNT,
+      container: CONTAINER,
+      userId: USER_ID,
+      udk: validUdk,
+      ttlSeconds: 900,
+    };
+
+    it('reject userId with newline (string-to-sign injection)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, userId: 'aaaa\nbbbb' })).toThrow(/userId/);
+    });
+
+    it('reject userId with slash (path injection)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, userId: 'other/uuid' })).toThrow(/userId/);
+    });
+
+    it('reject userId that is not a UUID', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, userId: 'not-a-uuid' })).toThrow(/userId/);
+    });
+
+    it('reject empty userId', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, userId: '' })).toThrow(/userId/);
+    });
+
+    it('reject invalid account name (uppercase)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, account: 'BadAccount' })).toThrow(/account/);
+    });
+
+    it('reject invalid account name (too short)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, account: 'ab' })).toThrow(/account/);
+    });
+
+    it('reject invalid container name (uppercase)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, container: 'BadName' })).toThrow(/container/);
+    });
+
+    it('reject invalid container name (starts with -)', () => {
+      expect(() => buildDirectoryWriteSas({ ...validInput, container: '-foo' })).toThrow(/container/);
+    });
+  });
 });
