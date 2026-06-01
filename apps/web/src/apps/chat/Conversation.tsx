@@ -13,8 +13,6 @@ interface Props {
   threadId: string;
 }
 
-const POLL_INTERVAL_MS = 5000;
-
 export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
@@ -48,25 +46,34 @@ export const Conversation = ({ threadId }: Props) => {
     return () => { cancelled = true; };
   }, [threadId]);
 
-  // 5s 轮询历史: 让从外部 (微信入站) 写到 hermes 的消息能自动出现。
-  // 跳过条件:
-  //   - busy=true (用户在发送,本地有乐观 append 不能被 poll 覆盖)
-  //   - document.hidden (标签页不可见,省流量)
+  // SSE 通知: gateway 在新消息落 hermes 后 emit 'thread-updated' 事件,
+  // 我们收到就 refetch 一次历史。比轮询及时,省流量。
+  // 跳过 refetch 的条件: busy=true (用户正在发送,本地有乐观 append)。
+  // EventSource 自带断线重连。
   useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled || busyRef.current || document.hidden) return;
+    const es = new EventSource(
+      `/api/threads/${encodeURIComponent(threadId)}/stream`,
+      { withCredentials: true },
+    );
+
+    const refetch = async () => {
+      if (busyRef.current) return;
       try {
         const history = await api.fetchHistory(threadId);
-        if (cancelled || busyRef.current) return;
+        if (busyRef.current) return;
         setMsgs(history.map((m) => ({ who: m.role, text: m.content })));
       } catch (err) {
-        // 静默,下个 tick 会再试
-        console.warn('poll history failed', err);
+        console.warn('SSE refetch failed', err);
       }
     };
-    const interval = setInterval(tick, POLL_INTERVAL_MS);
-    return () => { cancelled = true; clearInterval(interval); };
+
+    es.addEventListener('thread-updated', () => { void refetch(); });
+    es.onerror = (e) => {
+      // EventSource 会自动重连; 这里只 log 不主动 close
+      console.warn('SSE error (auto-reconnect)', e);
+    };
+
+    return () => es.close();
   }, [threadId]);
 
   const onSend = async (text: string) => {

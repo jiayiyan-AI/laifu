@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
+import type { ThreadStreamHub } from '../lib/thread-stream.js';
 import type {
   ContainerChatResponse,
   ContainerHistoryResponse,
@@ -8,10 +9,13 @@ import type {
   WebThreadMessagesResponse,
 } from '@lingxi/shared';
 
+const SSE_HEARTBEAT_MS = 30_000;
+
 export const buildChatRouter = (
   sb: SupabaseClient,
   cache: ContainerMappingCache,
   sessionMw: RequestHandler,
+  hub?: ThreadStreamHub,             // 可选: 没传就不挂 SSE 端点 (测试方便)
 ): RouterType => {
   const r = Router();
 
@@ -51,6 +55,9 @@ export const buildChatRouter = (
       return res.status(502).json({ error: 'container missing reply' });
     }
 
+    // 通知其它订阅同 thread 的 SSE 客户端 (例如另一个标签页) 该 thread 有更新
+    hub?.emit(thread_id, 'thread-updated', { thread_id });
+
     const body: WebChatResponse = { reply: cBody.reply };
     res.json(body);
   });
@@ -82,6 +89,41 @@ export const buildChatRouter = (
     const body: WebThreadMessagesResponse = { messages: cBody.messages ?? [] };
     res.json(body);
   });
+
+  // SSE 通知: 新消息到 (微信入站 / web 发送 / 其它来源) 时通知前端 refetch
+  // 帧形 event: thread-updated\ndata: {"thread_id":"..."}\n\n
+  if (hub) {
+    r.get('/api/threads/:id/stream', sessionMw, async (req: Request, res: Response) => {
+      const userId = req.session!.user_id;
+      const threadId = req.params['id'] as string;
+
+      // 权限校验
+      const { data: thread } = await sb
+        .from('threads').select('id').eq('id', threadId).eq('user_id', userId).maybeSingle();
+      if (!thread) return res.status(404).end();
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      // nginx/反代防缓冲
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+
+      // 立即 flush 一帧让客户端确认连上
+      res.write(': connected\n\n');
+
+      const unsub = hub.subscribe(threadId, res);
+      const heartbeat = setInterval(() => {
+        try { res.write(': heartbeat\n\n'); } catch { /* socket dead, close 会兜底 */ }
+      }, SSE_HEARTBEAT_MS);
+
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        unsub();
+        res.end();
+      });
+    });
+  }
 
   return r;
 };
