@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
@@ -17,6 +17,10 @@ export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+
+  // busyRef 让 polling tick 读最新 busy 值,避免依赖变化时重启 interval
+  const busyRef = useRef(false);
+  busyRef.current = busy;
 
   // 挂载时从 gateway 拉历史。父组件用 key={threadId} 强制重挂载,
   // 所以每次切 thread 都会重跑这里 → Hermes SQLite 是单一真相源。
@@ -40,6 +44,36 @@ export const Conversation = ({ threadId }: Props) => {
         if (!cancelled) setLoadingHistory(false);
       });
     return () => { cancelled = true; };
+  }, [threadId]);
+
+  // SSE 通知: gateway 在新消息落 hermes 后 emit 'thread-updated' 事件,
+  // 我们收到就 refetch 一次历史。比轮询及时,省流量。
+  // 跳过 refetch 的条件: busy=true (用户正在发送,本地有乐观 append)。
+  // EventSource 自带断线重连。
+  useEffect(() => {
+    const es = new EventSource(
+      `/api/threads/${encodeURIComponent(threadId)}/stream`,
+      { withCredentials: true },
+    );
+
+    const refetch = async () => {
+      if (busyRef.current) return;
+      try {
+        const history = await api.fetchHistory(threadId);
+        if (busyRef.current) return;
+        setMsgs(history.map((m) => ({ who: m.role, text: m.content })));
+      } catch (err) {
+        console.warn('SSE refetch failed', err);
+      }
+    };
+
+    es.addEventListener('thread-updated', () => { void refetch(); });
+    es.onerror = (e) => {
+      // EventSource 会自动重连; 这里只 log 不主动 close
+      console.warn('SSE error (auto-reconnect)', e);
+    };
+
+    return () => es.close();
   }, [threadId]);
 
   const onSend = async (text: string) => {

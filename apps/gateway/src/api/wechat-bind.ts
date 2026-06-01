@@ -1,200 +1,110 @@
 /**
- * 微信公众号扫码绑定 —— 6 个端点。
+ * 微信扫码绑定路由 (Phase 1.4 B 重写,iLink 个人号路径)。
  *
- *   POST   /api/wechat/bind/start        生成带参 QR ticket(precondition: 容器 ready + 未绑)
- *   GET    /api/wechat/bind/status       前端轮询 token 绑了没
- *   GET    /api/wechat/bind              当前用户绑定状态(WechatApp mount 时拉)
- *   DELETE /api/wechat/bind              解绑(只清我们这边记录,不影响用户微信的关注关系)
- *   GET    /api/wechat/webhook           微信验签握手(配置 webhook URL 时打来)
- *   POST   /api/wechat/webhook           微信事件推送(SCAN/subscribe 触发实际绑定动作)
+ * 4 个端点全部 session-required:
+ *   POST /api/wechat/bind/qr-start    透传 getBotQrcode,返 {qrcode, qr_url}
+ *   POST /api/wechat/bind/qr-poll     透传 pollQrcodeStatus,confirmed 时
+ *                                     upsert wechat_bindings + pollMgr.startOne
+ *   GET  /api/wechat/bind             当前用户绑定状态 (is_active 才算 bound)
+ *   DELETE /api/wechat/bind           pollMgr.stopOne + DAO.deactivate (软删保留行)
  *
- * webhook 必须返回 200 — 任何非 200 微信都会重试,会导致重复触发绑定逻辑。
- * 我们的绑定写入用 upsert,幂等。
+ * 跟 plan 偏差: qr-start 在 plan 里写「无需 session」,这里改成必需。理由:
+ *   用户已经登入 laifu 才会走这流程,加 session 防止 session_key 被泄露给他
+ *   人冒领。代价为零。
  */
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import express from 'express';
-import { randomBytes } from 'node:crypto';
-import type { MpClient } from '../wechat/mp-client.js';
-import { verifyWebhookSignature } from '../wechat/mp-client.js';
-import { parseWechatEvent } from '../wechat/webhook-parser.js';
-
-const SCENE_PREFIX = 'bind_';
-const TICKET_TTL_SECONDS = 600;        // 10 分钟,跟 mp-client 默认 QR expire 对齐
+import { getBotQrcode, pollQrcodeStatus } from '../wechat-ilink/client.js';
+import type { PollManager } from '../wechat-ilink/poll-manager.js';
+import type { WechatBindingDao } from '../db/wechat-binding-dao.js';
 
 export interface WechatBindRouterOpts {
-  sb: SupabaseClient;
-  mpClient: MpClient;
-  mpToken: string;                     // webhook 共享 token,用于签名校验
+  dao: WechatBindingDao;
+  pollMgr: PollManager;
   sessionMw: RequestHandler;
 }
 
-interface ContainerMappingRow { status: string }
-interface WechatBindingRow { user_id: string; mp_openid: string }
-interface WechatBindTicketRow { token: string; user_id: string; mp_openid: string | null; expires_at: string }
-
 export const buildWechatBindRouter = (opts: WechatBindRouterOpts): RouterType => {
   const r = Router();
-  const { sb, mpClient, mpToken, sessionMw } = opts;
+  const { dao, pollMgr, sessionMw } = opts;
+
+  // === QR 启动 ===
+  r.post('/api/wechat/bind/qr-start', sessionMw, async (_req: Request, res: Response) => {
+    try {
+      const result = await getBotQrcode();
+      res.json(result);
+    } catch (e) {
+      console.error('[wechat-bind] qr-start failed:', e);
+      res.status(502).json({ error: 'iLink qrcode failed' });
+    }
+  });
+
+  // === QR 状态轮询 ===
+  r.post('/api/wechat/bind/qr-poll', sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+    const { qrcode } = (req.body ?? {}) as { qrcode?: string };
+    if (!qrcode || typeof qrcode !== 'string') {
+      return res.status(400).json({ error: 'qrcode required' });
+    }
+
+    const result = await pollQrcodeStatus(qrcode);
+
+    if (result.status !== 'confirmed') {
+      // wait / scaned / expired / scaned_but_redirect 都透传给前端
+      return res.json(result);
+    }
+
+    // confirmed: 落库 + 起轮询
+    let binding;
+    try {
+      binding = await dao.upsertByUserId({
+        user_id: userId,
+        ilink_bot_id: result.ilink_bot_id,
+        bot_token: result.bot_token,
+        base_url: result.base_url,
+      });
+    } catch (e) {
+      console.error('[wechat-bind] upsert failed:', e);
+      return res.status(500).json({ error: 'binding persist failed' });
+    }
+
+    pollMgr.startOne(binding);
+
+    res.json({
+      status: 'confirmed',
+      bound: true,
+      ilink_bot_id: binding.ilink_bot_id,
+    });
+  });
 
   // === 当前绑定状态 ===
   r.get('/api/wechat/bind', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
-    const { data } = await sb
-      .from('wechat_bindings')
-      .select('user_id, mp_openid')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (data) {
-      const row = data as WechatBindingRow;
-      return res.json({ bound: true, mp_openid: row.mp_openid });
+    const binding = await dao.getByUserId(userId);
+    if (!binding || !binding.is_active) {
+      return res.json({ bound: false });
     }
-    res.json({ bound: false });
-  });
-
-  // === 启动绑定 ===
-  r.post('/api/wechat/bind/start', sessionMw, async (req: Request, res: Response) => {
-    const userId = req.session!.user_id;
-
-    // precondition 1: 容器 ready
-    const { data: mapping } = await sb
-      .from('container_mapping')
-      .select('status')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (!mapping || (mapping as ContainerMappingRow).status !== 'ready') {
-      return res.status(412).json({ error: 'container not ready' });
-    }
-
-    // precondition 2: 没绑过(避免重复绑定串号)
-    const { data: existing } = await sb
-      .from('wechat_bindings')
-      .select('user_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (existing) {
-      return res.status(409).json({ error: 'already bound' });
-    }
-
-    // 生成 token + 调微信 qrcode/create
-    const token = randomBytes(16).toString('hex');
-    let qr: { ticket: string; url: string; expire_seconds: number };
-    try {
-      qr = await mpClient.createBindQrCode(SCENE_PREFIX + token, TICKET_TTL_SECONDS);
-    } catch (e) {
-      console.error('[wechat-bind] qrcode/create failed:', e);
-      return res.status(502).json({ error: 'qrcode create failed' });
-    }
-
-    const expiresAt = new Date(Date.now() + qr.expire_seconds * 1000).toISOString();
-    const { error } = await sb
-      .from('wechat_bind_tickets')
-      .insert({
-        token,
-        user_id: userId,
-        ticket_url: qr.url,
-        expires_at: expiresAt,
-      });
-    if (error) {
-      console.error('[wechat-bind] insert ticket failed:', error);
-      return res.status(500).json({ error: 'ticket insert failed' });
-    }
-
-    res.json({ qr_url: qr.url, token, expires_at: expiresAt });
-  });
-
-  // === 轮询绑定状态 ===
-  r.get('/api/wechat/bind/status', sessionMw, async (req: Request, res: Response) => {
-    const userId = req.session!.user_id;
-    const token = req.query['token'];
-    if (typeof token !== 'string' || token.length === 0) {
-      return res.status(400).json({ error: 'token required' });
-    }
-    const { data } = await sb
-      .from('wechat_bind_tickets')
-      .select('token, user_id, mp_openid, expires_at')
-      .eq('token', token)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (!data) return res.status(404).json({ error: 'ticket not found' });
-    const row = data as WechatBindTicketRow;
-    if (row.mp_openid) return res.json({ bound: true, mp_openid: row.mp_openid });
-    res.json({ bound: false });
+    res.json({
+      bound: true,
+      ilink_bot_id: binding.ilink_bot_id,
+      bound_at: binding.bound_at,
+    });
   });
 
   // === 解绑 ===
   r.delete('/api/wechat/bind', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
-    await sb.from('wechat_bindings').delete().eq('user_id', userId);
-    await sb.from('wechat_bind_tickets').delete().eq('user_id', userId);
-    res.json({ ok: true });
-  });
-
-  // === Webhook 验签握手(微信配 URL 时立刻 GET) ===
-  //
-  // ⚠️ Content-Type 必须是 text/html (不是 text/plain,不是 application/json)。
-  //    微信测试号 / 公众号侧会显式校验响应 Content-Type,即便 body 是正确的
-  //    echostr,Content-Type 不是 text/html 也会被判定为"Token 验证失败"。
-  //    Express res.send(string) 默认就发 text/html;charset=utf-8,直接 send 即可。
-  r.get('/api/wechat/webhook', (req: Request, res: Response) => {
-    const signature = String(req.query['signature'] ?? '');
-    const timestamp = String(req.query['timestamp'] ?? '');
-    const nonce = String(req.query['nonce'] ?? '');
-    const echostr = String(req.query['echostr'] ?? '');
-    if (!signature || !timestamp || !nonce || !echostr) {
-      return res.status(400).send('bad params');
-    }
-    if (!verifyWebhookSignature(signature, timestamp, nonce, mpToken)) {
-      return res.status(401).send('bad signature');
-    }
-    res.send(echostr);
-  });
-
-  // === Webhook 事件推送 ===
-  // express.json 跳过 text/xml,所以 req.body 没值,这里挂一个 text 解析器把 XML body 拿到。
-  r.post('/api/wechat/webhook', express.text({ type: '*/*' }), async (req: Request, res: Response) => {
-    const signature = String(req.query['signature'] ?? '');
-    const timestamp = String(req.query['timestamp'] ?? '');
-    const nonce = String(req.query['nonce'] ?? '');
-    if (!verifyWebhookSignature(signature, timestamp, nonce, mpToken)) {
-      return res.status(401).send('');
-    }
-
-    const xml = typeof req.body === 'string' ? req.body : '';
-    const evt = parseWechatEvent(xml);
-
-    const sceneStr = evt.type === 'SCAN' ? evt.sceneStr
-      : evt.type === 'subscribe' ? evt.sceneStr
-      : undefined;
-
-    if (sceneStr?.startsWith(SCENE_PREFIX) && (evt.type === 'SCAN' || evt.type === 'subscribe')) {
-      const token = sceneStr.slice(SCENE_PREFIX.length);
-      const { data: ticket } = await sb
-        .from('wechat_bind_tickets')
-        .select('user_id, expires_at')
-        .eq('token', token)
-        .maybeSingle();
-
-      if (ticket) {
-        const row = ticket as { user_id: string; expires_at: string };
-        if (new Date(row.expires_at).getTime() > Date.now()) {
-          const mpOpenid = evt.fromUser;
-          // 落 wechat_bindings(upsert 幂等,微信偶尔会重推同一事件)
-          await sb
-            .from('wechat_bindings')
-            .upsert({ user_id: row.user_id, mp_openid: mpOpenid }, { onConflict: 'user_id' });
-          // 写到 ticket 让前端轮询能看到
-          await sb
-            .from('wechat_bind_tickets')
-            .update({ mp_openid: mpOpenid })
-            .eq('token', token);
-        }
+    const binding = await dao.getByUserId(userId);
+    if (binding && binding.is_active) {
+      pollMgr.stopOne(binding.id);
+      try {
+        await dao.deactivate(binding.id);
+      } catch (e) {
+        console.error('[wechat-bind] deactivate failed:', e);
+        // 不阻断 — pollMgr 已经停了,DB 状态不一致最坏下次启动还会拉一遍 (但
+        // is_active 没变,会再起来,然后 iLink 报 -14 才停)。可以接受。
       }
     }
-
-    // 微信要求所有事件回 200 success,否则会重试。
-    // 同 GET 一样,Content-Type 必须是 text/html (Express res.send 默认即是)。
-    res.send('success');
+    res.json({ ok: true });
   });
 
   return r;

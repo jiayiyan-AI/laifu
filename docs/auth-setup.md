@@ -23,8 +23,9 @@
 5. 回到「Credentials」→「Create Credentials」→「OAuth client ID」:
    - Application type:**Web application**
    - **Authorized JavaScript origins**:`http://localhost:3000` (前端 origin)
-   - **Authorized redirect URIs**:`http://localhost:3000/api/auth/google/callback`
-     (走 Vite 代理,所有请求都是 :3000 入口,Vite 再代理 /api/* 到 gateway :9000)
+   - **Authorized redirect URIs**:`http://localhost:9000/api/auth/google/callback`
+     (canonical 模式: redirect 直接指 gateway 端口。gateway 处理完发绝对
+     URL 302 跳回前端 :3000/desktop)
 6. 创建后拿:
    - `Client ID` 形如 `xxx.apps.googleusercontent.com`
    - `Client Secret` 形如 `GOCSPX-xxx`
@@ -38,7 +39,8 @@
 ```
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
-PUBLIC_BASE_URL=http://localhost:3000
+PUBLIC_BASE_URL=http://localhost:9000   # gateway 自己的入口,Google callback 命中这里
+FRONTEND_BASE_URL=http://localhost:3000 # gateway 处理完跳回这里
 ```
 
 ### 3. 用
@@ -56,7 +58,7 @@ PUBLIC_BASE_URL=http://localhost:3000
 - Authorized JavaScript origins 加:`https://<your-domain>`
 - Authorized redirect URIs 加:`https://<your-domain>/api/auth/google/callback`
   (生产环境前端和 gateway 通常在同一域名下,通过反向代理把 /api/* 转给 gateway)
-- 部署时设 `PUBLIC_BASE_URL=https://<your-gateway-domain>`
+- 部署时设 `PUBLIC_BASE_URL=https://<your-domain>` (跟 FRONTEND_BASE_URL 同域)
 
 ---
 
@@ -79,10 +81,73 @@ PUBLIC_BASE_URL=http://localhost:3000
 
 | 服务 | 默认端口 | 备注 |
 |---|---|---|
-| Web (前端 + Vite 代理) | 3000 | http://localhost:3000 (所有用户入口) |
-| Gateway (后端) | 9000 | 不直接暴露,Vite 代理 /api/* 转发到这 |
+| Web (前端 + Vite 代理) | 3000 | http://localhost:3000 (用户日常入口) |
+| Gateway (后端) | 9000 | OAuth callback 直接命中这里 (canonical 模式) |
 | Hermes 容器 | 8080 | 本地共享 |
 
-OAuth 回调 URL **永远填前端入口** (`http://localhost:3000/api/auth/google/callback`),
-浏览器从来不需要直接看到 :9000。这样后端发相对 redirect 就能跳前端路由,
-也不用维护「前端 URL」配置项。
+OAuth callback URL 注册成 gateway 端口 `:9000`,gateway 拿到 code 后:
+1. 用 client_secret 换 token (server-to-server)
+2. 用 token 拿 userinfo
+3. set session cookie + 绝对 URL 302 跳回前端 `http://localhost:3000/desktop`
+
+localhost 下 cookie 不跨端口隔离(同 host),所以 :9000 set 的 cookie 在 :3000
+fetch 时浏览器会带上,前后端协作无碍。
+
+---
+
+## 微信扫码绑定 (Phase 1.4 B)
+
+灵犀通过 **iLink** (Tencent 官方 AI bot 框架,`ilinkai.weixin.qq.com`)
+绑用户的个人微信号。绑定后:
+
+- 联系人发给用户的消息被助理代收 → Agent 处理 → 自动回复
+- 回复用用户的微信号发出,联系人无感
+
+**对用户没有任何申请门槛**: 不需要公众号,不需要厂商 API key,不需要 ngrok,
+也不要 webhook 公网暴露。iLink 的 QR 登录是开放的,任何微信号都能扫码绑。
+
+### 用户视角
+
+1. 登入灵犀 → 桌面 → 助理状态卡片右上「绑定微信」按钮 → 弹出 WechatApp 窗口
+2. 点「扫码绑定」,窗口里出现 iLink 二维码
+3. 用要绑的微信号扫这张二维码 (微信里会弹 iLink 的确认页)
+4. 在微信里点「确认」
+5. 窗口自动切「✓ 已绑定」,显示 bot ID 末 4 位 + 绑定时间
+6. 之后所有联系人发来的 text 消息自动走 Agent
+
+### 解绑
+
+WechatApp 的 bound 视图点「解绑微信」:
+- 后端立刻 `pollMgr.stopOne(binding.id)` 停轮询
+- DB `wechat_bindings.is_active=false` (软删,保留 ilink_bot_id 历史)
+- iLink 那边不动 — 我们没法替用户解除 iLink 跟微信的关联,那是用户在微信里
+  自己撤销的事情(在微信里删 iLink 登录设备)
+
+### 重启 gateway 的恢复语义
+
+PollManager 启动时 `startAll()` 扫 DB 拉所有 `is_active=true` 绑定,逐个起
+循环。所以 gateway 重启不丢绑定,几秒内恢复轮询。`updates_cursor` 也写在 DB,
+不会重放历史消息。
+
+### 失败模式
+
+| 触发条件 | 处理 |
+|---|---|
+| `bot_token` 失效 (用户在微信里踢了 iLink) | iLink 返 errcode=-14 → PollManager `deactivate` + 自移除。用户在 WechatApp 看到「未绑定」,需重扫。 |
+| iLink 网络不通 | pollLoop 指数退避 max 30s 重试,网络回来自动恢复。 |
+| 容器没 ready | handleInbound 给发送方发兜底文案「助理还在初始化,请稍后再试」。不写消息,不杀循环。 |
+| Agent 报错 | 同上,fallback「处理失败,请稍后再试」。 |
+
+### 已知限制 (MVP)
+
+- 仅 text 消息 (图片/语音/文件/视频暂不支持,silently skip)
+- 一个灵犀用户最多绑一个微信号
+- 一个微信号同时只能被一个灵犀用户绑 (iLink 扫码确认流程保证,DB 也有 UNIQUE
+  防御)
+- 1 用户 = 1 thread (所有联系人发来的消息混在同一 hermes 上下文)。后续会
+  改成 per-contact thread,但 MVP 先这么走
+
+### 不需要配什么 env
+
+iLink 不需要任何凭证,也不用填 `WECHAT_*` 环境变量。`apps/gateway/.env.example`
+里没有也是对的。

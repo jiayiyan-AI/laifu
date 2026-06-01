@@ -21,12 +21,26 @@ import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
 import { providers } from './auth/providers/index.js';
 import { buildWechatBindRouter } from './api/wechat-bind.js';
-import { makeMpClient } from './wechat/mp-client.js';
+import { PollManager } from './wechat-ilink/poll-manager.js';
+import { makeHandleInbound } from './wechat-ilink/inbound-handler.js';
+import { makeWechatBindingDao } from './db/wechat-binding-dao.js';
+import { ThreadStreamHub } from './lib/thread-stream.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
   sb?: SupabaseClient;
   provisioner?: ProvisionerFn;
+  /**
+   * 微信 iLink 长轮询管理器。本地启动时构造,测试里可省略 — 省了就不挂
+   * /api/wechat/* 路由,其它端点不受影响。
+   */
+  pollMgr?: PollManager;
+  /**
+   * SSE 通知 hub。本地启动构造,传给 chat 路由注册 /api/threads/:id/stream
+   * 端点 + 给入站事件源头 (handleInbound、POST /api/chat) 调 emit。
+   * 测试里可省略,/stream 端点就不挂。
+   */
+  hub?: ThreadStreamHub;
 }
 
 export const createApp = (opts: CreateAppOptions = {}): Express => {
@@ -102,18 +116,14 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));
-    app.use(buildChatRouter(sbResolved, getCache(), sessionMw));
-    // 微信公众号扫码绑定 (Phase 1.4 B) — 三项凭证齐了才挂载
-    const mp = config.wechatMp;
-    if (mp.appId && mp.appSecret && mp.token) {
+    app.use(buildChatRouter(sbResolved, getCache(), sessionMw, opts.hub));
+    // 微信 iLink 扫码绑定路由 — 仅启动时挂 (测试可省 pollMgr 跳过)
+    if (opts.pollMgr) {
       app.use(buildWechatBindRouter({
-        sb: sbResolved,
-        mpClient: makeMpClient({ appId: mp.appId, appSecret: mp.appSecret }),
-        mpToken: mp.token,
+        dao: makeWechatBindingDao(sbResolved),
+        pollMgr: opts.pollMgr,
         sessionMw,
       }));
-    } else {
-      console.warn('[config] WeChat MP 配置不全 (WECHAT_MP_APPID/APPSECRET/TOKEN),/api/wechat/* 路由未挂载');
     }
   }
   app.use(buildStatusRouter(getCache, sessionMw));
@@ -133,10 +143,38 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     console.log('[gateway] loading cache...');
     await cache.loadAll();
-    const app = createApp({ cache, sb });
-    app.listen(config.port, () => {
+
+    // SSE 通知 hub 在 PollManager 之前构造 (handleInbound 工厂要它)
+    const hub = new ThreadStreamHub();
+
+    // 微信 iLink: PollManager 在 listen 前 startAll,扫 DB 拉所有 is_active=true 绑定起循环
+    const wechatDao = makeWechatBindingDao(sb);
+    const pollMgr = new PollManager({
+      dao: wechatDao,
+      onMessageFor: makeHandleInbound({ dao: wechatDao, sb, cache, hub }),
+    });
+    await pollMgr.startAll();
+
+    const app = createApp({ cache, sb, pollMgr, hub });
+    const server = app.listen(config.port, () => {
       console.log(`[gateway] listening on :${config.port}`);
     });
+
+    // 优雅停机: 先停 PollManager (避免停机过程中还在拉新消息) 再关 HTTP server
+    const shutdown = (signal: string) => {
+      void (async () => {
+        console.log(`[gateway] ${signal} received, shutting down...`);
+        await pollMgr.stopAll();
+        server.close(() => {
+          console.log('[gateway] server closed');
+          process.exit(0);
+        });
+        // 5s 兜底,避免 server.close 挂死
+        setTimeout(() => process.exit(1), 5000).unref();
+      })();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   })().catch((err) => {
     console.error('[gateway] startup failed:', err);
     process.exit(1);

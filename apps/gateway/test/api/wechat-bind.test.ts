@@ -1,436 +1,248 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createHash } from 'node:crypto';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { buildWechatBindRouter } from '../../src/api/wechat-bind.js';
 import { signSession } from '../../src/auth/session.js';
 import { requireSession } from '../../src/auth/middleware.js';
-import type { MpClient } from '../../src/wechat/mp-client.js';
+import type { WechatBinding, WechatBindingDao } from '../../src/db/wechat-binding-dao.js';
 
 const SECRET = 'test-secret-do-not-use-in-prod-1234567';
 const COOKIE = 'lingxi_sid';
-const TOKEN = 'shared_webhook_token';
 
-const sigOf = (timestamp: string, nonce: string, token = TOKEN): string => {
-  const sorted = [token, timestamp, nonce].sort().join('');
-  return createHash('sha1').update(sorted).digest('hex');
-};
+const userCookie = (uid: string) =>
+  `${COOKIE}=${signSession({ user_id: uid }, SECRET, 24)}`;
 
-// ===== 简易内存版 Supabase mock =====
-// 处理: from().select().eq().maybeSingle/single
-//      from().insert(row) [await]
-//      from().upsert(row, {onConflict}) [await]
-//      from().update(row).eq() [await]
-//      from().delete().eq() [await]
-
-interface Ctx {
-  table: string;
-  op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' | null;
-  row?: any;
-  filters: [string, any][];
-  upsertConflict?: string;
-}
-
-const createSbMock = () => {
-  const tables: Record<string, any[]> = {
-    container_mapping: [],
-    wechat_bindings: [],
-    wechat_bind_tickets: [],
-  };
-  let ctx: Ctx = { table: '', op: null, filters: [] };
-
-  const matches = (row: any, filters: [string, any][]) =>
-    filters.every(([k, v]) => row[k] === v);
-
-  const apply = () => {
-    if (!tables[ctx.table]) tables[ctx.table] = [];
-    if (ctx.op === 'insert') {
-      tables[ctx.table]!.push({ ...ctx.row });
-      return { data: ctx.row, error: null };
-    }
-    if (ctx.op === 'upsert') {
-      const pkCols = ctx.upsertConflict?.split(',') ?? Object.keys(ctx.row);
-      const idx = tables[ctx.table]!.findIndex((r) => pkCols.every((c) => r[c] === ctx.row[c]));
-      if (idx >= 0) Object.assign(tables[ctx.table]![idx], ctx.row);
-      else tables[ctx.table]!.push({ ...ctx.row });
-      return { data: ctx.row, error: null };
-    }
-    if (ctx.op === 'update') {
-      tables[ctx.table]!.forEach((r) => {
-        if (matches(r, ctx.filters)) Object.assign(r, ctx.row);
-      });
-      return { data: null, error: null };
-    }
-    if (ctx.op === 'delete') {
-      tables[ctx.table] = tables[ctx.table]!.filter((r) => !matches(r, ctx.filters));
-      return { data: null, error: null };
-    }
-    return { data: null, error: null };
-  };
-
-  const sb: any = {
-    from(table: string) {
-      ctx = { table, op: null, filters: [] };
-      return sb;
-    },
-    select(_cols?: string) { ctx.op = 'select'; return sb; },
-    insert(row: any) { ctx.op = 'insert'; ctx.row = row; return sb; },
-    upsert(row: any, opts?: { onConflict?: string }) {
-      ctx.op = 'upsert'; ctx.row = row; ctx.upsertConflict = opts?.onConflict; return sb;
-    },
-    update(row: any) { ctx.op = 'update'; ctx.row = row; return sb; },
-    delete() { ctx.op = 'delete'; return sb; },
-    eq(col: string, val: any) { ctx.filters.push([col, val]); return sb; },
-    maybeSingle() {
-      const found = tables[ctx.table]?.find((r) => matches(r, ctx.filters)) ?? null;
-      return Promise.resolve({ data: found, error: null });
-    },
-    single() {
-      const found = tables[ctx.table]?.find((r) => matches(r, ctx.filters)) ?? null;
-      return Promise.resolve({
-        data: found,
-        error: found ? null : { code: 'PGRST116', message: 'not found' },
-      });
-    },
-    then(onResolve: any) {
-      if (ctx.op === 'select') return onResolve({ data: null, error: null });
-      onResolve(apply());
-    },
-  };
-
-  return { sb, tables };
-};
-
-const makeMpClient = (qrUrl = 'http://weixin.qq.com/q/abc'): MpClient => ({
-  getAccessToken: vi.fn(async () => 'TOK'),
-  createBindQrCode: vi.fn(async (sceneStr: string) => ({
-    ticket: 'tk_' + sceneStr,
-    url: qrUrl,
-    expire_seconds: 600,
-  })),
+const makeBinding = (overrides: Partial<WechatBinding> = {}): WechatBinding => ({
+  id: 'bind_1',
+  user_id: 'u_alice',
+  ilink_bot_id: 'ibot_alice',
+  bot_token: 'tok',
+  base_url: 'https://ilink',
+  updates_cursor: null,
+  is_active: true,
+  thread_id: null,
+  bound_at: '2026-06-01T00:00:00Z',
+  ...overrides,
 });
 
-const makeApp = (sb: any, mpClient = makeMpClient()) => {
+const makeMockDao = (initial: WechatBinding | null = null): WechatBindingDao & {
+  __row: WechatBinding | null;
+  __deactivated: string[];
+} => ({
+  __row: initial,
+  __deactivated: [],
+  listActive: vi.fn(),
+  getByUserId: vi.fn(async function (this: any) { return this.__row; }),
+  upsertByUserId: vi.fn(async function (this: any, args: any) {
+    this.__row = makeBinding({ ...args, id: 'bind_new' });
+    return this.__row;
+  }),
+  updateCursor: vi.fn(),
+  bindThread: vi.fn(),
+  deactivate: vi.fn(async function (this: any, id: string) {
+    this.__deactivated.push(id);
+    if (this.__row) this.__row.is_active = false;
+  }),
+} as any);
+
+const makeMockPollMgr = () => ({
+  startAll: vi.fn(),
+  startOne: vi.fn(),
+  stopOne: vi.fn(),
+  stopAll: vi.fn(),
+  size: vi.fn(() => 0),
+});
+
+const makeApp = (dao: any, pollMgr: any) => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
   app.use(buildWechatBindRouter({
-    sb,
-    mpClient,
-    mpToken: TOKEN,
+    dao,
+    pollMgr: pollMgr as any,
     sessionMw: requireSession({ secret: SECRET, cookieName: COOKIE }),
   }));
-  return { app, mpClient };
+  return app;
 };
-
-const userCookie = (userId: string) =>
-  `${COOKIE}=${signSession({ user_id: userId }, SECRET, 24)}`;
 
 describe('wechat-bind router', () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  describe('POST /api/wechat/bind/start', () => {
-    it('412 when container_mapping not ready', async () => {
-      const { sb, tables } = createSbMock();
-      tables.container_mapping = [{ user_id: 'u1', status: 'provisioning' }];
-      const { app } = makeApp(sb);
-
-      const res = await request(app)
-        .post('/api/wechat/bind/start')
-        .set('Cookie', userCookie('u1'));
-
-      expect(res.status).toBe(412);
-      expect(res.body.error).toMatch(/not ready/i);
-    });
-
-    it('409 when already bound', async () => {
-      const { sb, tables } = createSbMock();
-      tables.container_mapping = [{ user_id: 'u1', status: 'ready' }];
-      tables.wechat_bindings = [{ user_id: 'u1', mp_openid: 'oABC' }];
-      const { app } = makeApp(sb);
-
-      const res = await request(app)
-        .post('/api/wechat/bind/start')
-        .set('Cookie', userCookie('u1'));
-
-      expect(res.status).toBe(409);
-    });
-
-    it('happy path: creates QR + inserts ticket + returns qr_url/token/expires_at', async () => {
-      const { sb, tables } = createSbMock();
-      tables.container_mapping = [{ user_id: 'u1', status: 'ready' }];
-      const { app, mpClient } = makeApp(sb);
-
-      const res = await request(app)
-        .post('/api/wechat/bind/start')
-        .set('Cookie', userCookie('u1'));
-
+  describe('POST /api/wechat/bind/qr-start', () => {
+    it('returns qrcode + qr_url from iLink', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({
+          qrcode: 'sess_xyz',
+          qrcode_img_content: 'ilink://login?token=xyz',
+        })),
+      );
+      const dao = makeMockDao();
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .post('/api/wechat/bind/qr-start')
+        .set('Cookie', userCookie('u_alice'));
       expect(res.status).toBe(200);
-      expect(res.body.qr_url).toBe('http://weixin.qq.com/q/abc');
-      expect(typeof res.body.token).toBe('string');
-      expect(res.body.token).toMatch(/^[a-f0-9]{32}$/);
-      expect(typeof res.body.expires_at).toBe('string');
-      // mp 调用 scene_str = 'bind_' + token
-      expect(mpClient.createBindQrCode).toHaveBeenCalledWith(`bind_${res.body.token}`, 600);
-      // ticket 写入
-      expect(tables.wechat_bind_tickets).toHaveLength(1);
-      expect(tables.wechat_bind_tickets[0]).toMatchObject({
-        token: res.body.token,
-        user_id: 'u1',
-        ticket_url: 'http://weixin.qq.com/q/abc',
-      });
+      expect(res.body).toEqual({ qrcode: 'sess_xyz', qr_content: 'ilink://login?token=xyz' });
     });
 
     it('401 without session', async () => {
-      const { sb } = createSbMock();
-      const { app } = makeApp(sb);
-      const res = await request(app).post('/api/wechat/bind/start');
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr()))
+        .post('/api/wechat/bind/qr-start');
       expect(res.status).toBe(401);
+    });
+
+    it('502 on iLink failure', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(new Response('', { status: 500 }));
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr()))
+        .post('/api/wechat/bind/qr-start')
+        .set('Cookie', userCookie('u_alice'));
+      expect(res.status).toBe(502);
     });
   });
 
-  describe('GET /api/wechat/bind/status', () => {
-    it('bound:false when ticket has no mp_openid yet', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_x', user_id: 'u1', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
+  describe('POST /api/wechat/bind/qr-poll', () => {
+    it('wait status passthrough', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ status: 'wait' })),
+      );
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr()))
+        .post('/api/wechat/bind/qr-poll')
+        .set('Cookie', userCookie('u_alice'))
+        .send({ qrcode: 'sess' });
+      expect(res.body).toEqual({ status: 'wait' });
+    });
 
-      const res = await request(app)
-        .get('/api/wechat/bind/status?token=tok_x')
-        .set('Cookie', userCookie('u1'));
+    it('confirmed: upsert + pollMgr.startOne + returns confirmed body', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({
+          status: 'confirmed',
+          bot_token: 'tk_NEW',
+          ilink_bot_id: 'ibot_NEW',
+          baseurl: 'https://ilink-shanghai',
+        })),
+      );
+      const dao = makeMockDao();
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .post('/api/wechat/bind/qr-poll')
+        .set('Cookie', userCookie('u_alice'))
+        .send({ qrcode: 'sess_xyz' });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ bound: false });
+      expect(res.body).toEqual({
+        status: 'confirmed', bound: true, ilink_bot_id: 'ibot_NEW',
+      });
+      expect(dao.upsertByUserId).toHaveBeenCalledWith({
+        user_id: 'u_alice',
+        ilink_bot_id: 'ibot_NEW',
+        bot_token: 'tk_NEW',
+        base_url: 'https://ilink-shanghai',
+      });
+      expect(pollMgr.startOne).toHaveBeenCalledTimes(1);
     });
 
-    it('bound:true with mp_openid when ticket fulfilled', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_x', user_id: 'u1', mp_openid: 'oABC',
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-
-      const res = await request(app)
-        .get('/api/wechat/bind/status?token=tok_x')
-        .set('Cookie', userCookie('u1'));
-
-      expect(res.body).toEqual({ bound: true, mp_openid: 'oABC' });
-    });
-
-    it('404 when token does not belong to caller (cross-user attempt)', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_x', user_id: 'u_other', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-
-      const res = await request(app)
-        .get('/api/wechat/bind/status?token=tok_x')
-        .set('Cookie', userCookie('u1'));
-      expect(res.status).toBe(404);
-    });
-
-    it('400 without token query', async () => {
-      const { sb } = createSbMock();
-      const { app } = makeApp(sb);
-      const res = await request(app)
-        .get('/api/wechat/bind/status')
-        .set('Cookie', userCookie('u1'));
+    it('400 missing qrcode', async () => {
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr()))
+        .post('/api/wechat/bind/qr-poll')
+        .set('Cookie', userCookie('u_alice'))
+        .send({});
       expect(res.status).toBe(400);
+    });
+
+    it('401 without session', async () => {
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr()))
+        .post('/api/wechat/bind/qr-poll')
+        .send({ qrcode: 'x' });
+      expect(res.status).toBe(401);
+    });
+
+    it('expired status passthrough — no DB write, no startOne', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ status: 'expired' })),
+      );
+      const dao = makeMockDao();
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .post('/api/wechat/bind/qr-poll')
+        .set('Cookie', userCookie('u_alice'))
+        .send({ qrcode: 'sess' });
+      expect(res.body).toEqual({ status: 'expired' });
+      expect(dao.upsertByUserId).not.toHaveBeenCalled();
+      expect(pollMgr.startOne).not.toHaveBeenCalled();
     });
   });
 
   describe('GET /api/wechat/bind', () => {
-    it('returns bound:false when no binding', async () => {
-      const { sb } = createSbMock();
-      const { app } = makeApp(sb);
-      const res = await request(app).get('/api/wechat/bind').set('Cookie', userCookie('u1'));
+    it('bound:false when no binding', async () => {
+      const res = await request(makeApp(makeMockDao(null), makeMockPollMgr()))
+        .get('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
       expect(res.body).toEqual({ bound: false });
     });
 
-    it('returns bound:true with mp_openid when bound', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bindings = [{ user_id: 'u1', mp_openid: 'oABC' }];
-      const { app } = makeApp(sb);
-      const res = await request(app).get('/api/wechat/bind').set('Cookie', userCookie('u1'));
-      expect(res.body).toEqual({ bound: true, mp_openid: 'oABC' });
+    it('bound:false when row exists but is_active=false', async () => {
+      const dao = makeMockDao(makeBinding({ is_active: false }));
+      const res = await request(makeApp(dao, makeMockPollMgr()))
+        .get('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
+      expect(res.body).toEqual({ bound: false });
+    });
+
+    it('bound:true with ilink_bot_id + bound_at when active', async () => {
+      const dao = makeMockDao(makeBinding({ is_active: true, ilink_bot_id: 'ibot_active' }));
+      const res = await request(makeApp(dao, makeMockPollMgr()))
+        .get('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
+      expect(res.body).toEqual({
+        bound: true,
+        ilink_bot_id: 'ibot_active',
+        bound_at: '2026-06-01T00:00:00Z',
+      });
+    });
+
+    it('401 without session', async () => {
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr())).get('/api/wechat/bind');
+      expect(res.status).toBe(401);
     });
   });
 
   describe('DELETE /api/wechat/bind', () => {
-    it('clears both wechat_bindings and pending wechat_bind_tickets for caller', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bindings = [
-        { user_id: 'u1', mp_openid: 'oA' },
-        { user_id: 'u2', mp_openid: 'oB' },
-      ];
-      tables.wechat_bind_tickets = [
-        { token: 't1', user_id: 'u1', mp_openid: null, expires_at: 'x' },
-        { token: 't2', user_id: 'u2', mp_openid: null, expires_at: 'x' },
-      ];
-      const { app } = makeApp(sb);
-
-      const res = await request(app).delete('/api/wechat/bind').set('Cookie', userCookie('u1'));
-
+    it('stops poller + deactivates when active binding exists', async () => {
+      const dao = makeMockDao(makeBinding({ id: 'bind_X', is_active: true }));
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .delete('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
       expect(res.body).toEqual({ ok: true });
-      expect(tables.wechat_bindings).toEqual([{ user_id: 'u2', mp_openid: 'oB' }]);
-      expect(tables.wechat_bind_tickets).toEqual([{ token: 't2', user_id: 'u2', mp_openid: null, expires_at: 'x' }]);
-    });
-  });
-
-  describe('GET /api/wechat/webhook (verification handshake)', () => {
-    it('echos echostr when signature valid', async () => {
-      const { sb } = createSbMock();
-      const { app } = makeApp(sb);
-      const ts = '1700000000';
-      const nonce = 'nx';
-      const res = await request(app).get('/api/wechat/webhook').query({
-        signature: sigOf(ts, nonce), timestamp: ts, nonce, echostr: 'HELLO',
-      });
-      expect(res.status).toBe(200);
-      expect(res.text).toBe('HELLO');
+      expect(pollMgr.stopOne).toHaveBeenCalledWith('bind_X');
+      expect(dao.__deactivated).toContain('bind_X');
     });
 
-    it('401 on bad signature', async () => {
-      const { sb } = createSbMock();
-      const { app } = makeApp(sb);
-      const ts = '1700000000';
-      const nonce = 'nx';
-      const res = await request(app).get('/api/wechat/webhook').query({
-        signature: 'deadbeef', timestamp: ts, nonce, echostr: 'X',
-      });
+    it('no-op when no binding — still returns ok:true', async () => {
+      const dao = makeMockDao(null);
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .delete('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
+      expect(res.body).toEqual({ ok: true });
+      expect(pollMgr.stopOne).not.toHaveBeenCalled();
+      expect(dao.deactivate).not.toHaveBeenCalled();
+    });
+
+    it('no-op when binding already inactive', async () => {
+      const dao = makeMockDao(makeBinding({ is_active: false }));
+      const pollMgr = makeMockPollMgr();
+      const res = await request(makeApp(dao, pollMgr))
+        .delete('/api/wechat/bind')
+        .set('Cookie', userCookie('u_alice'));
+      expect(res.body).toEqual({ ok: true });
+      expect(pollMgr.stopOne).not.toHaveBeenCalled();
+    });
+
+    it('401 without session', async () => {
+      const res = await request(makeApp(makeMockDao(), makeMockPollMgr())).delete('/api/wechat/bind');
       expect(res.status).toBe(401);
-    });
-  });
-
-  describe('POST /api/wechat/webhook (event push)', () => {
-    const wrapEvent = (frag: string) => `<xml>${frag}</xml>`;
-    const cdata = (tag: string, v: string) => `<${tag}><![CDATA[${v}]]></${tag}>`;
-
-    const postEvent = (app: any, body: string) => {
-      const ts = '1700000000';
-      const nonce = 'nx';
-      return request(app)
-        .post('/api/wechat/webhook')
-        .query({ signature: sigOf(ts, nonce), timestamp: ts, nonce })
-        .set('Content-Type', 'text/xml')
-        .send(body);
-    };
-
-    it('SCAN event with valid bind_<token>: inserts wechat_bindings + updates ticket', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_X', user_id: 'u1', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-
-      const xml = wrapEvent(
-        cdata('FromUserName', 'oOPENID')
-        + cdata('MsgType', 'event')
-        + cdata('Event', 'SCAN')
-        + cdata('EventKey', 'bind_tok_X'),
-      );
-      const res = await postEvent(app, xml);
-
-      expect(res.status).toBe(200);
-      expect(res.text).toBe('success');
-      expect(tables.wechat_bindings).toEqual([{ user_id: 'u1', mp_openid: 'oOPENID' }]);
-      expect(tables.wechat_bind_tickets[0]!.mp_openid).toBe('oOPENID');
-    });
-
-    it('subscribe event with qrscene_bind_<token>: binds (strips qrscene_ prefix)', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_Y', user_id: 'u2', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-
-      const xml = wrapEvent(
-        cdata('FromUserName', 'oZZZ')
-        + cdata('MsgType', 'event')
-        + cdata('Event', 'subscribe')
-        + cdata('EventKey', 'qrscene_bind_tok_Y'),
-      );
-      await postEvent(app, xml);
-
-      expect(tables.wechat_bindings).toEqual([{ user_id: 'u2', mp_openid: 'oZZZ' }]);
-    });
-
-    it('idempotent: same SCAN twice → still single binding row', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_Z', user_id: 'u3', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-
-      const xml = wrapEvent(
-        cdata('FromUserName', 'oQQQ')
-        + cdata('MsgType', 'event')
-        + cdata('Event', 'SCAN')
-        + cdata('EventKey', 'bind_tok_Z'),
-      );
-      await postEvent(app, xml);
-      await postEvent(app, xml);
-
-      expect(tables.wechat_bindings).toHaveLength(1);
-    });
-
-    it('skips bind logic when ticket expired (still 200 success)', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_E', user_id: 'u1', mp_openid: null,
-        expires_at: new Date(Date.now() - 1000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-      const xml = wrapEvent(
-        cdata('FromUserName', 'oX')
-        + cdata('MsgType', 'event')
-        + cdata('Event', 'SCAN')
-        + cdata('EventKey', 'bind_tok_E'),
-      );
-      const res = await postEvent(app, xml);
-      expect(res.status).toBe(200);
-      expect(tables.wechat_bindings).toEqual([]);
-    });
-
-    it('unrelated MsgType (text) is silently 200 — no DB write', async () => {
-      const { sb, tables } = createSbMock();
-      const { app } = makeApp(sb);
-      const xml = wrapEvent(cdata('FromUserName', 'oX') + cdata('MsgType', 'text') + cdata('Content', 'hi'));
-      const res = await postEvent(app, xml);
-      expect(res.status).toBe(200);
-      expect(tables.wechat_bindings).toEqual([]);
-    });
-
-    it('401 on bad signature — never touches DB', async () => {
-      const { sb, tables } = createSbMock();
-      tables.wechat_bind_tickets = [{
-        token: 'tok_X', user_id: 'u1', mp_openid: null,
-        expires_at: new Date(Date.now() + 600_000).toISOString(),
-      }];
-      const { app } = makeApp(sb);
-      const xml = wrapEvent(
-        cdata('FromUserName', 'oOPENID')
-        + cdata('MsgType', 'event')
-        + cdata('Event', 'SCAN')
-        + cdata('EventKey', 'bind_tok_X'),
-      );
-      const res = await request(app)
-        .post('/api/wechat/webhook')
-        .query({ signature: 'deadbeef', timestamp: '1700000000', nonce: 'nx' })
-        .set('Content-Type', 'text/xml')
-        .send(xml);
-      expect(res.status).toBe(401);
-      expect(tables.wechat_bindings).toEqual([]);
     });
   });
 });

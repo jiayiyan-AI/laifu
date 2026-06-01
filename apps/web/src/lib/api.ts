@@ -9,6 +9,11 @@ import type {
   WebChatRequest,
   WebChatResponse,
   WebThreadMessagesResponse,
+  WechatQrStartResponse,
+  WechatQrPollRequest,
+  WechatQrPollResponse,
+  WechatBindingInfoResponse,
+  WechatUnbindResponse,
 } from '@lingxi/shared';
 
 export class AuthError extends Error {
@@ -69,3 +74,18 @@ export const fetchHistory = async (threadId: string): Promise<ThreadMessage[]> =
   );
   return messages;
 };
+
+// === WeChat iLink 扫码绑定 ===
+export const startWechatBind = (): Promise<WechatQrStartResponse> =>
+  json('/api/wechat/bind/qr-start', { method: 'POST' });
+
+export const pollWechatBind = (qrcode: string): Promise<WechatQrPollResponse> => {
+  const body: WechatQrPollRequest = { qrcode };
+  return json('/api/wechat/bind/qr-poll', { method: 'POST', body: JSON.stringify(body) });
+};
+
+export const getMyWechatBind = (): Promise<WechatBindingInfoResponse> =>
+  json('/api/wechat/bind');
+
+export const unbindWechat = (): Promise<WechatUnbindResponse> =>
+  json('/api/wechat/bind', { method: 'DELETE' });
