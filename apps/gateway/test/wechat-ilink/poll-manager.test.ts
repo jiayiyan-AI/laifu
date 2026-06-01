@@ -188,7 +188,10 @@ describe('PollManager', () => {
     });
     const binding = mockBinding('b1');
     mgr.startOne(binding);
-    expect(factory).toHaveBeenCalledWith(binding);
+    expect(factory).toHaveBeenCalledWith(
+      binding,
+      expect.objectContaining({ getUpdates: expect.any(Function), sendText: expect.any(Function) }),
+    );
     const opts = (runLoop as any).mock.calls[0]![0];
     expect(opts.onMessage).toBe(innerHandler);
   });

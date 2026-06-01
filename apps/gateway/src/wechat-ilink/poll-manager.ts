@@ -14,7 +14,15 @@ import { pollLoop } from './poll-loop.js';
 import { makeIlinkClient, type IlinkClient } from './client.js';
 import type { WechatBinding, WechatBindingDao } from '../db/wechat-binding-dao.js';
 
-export type OnMessageFactory = (binding: WechatBinding) => (raw: unknown) => Promise<void>;
+/**
+ * 工厂签名: 收到 (binding, client) 后返回 inbound 回调。
+ * client 复用 PollManager 起循环时建的那个 IlinkClient — 用同一对 fetch keep-alive,
+ * 也省一次创建。client.sendText 在回复时调。
+ */
+export type OnMessageFactory = (
+  binding: WechatBinding,
+  client: IlinkClient,
+) => (raw: unknown) => Promise<void>;
 
 export interface PollManagerOpts {
   dao: WechatBindingDao;
@@ -62,7 +70,7 @@ export class PollManager {
       client,
       initialCursor: binding.updates_cursor,
       signal: ac.signal,
-      onMessage: this.opts.onMessageFor(binding),
+      onMessage: this.opts.onMessageFor(binding, client),
       onCursorUpdate: (c) => this.opts.dao.updateCursor(binding.id, c),
       onSessionExpired: async () => {
         await this.opts.dao.deactivate(binding.id);
