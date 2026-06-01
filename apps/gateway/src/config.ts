@@ -50,6 +50,26 @@ export const config = {
     dashscopeApiKey: process.env['DASHSCOPE_API_KEY'] ?? '',
     dashscopeBaseUrl: process.env['DASHSCOPE_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   },
+
+  // 容器到 gateway 的 JWT 签发密钥；P1 启用后 user_entitlements / refresh-token 都用它。
+  // dev 默认是占位值；生产必须显式设。
+  gatewaySecret: process.env['GATEWAY_SECRET'] ?? 'dev-only-gateway-secret',
+
+  cloud: {
+    storageAccount: process.env['AZURE_STORAGE_ACCOUNT'] ?? '',
+    container: process.env['AZURE_STORAGE_CONTAINER'] ?? 'laifu-cloud',
+    blobEndpoint:
+      process.env['AZURE_STORAGE_BLOB_ENDPOINT'] ??
+      (process.env['AZURE_STORAGE_ACCOUNT']
+        ? `https://${process.env['AZURE_STORAGE_ACCOUNT']}.blob.core.windows.net`
+        : ''),
+    // User Delegation Key 自身的 TTL（Azure 上限 7d）；缓存使用方在剩余 < 1h 时刷新。
+    udkLifetimeSeconds: parseInt(process.env['AZURE_STORAGE_UDK_LIFETIME_SECONDS'] ?? `${7 * 24 * 3600}`, 10),
+    // 写 SAS TTL（每个容器拿一次 SAS 用多久）
+    writeSasTtlSeconds: parseInt(process.env['AZURE_STORAGE_WRITE_SAS_TTL_SECONDS'] ?? '900', 10),     // 15min
+    // 读 SAS TTL（每次 download 签一个）
+    readSasTtlSeconds:  parseInt(process.env['AZURE_STORAGE_READ_SAS_TTL_SECONDS']  ?? '300', 10),     // 5min
+  },
 };
 
 // 仅在实际启动 server 时校验，单元测试可跳过
@@ -85,5 +105,8 @@ export const validateConfig = () => {
   console.log(`[config] OAuth providers enabled: ${enabled.join(',')}`);
   if ((process.env['SESSION_SECRET'] ?? '').length < 16) {
     console.warn('[config] SESSION_SECRET is short or unset — dev only');
+  }
+  if (config.gatewaySecret === 'dev-only-gateway-secret') {
+    console.warn('[config] GATEWAY_SECRET is the dev default — set a real one for prod');
   }
 };
