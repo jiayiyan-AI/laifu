@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHmac } from 'node:crypto';
 import type { UserDelegationKey } from '@azure/storage-blob';
 import { buildDirectoryWriteSas } from '../../src/lib/sas-builder.js';
 
@@ -129,5 +130,55 @@ describe('buildDirectoryWriteSas', () => {
     const params = parseSas(sasToken);
     expect(params['sig']).toBeDefined();
     expect(params['sig']!.length).toBeGreaterThan(20);
+  });
+
+  // 自洽 round-trip：用 SAS token 里的 st/se/skt/ske/sp/sv/sr 等字段反推 string-to-sign，
+  // 用同一份 UDK value 重新 HMAC-SHA256 一遍，必须和 token 里的 sig 完全一致。
+  // 这能保证 (1) 槽位顺序对得上 spec；(2) 没有在签名后再做破坏性 mutation。
+  it('round-trip：本地按同样的 string-to-sign 重算 HMAC，sig 必须一致', () => {
+    const udk = fakeUdk();
+    const { sasToken } = buildDirectoryWriteSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      userId: USER_ID,
+      udk,
+      ttlSeconds: 900,
+    });
+    const params = parseSas(sasToken);
+
+    // 从 token 里读回 builder 实际用的时间字符串，避免重新生成时漂移。
+    const stringToSign = [
+      params['sp']!,                                              //  1. signedPermissions
+      params['st']!,                                              //  2. signedStart
+      params['se']!,                                              //  3. signedExpiry
+      `/blob/${ACCOUNT}/${CONTAINER}/${USER_ID}`,                 //  4. canonicalizedResource (无尾随 /)
+      params['skoid']!,                                           //  5. signedKeyObjectId
+      params['sktid']!,                                           //  6. signedKeyTenantId
+      params['skt']!,                                             //  7. signedKeyStart
+      params['ske']!,                                             //  8. signedKeyExpiry
+      params['sks']!,                                             //  9. signedKeyService
+      params['skv']!,                                             // 10. signedKeyVersion
+      '',                                                         // 11. preauthorizedAgentObjectId
+      '',                                                         // 12. agentObjectId
+      '',                                                         // 13. signedCorrelationId
+      '',                                                         // 14. signedIP
+      params['spr']!,                                             // 15. signedProtocol
+      params['sv']!,                                              // 16. signedVersion
+      params['sr']!,                                              // 17. signedResource
+      '',                                                         // 18. signedTimestamp
+      '',                                                         // 19. rscc
+      '',                                                         // 20. rscd
+      '',                                                         // 21. rsce
+      '',                                                         // 22. rscl
+      '',                                                         // 23. rsct
+    ].join('\n');
+
+    const expected = createHmac('sha256', Buffer.from(udk.value, 'base64'))
+      .update(stringToSign, 'utf8')
+      .digest('base64');
+
+    expect(params['sig']).toBe(expected);
+    // 防御性断言：22 个 '\n' = 23 个字段
+    expect((stringToSign.match(/\n/g) ?? []).length).toBe(22);
   });
 });

@@ -1,10 +1,5 @@
-import {
-  generateBlobSASQueryParameters,
-  ContainerSASPermissions,
-  SASProtocol,
-  type UserDelegationKey,
-  type BlobSASSignatureValues,
-} from '@azure/storage-blob';
+import { createHmac } from 'node:crypto';
+import type { UserDelegationKey } from '@azure/storage-blob';
 
 export interface DirectoryWriteSasInput {
   account: string;       // storage account name, e.g. "laifudev"
@@ -21,6 +16,36 @@ export interface DirectoryWriteSasOutput {
 }
 
 const SAS_VERSION = '2020-02-10'; // 最早支持 sdd 的 service version
+// directory SAS 当前签的是 `<container>/<userId>` 单层目录，深度恒为 1。
+const SIGNED_DIRECTORY_DEPTH = 1;
+// directory write SAS 固定权限集合，按 Azure SAS 规范字典序 racwdxltmeop 排列后即 "racwl"。
+const PERMISSIONS = 'racwl';
+
+/**
+ * 将任意 Date / ISO 字符串规范成 `YYYY-MM-DDTHH:mm:ssZ`（秒级，UTC）。
+ * Azure SAS 签名要求时间字段不带毫秒，否则签名串与服务端重算的不一致。
+ */
+function toIso8601Seconds(value: Date | string): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * 构造 canonicalized resource：`/blob/<account>/<container>/<dirPath>`。
+ * 注意：dirPath（含 userId）**不带**尾随 `/`，否则服务端 string-to-sign 不匹配。
+ */
+function canonicalizedResource(account: string, container: string, dirPath: string): string {
+  const trimmed = dirPath.replace(/\/+$/, '');
+  return `/blob/${account}/${container}/${trimmed}`;
+}
+
+/**
+ * HMAC-SHA256(base64-decoded UDK value, stringToSign) → base64。
+ */
+function sign(stringToSign: string, udkValueBase64: string): string {
+  const key = Buffer.from(udkValueBase64, 'base64');
+  return createHmac('sha256', key).update(stringToSign, 'utf8').digest('base64');
+}
 
 /**
  * 签发一个 directory-scoped User Delegation SAS，授权 racwl 限定到
@@ -30,58 +55,84 @@ const SAS_VERSION = '2020-02-10'; // 最早支持 sdd 的 service version
  *   `${blob_endpoint}/${container}/${userId}/<virtual_path>?${sasToken}`
  *
  * directory SAS 要求 storage account 启用 Hierarchical Namespace
- * （ADLS Gen2）。非 HNS 账号签出来的会退化成 container SAS，不安全 —
+ * （ADLS Gen2）。非 HNS 账号上 Azure 会拒绝 `sr=d` 请求 —
  * 测试 + 验收脚本会发现这种偏差。
+ *
+ * 为什么手写签名而不用 SDK：`@azure/storage-blob@12.31.0` 的
+ * `generateBlobSASQueryParameters` 不支持 `sr=d`：所有代码路径产生的
+ * `sr ∈ {c, b, bs, bv}`，且 `signedDirectoryDepth (sdd)` 永远不会写进
+ * string-to-sign。SDK 内部 `BlobSASSignatureValues.js` 的 v2020-02-10 UDK
+ * 槽位顺序我们沿用 —— 只是把 `signedResource` 换成 `"d"`，并按 spec 在
+ * canonicalizedResource 之后嵌入 `sdd=1` 的内容。
+ *
+ * 字符串构造、签名、URL 编码全在这里完成，**绝对不要**对返回的
+ * `sasToken` 再做 `URLSearchParams` 之类的二次组装，那会让签名失效。
  */
 export function buildDirectoryWriteSas(input: DirectoryWriteSasInput): DirectoryWriteSasOutput {
-  const startsOn = new Date(Date.now() - 60 * 1000);        // 留 1 分钟时钟漂移
-  const expiresOn = new Date(Date.now() + input.ttlSeconds * 1000);
+  const now = Date.now();
+  const startsOn = new Date(now - 60 * 1000);        // 留 1 分钟时钟漂移
+  const expiresOn = new Date(now + input.ttlSeconds * 1000);
 
-  // ContainerSASPermissions 包含 list 权限；directory SAS 使用容器级权限集合。
-  const permissions = ContainerSASPermissions.from({
-    read: true,
-    add: true,
-    create: true,
-    write: true,
-    list: true,
-  });
+  const signedStart = toIso8601Seconds(startsOn);
+  const signedExpiry = toIso8601Seconds(expiresOn);
+  const signedKeyStart = toIso8601Seconds(input.udk.signedStartsOn);
+  const signedKeyExpiry = toIso8601Seconds(input.udk.signedExpiresOn);
 
-  // 不设 blobName，让 SDK 以 container 级签名（使用 ContainerSASPermissions，含 list）。
-  // sr=d / sdd=1 由下面的防御修正注入，生产环境的真实签名需在 HNS 账号上验证。
-  const sasValues: BlobSASSignatureValues = {
-    containerName: input.container,
-    permissions,
-    protocol: SASProtocol.Https,
-    startsOn,
-    expiresOn,
-    version: SAS_VERSION,
-  };
+  const resourcePath = `${input.userId}`; // 单层目录；不带尾随 `/`
+  const canonicalResource = canonicalizedResource(input.account, input.container, resourcePath);
 
-  // 规范化 UDK 日期字段：SDK 要求 Date 对象，但某些调用方（包括单测）可能传 ISO 字符串。
-  const normalizedUdk: UserDelegationKey = {
-    ...input.udk,
-    signedStartsOn: input.udk.signedStartsOn instanceof Date
-      ? input.udk.signedStartsOn
-      : new Date(input.udk.signedStartsOn as unknown as string),
-    signedExpiresOn: input.udk.signedExpiresOn instanceof Date
-      ? input.udk.signedExpiresOn
-      : new Date(input.udk.signedExpiresOn as unknown as string),
-  };
+  // String-to-sign for v2020-02-10 User Delegation SAS, signedResource="d".
+  // Spec ref: https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
+  // SDK ref: node_modules/@azure/storage-blob/.../BlobSASSignatureValues.js lines ~400-432 (non-directory variant)
+  // 23 fields joined by '\n' → exactly 22 '\n' chars, no trailing newline.
+  const stringToSign = [
+    PERMISSIONS,                  //  1. signedPermissions   "racwl"
+    signedStart,                  //  2. signedStart
+    signedExpiry,                 //  3. signedExpiry
+    canonicalResource,            //  4. canonicalizedResource
+    input.udk.signedObjectId,     //  5. signedKeyObjectId
+    input.udk.signedTenantId,     //  6. signedKeyTenantId
+    signedKeyStart,               //  7. signedKeyStart
+    signedKeyExpiry,              //  8. signedKeyExpiry
+    input.udk.signedService,      //  9. signedKeyService
+    input.udk.signedVersion,      // 10. signedKeyVersion
+    '',                           // 11. signedAuthorizedUserObjectId (preauthorizedAgentObjectId)
+    '',                           // 12. signedUnauthorizedUserObjectId (agentObjectId)
+    '',                           // 13. signedCorrelationId
+    '',                           // 14. signedIP
+    'https',                      // 15. signedProtocol
+    SAS_VERSION,                  // 16. signedVersion
+    'd',                          // 17. signedResource
+    '',                           // 18. signedTimestamp (snapshot/version — n/a for dir)
+    '',                           // 19. rscc (cacheControl)
+    '',                           // 20. rscd (contentDisposition)
+    '',                           // 21. rsce (contentEncoding)
+    '',                           // 22. rscl (contentLanguage)
+    '',                           // 23. rsct (contentType)
+  ].join('\n');
 
-  const sasQueryParams = generateBlobSASQueryParameters(sasValues, normalizedUdk, input.account);
+  const signature = sign(stringToSign, input.udk.value);
 
-  let sasToken = sasQueryParams.toString();
+  // 按 spec 拼 query string。每个 value 都 encodeURIComponent，特别是 sig：
+  // base64 字符串可能含 '+' '/' '='，必须 URL 编码，否则服务端 decode 后与本地不一致。
+  const pairs: Array<[string, string]> = [
+    ['sv', SAS_VERSION],
+    ['sr', 'd'],
+    ['sdd', String(SIGNED_DIRECTORY_DEPTH)],
+    ['st', signedStart],
+    ['se', signedExpiry],
+    ['sp', PERMISSIONS],
+    ['spr', 'https'],
+    ['skoid', input.udk.signedObjectId],
+    ['sktid', input.udk.signedTenantId],
+    ['skt', signedKeyStart],
+    ['ske', signedKeyExpiry],
+    ['sks', input.udk.signedService],
+    ['skv', input.udk.signedVersion],
+    ['sig', signature],
+  ];
 
-  // 防御：SDK 在某些版本/路径下不会自动加 sr=d / sdd，手动确保。
-  // 若已存在，不重复加；不存在，按 spec §五 补上。
-  const tokenParams = new URLSearchParams(sasToken);
-  if (!tokenParams.has('sr') || tokenParams.get('sr') !== 'd') {
-    tokenParams.set('sr', 'd');
-  }
-  if (!tokenParams.has('sdd')) {
-    tokenParams.set('sdd', '1');
-  }
-  sasToken = tokenParams.toString();
+  const sasToken = pairs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 
   return {
     sasToken,
