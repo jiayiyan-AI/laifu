@@ -20,11 +20,20 @@ import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
 import { providers } from './auth/providers/index.js';
+import { buildWechatBindRouter } from './api/wechat-bind.js';
+import { PollManager } from './wechat-ilink/poll-manager.js';
+import { makeHandleInbound } from './wechat-ilink/inbound-handler.js';
+import { makeWechatBindingDao } from './db/wechat-binding-dao.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
   sb?: SupabaseClient;
   provisioner?: ProvisionerFn;
+  /**
+   * 微信 iLink 长轮询管理器。本地启动时构造,测试里可省略 — 省了就不挂
+   * /api/wechat/* 路由,其它端点不受影响。
+   */
+  pollMgr?: PollManager;
 }
 
 export const createApp = (opts: CreateAppOptions = {}): Express => {
@@ -101,6 +110,14 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));
     app.use(buildChatRouter(sbResolved, getCache(), sessionMw));
+    // 微信 iLink 扫码绑定路由 — 仅启动时挂 (测试可省 pollMgr 跳过)
+    if (opts.pollMgr) {
+      app.use(buildWechatBindRouter({
+        dao: makeWechatBindingDao(sbResolved),
+        pollMgr: opts.pollMgr,
+        sessionMw,
+      }));
+    }
   }
   app.use(buildStatusRouter(getCache, sessionMw));
 
@@ -119,10 +136,35 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     console.log('[gateway] loading cache...');
     await cache.loadAll();
-    const app = createApp({ cache, sb });
-    app.listen(config.port, () => {
+
+    // 微信 iLink: PollManager 在 listen 前 startAll,扫 DB 拉所有 is_active=true 绑定起循环
+    const wechatDao = makeWechatBindingDao(sb);
+    const pollMgr = new PollManager({
+      dao: wechatDao,
+      onMessageFor: makeHandleInbound({ dao: wechatDao, sb, cache }),
+    });
+    await pollMgr.startAll();
+
+    const app = createApp({ cache, sb, pollMgr });
+    const server = app.listen(config.port, () => {
       console.log(`[gateway] listening on :${config.port}`);
     });
+
+    // 优雅停机: 先停 PollManager (避免停机过程中还在拉新消息) 再关 HTTP server
+    const shutdown = (signal: string) => {
+      void (async () => {
+        console.log(`[gateway] ${signal} received, shutting down...`);
+        await pollMgr.stopAll();
+        server.close(() => {
+          console.log('[gateway] server closed');
+          process.exit(0);
+        });
+        // 5s 兜底,避免 server.close 挂死
+        setTimeout(() => process.exit(1), 5000).unref();
+      })();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   })().catch((err) => {
     console.error('[gateway] startup failed:', err);
     process.exit(1);
