@@ -34,11 +34,14 @@ export const buildChatRouter = (
     }
 
     // 3. 调容器同步 /chat,等结果
-    const sessionId = `web:${thread_id}`;
+    //    session_id 用 thread.source 拼前缀 (web:/wechat:),跟入站方 (inbound-handler)
+    //    保持一致,否则 web 与 wechat 同 thread 在 hermes 里是两条独立对话。
+    const threadSource = (thread as { source: string }).source;
+    const sessionId = `${threadSource}:${thread_id}`;
     const cResp = await fetch(`${mapping.container_url}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId, source: 'web' }),
+      body: JSON.stringify({ message, session_id: sessionId, source: threadSource }),
     });
     if (!cResp.ok) {
       return res.status(502).json({ error: `container returned ${cResp.status}` });
@@ -67,7 +70,10 @@ export const buildChatRouter = (
       return res.status(503).json({ error: 'assistant not ready' });
     }
 
-    const url = `${mapping.container_url}/history?session_id=${encodeURIComponent(`web:${threadId}`)}`;
+    // session_id 跟写入侧拼一致 (POST /api/chat 和 inbound-handler 都用 source 前缀)
+    const threadSource = (thread as { source: string }).source;
+    const sessionId = `${threadSource}:${threadId}`;
+    const url = `${mapping.container_url}/history?session_id=${encodeURIComponent(sessionId)}`;
     const cResp = await fetch(url);
     if (!cResp.ok) {
       return res.status(502).json({ error: `container returned ${cResp.status}` });
