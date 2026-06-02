@@ -24,15 +24,23 @@ export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterTyp
     const userId = req.session!.user_id;
     try {
       const { changed } = await deps.entitlements.enable(userId, FEATURE);
+      // Idempotent: 即使 already-active 也强制 re-sync 容器,避免 DB 和容器漂移。
+      // - changed=true: bump token_version (撤销旧 token) + sign 新 token + restart
+      // - changed=false: 不 bump (避免无意撤销并发实例),但仍 sign 当前 token + restart,
+      //   让容器有机会重跑 entrypoint 拉 entitlements + 软链 skill + 上报 observed。
+      let tokenVersion: number;
       if (changed) {
-        const newVersion = await deps.entitlements.bumpTokenVersion(userId);
-        await deps.signTokenAndInject(userId, newVersion);
-        // Fire-and-forget the restart so the API returns fast.
-        // The front-end polls /api/status to know when the container actually came back up.
-        deps.restartContainer(userId).catch((err) => {
-          console.error(`[entitlements] restart failed for ${userId}:`, err);
-        });
+        tokenVersion = await deps.entitlements.bumpTokenVersion(userId);
+      } else {
+        const current = await deps.entitlements.getTokenVersion(userId);
+        tokenVersion = current ?? 0;
       }
+      await deps.signTokenAndInject(userId, tokenVersion);
+      // Fire-and-forget the restart so the API returns fast.
+      // The front-end polls /api/status to know when the container actually came back up.
+      deps.restartContainer(userId).catch((err) => {
+        console.error(`[entitlements] restart failed for ${userId}:`, err);
+      });
       const active = await deps.entitlements.listActive(userId);
       const body: EntitlementChangeResponse = { ok: true, entitlements: active, changed };
       res.json(body);
@@ -45,13 +53,19 @@ export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterTyp
     const userId = req.session!.user_id;
     try {
       const { changed } = await deps.entitlements.disable(userId, FEATURE);
+      // Idempotent: 跟 enable 同理。即使 already-disabled 也 re-sync 容器
+      // (让 entrypoint 重跑,清掉残留的 skill 软链)。
+      let tokenVersion: number;
       if (changed) {
-        const newVersion = await deps.entitlements.bumpTokenVersion(userId);
-        await deps.signTokenAndInject(userId, newVersion);
-        deps.restartContainer(userId).catch((err) => {
-          console.error(`[entitlements] restart failed for ${userId}:`, err);
-        });
+        tokenVersion = await deps.entitlements.bumpTokenVersion(userId);
+      } else {
+        const current = await deps.entitlements.getTokenVersion(userId);
+        tokenVersion = current ?? 0;
       }
+      await deps.signTokenAndInject(userId, tokenVersion);
+      deps.restartContainer(userId).catch((err) => {
+        console.error(`[entitlements] restart failed for ${userId}:`, err);
+      });
       const active = await deps.entitlements.listActive(userId);
       const body: EntitlementChangeResponse = { ok: true, entitlements: active, changed };
       res.json(body);

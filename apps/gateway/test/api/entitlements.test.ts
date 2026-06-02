@@ -18,6 +18,7 @@ function makeApp(deps: {
   bumpTokenVersion: ReturnType<typeof vi.fn>;
   restartContainer: ReturnType<typeof vi.fn>;
   signTokenAndInject: ReturnType<typeof vi.fn>;
+  getTokenVersion?: ReturnType<typeof vi.fn>;
 }) {
   const app = express();
   app.use(express.json());
@@ -26,7 +27,7 @@ function makeApp(deps: {
     entitlements: {
       enable: deps.enable, disable: deps.disable, listActive: deps.listActive,
       bumpTokenVersion: deps.bumpTokenVersion,
-      getTokenVersion: vi.fn(),
+      getTokenVersion: deps.getTokenVersion ?? vi.fn().mockResolvedValue(0),
     } as any,
     restartContainer: deps.restartContainer,
     signTokenAndInject: deps.signTokenAndInject,
@@ -58,22 +59,27 @@ describe('POST /api/entitlements/cloud/enable', () => {
     expect(restartContainer).toHaveBeenCalledWith(USER_ID);
   });
 
-  it('idempotent: already enabled → no bump / no restart', async () => {
+  it('idempotent: already enabled → no bump, but still re-sign + restart for resync', async () => {
     const enable = vi.fn().mockResolvedValue({ changed: false });
     const listActive = vi.fn().mockResolvedValue(['cloud']);
     const bumpTokenVersion = vi.fn();
-    const restartContainer = vi.fn();
+    const getTokenVersion = vi.fn().mockResolvedValue(3);   // current version
+    const restartContainer = vi.fn().mockResolvedValue(undefined);
+    const signTokenAndInject = vi.fn().mockResolvedValue(undefined);
 
     const app = makeApp({
-      enable, disable: vi.fn(), listActive, bumpTokenVersion,
-      restartContainer, signTokenAndInject: vi.fn(),
+      enable, disable: vi.fn(), listActive, bumpTokenVersion, getTokenVersion,
+      restartContainer, signTokenAndInject,
     });
     const res = await request(app).post('/api/entitlements/cloud/enable');
 
     expect(res.status).toBe(200);
     expect(res.body.changed).toBe(false);
+    // 不 bump (避免无意撤销旧 token)
     expect(bumpTokenVersion).not.toHaveBeenCalled();
-    expect(restartContainer).not.toHaveBeenCalled();
+    // 但仍然 sign + restart 让容器有机会重新同步 (resync)
+    expect(signTokenAndInject).toHaveBeenCalledWith(USER_ID, 3);   // 用 current token_version
+    expect(restartContainer).toHaveBeenCalledWith(USER_ID);
   });
 });
 
