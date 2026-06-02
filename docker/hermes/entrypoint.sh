@@ -68,6 +68,10 @@ if [ -z "$LAIFU_USER_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
   LAIFU_USER_TOKEN=$(cat "$TOKEN_FILE")
   echo "[entrypoint] loaded LAIFU_USER_TOKEN from $TOKEN_FILE"
 fi
+# export 让 server.py / hermes / cloud-publish 等子进程都拿到 (line 68 之前是
+# shell-only 变量,subprocess 继承不到)
+export LAIFU_USER_TOKEN
+export GATEWAY_BASE_URL
 
 if [ -z "$LAIFU_USER_TOKEN" ] || [ -z "$GATEWAY_BASE_URL" ]; then
   echo "[entrypoint] WARN: LAIFU_USER_TOKEN or GATEWAY_BASE_URL not set — skipping entitlement sync" >&2
