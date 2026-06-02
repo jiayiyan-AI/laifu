@@ -61,6 +61,14 @@ if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
 fi
 
 # ============ Step 5: LAIFU_USER_TOKEN 续签 (如果距 exp <7d) ============
+# Fallback: prod (Azure) gets LAIFU_USER_TOKEN via env. Dev (docker restart) reuses
+# the original env from docker run, which won't have a freshly-injected token. In
+# both cases, if a token file exists on the persistent home volume, prefer it.
+if [ -z "$LAIFU_USER_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+  LAIFU_USER_TOKEN=$(cat "$TOKEN_FILE")
+  echo "[entrypoint] loaded LAIFU_USER_TOKEN from $TOKEN_FILE"
+fi
+
 if [ -z "$LAIFU_USER_TOKEN" ] || [ -z "$GATEWAY_BASE_URL" ]; then
   echo "[entrypoint] WARN: LAIFU_USER_TOKEN or GATEWAY_BASE_URL not set — skipping entitlement sync" >&2
   exec "$@"
