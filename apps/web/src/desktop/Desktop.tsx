@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { Menubar } from './Menubar.js';
@@ -35,6 +35,9 @@ export const Desktop = () => {
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
 
+  const openApp = (id: AppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
+  const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
+
   useEffect(() => {
     void (async () => {
       try {
@@ -46,8 +49,16 @@ export const Desktop = () => {
     })();
   }, []);
 
-  const openApp = (id: AppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
-  const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
+  const cloudObservedRef = useRef(observed.includes('cloud'));
+
+  useEffect(() => {
+    const had = cloudObservedRef.current;
+    const has = observed.includes('cloud');
+    if (!had && has) {
+      openApp('files');
+    }
+    cloudObservedRef.current = has;
+  }, [observed]);
 
   if (ready === null) {
     return <div className="dim" style={{ padding: 24 }}>加载中…</div>;
