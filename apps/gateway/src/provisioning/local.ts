@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
 import type { ContainerMapping } from '@lingxi/shared';
+import { signLaifuUserToken } from '../lib/gateway-token.js';
+import { config } from '../config.js';
 
 const STEPS = [
   { step: '正在创建账户与订单', pct: 5 },
@@ -57,4 +59,20 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
     cache.delete(userId);
     console.error(`[local-provisioning] failed for ${userId}:`, msg);
   }
+};
+
+export const signTokenAndInjectLocal = async (
+  userId: string,
+  tokenVersion: number,
+): Promise<void> => {
+  const token = signLaifuUserToken({
+    userId, tokenVersion, secret: config.auth.gatewaySecret,
+  });
+  console.log(`[provisioning/local] would inject LAIFU_USER_TOKEN for ${userId} (version=${tokenVersion}, len=${token.length})`);
+  // P1 不做真注入 — local 容器需要手动重启,token 通过 /api/me/entitlements + /api/auth/refresh-token 流程自然刷新。
+};
+
+export const restartContainerAppLocal = async (userId: string): Promise<void> => {
+  console.log(`[provisioning/local] would restart container for ${userId}`);
+  // dev 流程靠 pnpm dev:hermes,无法远程触发重启。开发者手动重启。
 };
