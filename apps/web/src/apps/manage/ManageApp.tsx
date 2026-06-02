@@ -1,6 +1,7 @@
 import { useAuth } from '../../auth/AuthContext.js';
 import { IconSpark, IconGlobe, IconFile, IconMessage, IconFolder } from '../../lib/icons.js';
 import { BuyCloudButton } from './BuyCloudButton.js';
+import { DisableCloudButton } from './DisableCloudButton.js';
 import { useEntitlements } from '../../lib/entitlements-context.js';
 
 const caps = [
@@ -50,11 +51,20 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
             </div>
           ))}
           {cloudOwned && (
-            <div key="cloud" style={{ padding: 14, border: '1px solid var(--accent)', background: 'var(--accent-weak2)', borderRadius: 12 }}>
-              <IconFolder size={22} color="var(--accent)" />
-              <div style={{ fontWeight: 600, marginTop: 10 }}>云盘</div>
-              <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>已装备</div>
-            </div>
+            <DisableCloudButton trigger={(open) => (
+              <div key="cloud" style={{ position: 'relative', padding: 14, border: '1px solid var(--accent)', background: 'var(--accent-weak2)', borderRadius: 12 }}>
+                <button
+                  onClick={open}
+                  title="退订云盘"
+                  style={{ position: 'absolute', top: 6, right: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--muted)', fontSize: 14 }}
+                >
+                  ✕
+                </button>
+                <IconFolder size={22} color="var(--accent)" />
+                <div style={{ fontWeight: 600, marginTop: 10 }}>云盘</div>
+                <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>已装备</div>
+              </div>
+            )} />
           )}
         </div>
 
