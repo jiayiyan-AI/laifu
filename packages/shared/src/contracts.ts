@@ -39,10 +39,10 @@ export interface StatusResponse {
   provisioning_step: string | null;
   progress_pct: number;
   error_message: string | null;
-  // P1 加: entitlement 闭环字段。Task 2 暂用 optional；Task 9 status.ts 返回它们后改为必填。
-  entitlements_desired?: string[];    // user_entitlements 表里 active 的 feature
-  entitlements_observed?: string[];   // container_observed_state 里容器最后报告的
-  container_token_version?: number;   // 当前 users.token_version（前端用来比对 observed）
+  // P1 字段 (Task 11 起必填；status 路由始终返回，默认 []/0)
+  entitlements_desired: string[];     // user_entitlements 表里 active 的 feature
+  entitlements_observed: string[];    // container_observed_state 里容器最后报告的
+  container_token_version: number;    // 当前 users.token_version（前端用来比对 observed）
 }
 
 // === Auth 契约 ===

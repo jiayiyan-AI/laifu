@@ -9,13 +9,22 @@ import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
 import { buildThreadsRouter } from './api/threads.js';
 import { buildChatRouter } from './api/chat.js';
+import { buildEntitlementsRouter } from './api/entitlements.js';
+import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
+import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { ContainerMappingCache } from './db/cache.js';
+import { makeEntitlementsDao } from './db/entitlements-dao.js';
+import { makeObservedStateDao } from './db/observed-state-dao.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
 import { provisionContainer } from './provisioning/manager.js';
 import { provisionContainerLocal } from './provisioning/local.js';
 import { recoverProvisioning } from './provisioning/recovery.js';
 import * as azureModule from './provisioning/azure.js';
+import {
+  signTokenAndInjectLocal,
+  restartContainerAppLocal,
+} from './provisioning/local.js';
 import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
@@ -97,6 +106,18 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   }
 
   if (sbResolved) {
+    // P1 DAOs (instantiated once per app)
+    const entitlementsDao = makeEntitlementsDao(sbResolved);
+    const observedStateDao = makeObservedStateDao(sbResolved);
+
+    // P1 provisioner-aware helpers (real Azure or local mock)
+    const signAndInject = config.provisioner === 'azure'
+      ? azureModule.signTokenAndInjectAzure
+      : signTokenAndInjectLocal;
+    const restartContainer = config.provisioner === 'azure'
+      ? azureModule.restartContainerAppAzure
+      : restartContainerAppLocal;
+
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
       sb: sbResolved,
@@ -125,8 +146,31 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         sessionMw,
       }));
     }
+
+    // P1 routes (entitlements + container-side + token refresh)
+    app.use(buildEntitlementsRouter({
+      entitlements: entitlementsDao,
+      restartContainer,
+      signTokenAndInject: signAndInject,
+      sessionMw,
+    }));
+
+    app.use(buildMeEntitlementsRouter({
+      secret: config.auth.gatewaySecret,
+      entitlements: entitlementsDao,
+      observedState: observedStateDao,
+    }));
+
+    app.use(buildAuthRefreshRouter({
+      secret: config.auth.gatewaySecret,
+      getTokenVersion: (uid) => entitlementsDao.getTokenVersion(uid),
+    }));
+
+    app.use(buildStatusRouter(getCache, sessionMw, entitlementsDao, observedStateDao));
+  } else {
+    // Supabase unavailable (test/healthz-only): mount status without P1 DAO enrichment
+    app.use(buildStatusRouter(getCache, sessionMw));
   }
-  app.use(buildStatusRouter(getCache, sessionMw));
 
   return app;
 };
