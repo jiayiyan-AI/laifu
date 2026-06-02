@@ -25,9 +25,21 @@ describe('FilesApp', () => {
       }],
     });
     render(<FilesApp />);
-    await waitFor(() => expect(screen.queryByText('加载中…')).not.toBeInTheDocument());
-    expect(screen.getByText(/reports/)).toBeInTheDocument();
+    // 初始即渲染（空），载完后无缝替换为列表
+    await waitFor(() => expect(screen.getByText(/reports/)).toBeInTheDocument());
     expect(screen.getByText(/Hello/)).toBeInTheDocument();
+  });
+
+  it('does not show a "加载中" placeholder (renders empty list first, then content)', async () => {
+    let resolveList: (value: any) => void;
+    const pending = new Promise<any>((r) => { resolveList = r; });
+    vi.mocked(api.cloudList).mockReturnValue(pending);
+    render(<FilesApp />);
+    // 即使 cloudList 还 pending,也不应出现"加载中"字样
+    expect(screen.queryByText(/加载中/)).not.toBeInTheDocument();
+    // 空状态文案应该立刻可见
+    expect(screen.getByText(/还没有文件/)).toBeInTheDocument();
+    resolveList!({ folders: [], files: [] });
   });
 
   it('shows error and retry button when load fails', async () => {

@@ -9,11 +9,11 @@ export const FilesApp = () => {
   const [currentPath, setCurrentPath] = useState('');
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // 不显示"加载中"提示 —— 直接显示当前状态（空 → 空状态文案；有内容 → 列表）。
+  // 加载完成会无缝刷新内容,中途网络抖动只是稍微延迟一下,UI 不闪。
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (path: string) => {
-    setLoading(true);
     setError(null);
     try {
       const data = await api.cloudList(path);
@@ -30,8 +30,6 @@ export const FilesApp = () => {
       setError(err instanceof Error ? err.message : String(err));
       setFolders([]);
       setFiles([]);
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -49,11 +47,7 @@ export const FilesApp = () => {
       <PathBar currentPath={currentPath} onNavigate={navigate} onRefresh={refresh} />
       <div style={{ flex: 1, display: 'flex' }}>
         <Sidebar onHome={() => setCurrentPath('')} />
-        {loading ? (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
-            加载中…
-          </div>
-        ) : error ? (
+        {error ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
             <div style={{ color: 'var(--err, #c00)' }}>加载失败：{error}</div>
             <button className="btn" onClick={refresh}>重试</button>
