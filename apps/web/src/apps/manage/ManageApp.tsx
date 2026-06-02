@@ -1,5 +1,6 @@
 import { useAuth } from '../../auth/AuthContext.js';
 import { IconSpark, IconGlobe, IconFile, IconMessage } from '../../lib/icons.js';
+import { EnableCloudButton } from './EnableCloudButton.js';
 
 const caps = [
   { id: 'web',    name: '联网搜索', icon: <IconGlobe size={22} color="var(--accent)" /> },
@@ -45,6 +46,20 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
               <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>已装备</div>
             </div>
           ))}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '24px 0 12px' }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>功能 / 订阅</div>
+        </div>
+        <div className="card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span style={{ fontSize: 26 }}>☁️</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600 }}>云盘</div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              启用后助理可发布文件，桌面将出现"文件"应用
+            </div>
+          </div>
+          <EnableCloudButton onReady={() => { /* Desktop will react via context */ }} />
         </div>
       </div>
     </div>
