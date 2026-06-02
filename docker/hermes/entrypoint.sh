@@ -109,10 +109,21 @@ if [ "$SECS_LEFT" -lt $(( 7 * 86400 )) ]; then
 fi
 
 # ============ Step 6: 拉 desired entitlements 并软链 skills ============
-echo "[entrypoint] fetching desired entitlements"
-ENT_JSON=$(curl -fsS -m 10 \
-  -H "Authorization: Bearer $LAIFU_USER_TOKEN" \
-  "$GATEWAY_BASE_URL/api/me/entitlements" 2>/dev/null || echo "")
+# Retry 7 次 (累计 ~21s),应对 dev 模式下 concurrently 同时起 hermes + gateway
+# 但 gateway 还没 ready 的 race condition。
+echo "[entrypoint] fetching desired entitlements (with retries)"
+ENT_JSON=""
+for i in $(seq 1 7); do
+  ENT_JSON=$(curl -fsS -m 5 \
+    -H "Authorization: Bearer $LAIFU_USER_TOKEN" \
+    "$GATEWAY_BASE_URL/api/me/entitlements" 2>/dev/null || echo "")
+  if [ -n "$ENT_JSON" ]; then
+    echo "[entrypoint] gateway reachable on attempt $i"
+    break
+  fi
+  echo "[entrypoint] gateway not ready (attempt $i/7), wait 3s..."
+  sleep 3
+done
 
 if [ -z "$ENT_JSON" ]; then
   echo "[entrypoint] WARN: failed to fetch entitlements — skill sync skipped" >&2

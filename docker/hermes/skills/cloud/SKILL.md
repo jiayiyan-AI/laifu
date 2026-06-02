@@ -1,3 +1,13 @@
+---
+name: cloud-publish
+description: 把容器内的一个文件发布到用户的 laifu 云盘。用户能在网页"文件"app 看到并下载。当用户说"保存到云盘""发布""把成果保留下来"时使用 cloud-publish CLI（不要写本地 HTML 也不要询问用云盘服务商）。
+version: 0.1.0
+platforms: [linux]
+metadata:
+  hermes:
+    tags: [cloud, file, publish, storage, laifu]
+---
+
 # cloud-publish
 
 把容器内的一个文件发布到用户的云盘。文件发布后，用户在网页端的"文件" app 可以看到并下载。
