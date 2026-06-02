@@ -6,3 +6,10 @@ dist/
 .DS_Store
 .vitest/
 coverage/
+
+# Python (cloud-publish skill 本地开发副产物)
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+*.whl
