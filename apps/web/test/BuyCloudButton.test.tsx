@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
-import { EnableCloudButton } from '../src/apps/manage/EnableCloudButton.js';
+import { BuyCloudButton } from '../src/apps/manage/BuyCloudButton.js';
 import { EntitlementsProvider } from '../src/lib/entitlements-context.js';
 
 vi.mock('../src/lib/api.js', () => ({
@@ -17,30 +17,44 @@ function setObserved(observed: string[]) {
   });
 }
 
-describe('EnableCloudButton', () => {
+describe('BuyCloudButton', () => {
   beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); setObserved([]); vi.mocked(api.enableCloud).mockReset(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('shows "启用云盘" when cloud not active', async () => {
+  it('shows "购买并装备" when cloud not active', async () => {
     render(
       <EntitlementsProvider>
-        <EnableCloudButton onReady={vi.fn()} />
+        <BuyCloudButton onReady={vi.fn()} />
       </EntitlementsProvider>
     );
-    await waitFor(() => expect(screen.getByText(/启用云盘/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/购买并装备/)).toBeInTheDocument());
   });
 
-  it('shows "已启用" when cloud is in observed', async () => {
+  it('shows "已装备" when cloud is in observed', async () => {
     setObserved(['cloud']);
     render(
       <EntitlementsProvider>
-        <EnableCloudButton onReady={vi.fn()} />
+        <BuyCloudButton onReady={vi.fn()} />
       </EntitlementsProvider>
     );
-    await waitFor(() => expect(screen.getByText(/已启用/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/已装备/)).toBeInTheDocument());
   });
 
-  it('clicking the button opens Modal in "posting" state then polls', async () => {
+  it('clicking 取消 in confirm modal returns to idle without API call', async () => {
+    render(
+      <EntitlementsProvider>
+        <BuyCloudButton onReady={vi.fn()} />
+      </EntitlementsProvider>
+    );
+    await waitFor(() => expect(screen.getByText(/购买并装备/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/购买并装备/));
+    await waitFor(() => expect(screen.getByText(/确认购买并装备/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/取消/));
+    await waitFor(() => expect(screen.queryByText(/价格: 免费/)).not.toBeInTheDocument());
+    expect(api.enableCloud).not.toHaveBeenCalled();
+  });
+
+  it('clicking the button opens confirm modal then polls after confirming', async () => {
     vi.mocked(api.enableCloud).mockResolvedValue({ ok: true, entitlements: ['cloud'], changed: true });
     vi.mocked(api.status)
       .mockResolvedValueOnce({
@@ -58,13 +72,16 @@ describe('EnableCloudButton', () => {
     const onReady = vi.fn();
     render(
       <EntitlementsProvider>
-        <EnableCloudButton onReady={onReady} />
+        <BuyCloudButton onReady={onReady} />
       </EntitlementsProvider>
     );
-    await waitFor(() => expect(screen.getByText(/启用云盘/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/购买并装备/)).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText(/启用云盘/));
-    await waitFor(() => expect(screen.getByText(/正在启用|启用中|助理重启中|正在记录/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/购买并装备/));   // opens confirm modal
+    await waitFor(() => expect(screen.getByText(/确认购买并装备/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/确认购买并装备/));  // proceed to posting
+
+    await waitFor(() => expect(screen.getByText(/正在记录订单|正在装备到助理/)).toBeInTheDocument());
 
     for (let i = 0; i < 5; i++) {
       await act(async () => { await vi.advanceTimersByTimeAsync(2000); });

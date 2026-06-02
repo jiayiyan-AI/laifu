@@ -11,9 +11,9 @@
 
 1. Open <http://localhost:3000/desktop>
 2. Open "我的助理" (Manage app)
-3. Scroll to "功能 / 订阅" section
-4. Click "☁️ 启用云盘" button
-5. Modal opens — first shows "正在记录权益…", then "助理重启中…"
+3. Scroll to "功能市场" section
+4. Click "购买并装备" button → confirm modal opens showing 云盘 description and "价格: 免费"
+5. Click "确认购买并装备" in the modal → modal transitions to "正在记录订单…", then "正在装备到助理…"
 ### What happens automatically now
 
 After clicking the Enable button, the gateway:
@@ -62,7 +62,7 @@ PGPASSWORD=postgres psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -c \
   "UPDATE container_observed_state SET observed_entitlements='{}' WHERE user_id='$USER_ID';"
 ```
 
-After refreshing the browser, ☁️ Files disappears from Dock and the ManageApp button reverts to "启用云盘".
+After refreshing the browser, ☁️ Files disappears from Dock and the ManageApp "功能市场" section reappears with the "购买并装备" button.
 
 ## Known limitations
 
