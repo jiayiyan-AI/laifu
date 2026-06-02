@@ -25,7 +25,7 @@ FROM python:3.12-slim
 # ============ 系统依赖 ============
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
-    nodejs npm ripgrep sudo \
+    nodejs npm ripgrep sudo jq \
     && rm -rf /var/lib/apt/lists/*
 
 # ============ 创建非 root 用户 ============
@@ -90,6 +90,12 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 COPY --chown=hermes:hermes server.py /app/server.py
+
+# ============ Hermes skills 占位目录 ============
+# P1 阶段为 cloud_publish 留一个能软链的目标 (SKILL.md 占位)。
+# P3 会替换 SKILL.md + 加 cloud_publish CLI 实现。
+RUN mkdir -p /opt/hermes-skills && chown hermes:hermes /opt/hermes-skills
+COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
 
 USER hermes
 
