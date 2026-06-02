@@ -6,3 +6,11 @@ dist/
 .DS_Store
 .vitest/
 coverage/
+dist-deploy
+app-service-deploy/
+deploy.zip
+*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
+apps/web/vitest.config.js
+apps/web/vitest.config.d.ts

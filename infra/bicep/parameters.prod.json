@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "namePrefix": { "value": "lingxi" },
-    "env": { "value": "dev" },
+    "env": { "value": "prod" },
     "location": { "value": "southeastasia" },
     "appServiceSku": { "value": "B1" },
     "hermesImageTag": { "value": "hermes:latest" },
