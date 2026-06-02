@@ -23,7 +23,12 @@
 FROM python:3.12-slim
 
 # ============ 系统依赖 ============
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 替换 apt mirror 到阿里云,绕开国内访问 deb.debian.org 的网络问题
+# (兼容 Debian 12+ 的 deb822 sources 和老格式 /etc/apt/sources.list)
+RUN (sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+     || sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null \
+     || true) \
+ && apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
     nodejs npm ripgrep sudo jq \
     && rm -rf /var/lib/apt/lists/*

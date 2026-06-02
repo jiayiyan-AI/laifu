@@ -72,10 +72,15 @@ trap cleanup EXIT INT TERM
 
 # --rm: 退出自动删
 # --name: 固定名字,方便外部停掉
+# --add-host: 让容器内 host.docker.internal 解析到 host (Linux Docker 没自动设,Mac/Win 自带)
+# -e GATEWAY_BASE_URL: entrypoint 调 /api/me/entitlements 等控制面端点用
+#                       host.docker.internal:9000 = host 上跑的 gateway
 # 把日志直接打到当前 stdout (concurrently 会接收并加前缀)
 exec docker run --rm \
   --name "$CONTAINER_NAME" \
   -p 8080:8080 \
   -v "$HOME_VOL":/home/hermes \
+  --add-host=host.docker.internal:host-gateway \
+  -e GATEWAY_BASE_URL=http://host.docker.internal:9000 \
   --env-file "$ENV_FILE" \
   "$IMAGE"
