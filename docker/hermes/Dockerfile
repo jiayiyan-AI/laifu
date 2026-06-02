@@ -102,8 +102,18 @@ COPY --chown=hermes:hermes server.py /app/server.py
 RUN mkdir -p /opt/hermes-skills && chown hermes:hermes /opt/hermes-skills
 COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
 
-# 装 cloud-publish Hermes skill 的 Python CLI（以 root 身份安装到系统路径）
-RUN pip install --no-cache-dir -e /opt/hermes-skills/cloud/
+# 装 cloud-publish Hermes skill 的 Python CLI
+# ⚠️ 不能装到 /home/hermes/.local/ — 那里 dev 模式被 -v host volume 整盘 mount 覆盖。
+# 装到 hermes-agent venv (/opt/hermes-agent/venv/),在 /opt 下不会被 volume 影响,
+# 然后软链到 /usr/local/bin/ 让任何 PATH 配置都能找到。
+# 走清华 pypi mirror 避免国内访问 pypi.org 慢/超时。
+# unset PIP_USER (line 77 env 设了 PIP_USER=1, 但 user 模式装到 /home/hermes/.local/
+# 会被 dev volume 覆盖)。这里强制装到系统 /usr/local 路径,在 /opt 同样不会被
+# volume mount mask。
+RUN unset PIP_USER PYTHONUSERBASE && pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -e /opt/hermes-skills/cloud/
 
 USER hermes
 
