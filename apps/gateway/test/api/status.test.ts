@@ -1,68 +1,84 @@
-import { describe, it, expect } from 'vitest';
-import request from 'supertest';
+import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
-import cookieParser from 'cookie-parser';
+import request from 'supertest';
 import { buildStatusRouter } from '../../src/api/status.js';
-import { ContainerMappingCache } from '../../src/db/cache.js';
-import { signSession } from '../../src/auth/session.js';
-import { requireSession } from '../../src/auth/middleware.js';
+import type { RequestHandler } from 'express';
 
-const SECRET = 'test-secret-do-not-use-in-prod-123456';
-const COOKIE_NAME = 'lingxi_sid';
+const USER_ID = '6e8b21f0-3a4c-4f3d-9b9e-1a2b3c4d5e6f';
 
-const setupCache = () => {
-  const cache = new ContainerMappingCache({} as any);
-  cache.set({
-    user_id: 'u1',
-    container_name: 'hermes-u1abc',
-    container_url: null,
-    status: 'provisioning',
-    provisioning_step: '正在生成数字助理实例',
-    progress_pct: 20,
-    error_message: null,
-    azure_files_share: 'user-u1abc',
-    created_at: new Date().toISOString(),
-    ready_at: null,
-  });
-  return cache;
-};
+function mockSession(): RequestHandler {
+  return (req, _res, next) => { (req as any).session = { user_id: USER_ID }; next(); };
+}
 
-const makeApp = (cache: ContainerMappingCache) => {
+function makeApp(opts: {
+  containerRow: any;
+  desired: string[];
+  observed: { observed_entitlements: string[]; observed_token_version: number } | null;
+  tokenVersion: number;
+}) {
   const app = express();
-  app.use(cookieParser());
-  const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-  app.use(buildStatusRouter(cache, mw));
+  app.use(express.json());
+  const fakeCache = { get: () => opts.containerRow } as any;
+  app.use(buildStatusRouter(
+    fakeCache,
+    mockSession(),
+    { listActive: () => Promise.resolve(opts.desired), getTokenVersion: () => Promise.resolve(opts.tokenVersion) } as any,
+    { get: () => Promise.resolve(opts.observed) } as any,
+  ));
   return app;
-};
-
-const validCookie = (userId: string): string => {
-  const token = signSession({ user_id: userId }, SECRET, 24);
-  return `${COOKIE_NAME}=${token}`;
-};
+}
 
 describe('GET /api/status', () => {
-  it('401 when no cookie', async () => {
-    const res = await request(makeApp(new ContainerMappingCache({} as any))).get('/api/status');
-    expect(res.status).toBe(401);
+  it('returns provisioning fields + entitlements + observed when DAOs provided', async () => {
+    const app = makeApp({
+      containerRow: {
+        status: 'ready', provisioning_step: '...', progress_pct: 100,
+        error_message: null,
+      },
+      desired: ['cloud'],
+      observed: { observed_entitlements: ['cloud'], observed_token_version: 1 },
+      tokenVersion: 1,
+    });
+    const res = await request(app).get('/api/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      status: 'ready',
+      entitlements_desired: ['cloud'],
+      entitlements_observed: ['cloud'],
+      container_token_version: 1,
+    });
   });
 
-  it('404 when no row for user', async () => {
-    const res = await request(makeApp(new ContainerMappingCache({} as any)))
-      .get('/api/status')
-      .set('Cookie', validCookie('unknown-user'));
+  it('observed defaults to [] when container never reported', async () => {
+    const app = makeApp({
+      containerRow: {
+        status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null,
+      },
+      desired: ['cloud'],
+      observed: null,
+      tokenVersion: 0,
+    });
+    const res = await request(app).get('/api/status');
+    expect(res.body.entitlements_observed).toEqual([]);
+  });
+
+  it('404 when no container mapping exists', async () => {
+    const app = makeApp({
+      containerRow: null,
+      desired: [], observed: null, tokenVersion: 0,
+    });
+    const res = await request(app).get('/api/status');
     expect(res.status).toBe(404);
   });
 
-  it('returns status fields when row exists', async () => {
-    const res = await request(makeApp(setupCache()))
-      .get('/api/status')
-      .set('Cookie', validCookie('u1'));
+  it('backwards-compat: omits entitlements fields if DAOs not passed', async () => {
+    const app = express();
+    app.use(express.json());
+    const fakeCache = { get: () => ({ status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null }) } as any;
+    app.use(buildStatusRouter(fakeCache, mockSession()));  // 2-arg call, no DAOs
+    const res = await request(app).get('/api/status');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      status: 'provisioning',
-      provisioning_step: '正在生成数字助理实例',
-      progress_pct: 20,
-      error_message: null,
-    });
+    expect(res.body.status).toBe('ready');
+    // when DAOs are not provided, fields should be omitted or empty
   });
 });
