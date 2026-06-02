@@ -1,5 +1,10 @@
 import { createHmac } from 'node:crypto';
-import type { UserDelegationKey } from '@azure/storage-blob';
+import {
+  BlobSASPermissions,
+  SASProtocol,
+  generateBlobSASQueryParameters,
+  type UserDelegationKey,
+} from '@azure/storage-blob';
 
 export interface DirectoryWriteSasInput {
   account: string;       // storage account name, e.g. "laifudev"
@@ -157,5 +162,63 @@ export function buildDirectoryWriteSas(input: DirectoryWriteSasInput): Directory
     sasToken,
     expiresAt: expiresOn,
     prefix: `${input.userId}/`,
+  };
+}
+
+// === Read SAS (sr=b, blob-scoped) — uses Azure SDK directly, no hand-signing needed ===
+
+export interface ReadBlobSasInput {
+  account: string;
+  container: string;
+  blobName: string;             // full blob name (including <user_id>/<virtual_path>)
+  udk: UserDelegationKey;
+  ttlSeconds: number;
+  contentDisposition?: string;  // optional: SAS rscd parameter (e.g. 'attachment; filename*=UTF-8''...')
+}
+
+export interface ReadBlobSasOutput {
+  sasToken: string;
+  expiresAt: Date;
+}
+
+/**
+ * Build a blob-scoped read SAS using the Azure SDK. Unlike buildDirectoryWriteSas
+ * (which hand-signs because SDK doesn't support sr=d), the read case uses sr=b
+ * which is natively supported. The SDK handles the canonicalized resource + sig.
+ */
+export function buildReadBlobSas(input: ReadBlobSasInput): ReadBlobSasOutput {
+  const startsOn = new Date(Date.now() - 60 * 1000);
+  const expiresOn = new Date(Date.now() + input.ttlSeconds * 1000);
+
+  const permissions = BlobSASPermissions.from({ read: true });
+
+  // The SDK's internal truncatedISO8061Date helper calls .toISOString(), so it requires
+  // signedStartsOn / signedExpiresOn to be Date objects. The Azure service returns Dates,
+  // but the generated model type declares them as string — normalise to Date at runtime.
+  const toDate = (v: Date | string): Date => (v instanceof Date ? v : new Date(v));
+  const normalizedUdk: UserDelegationKey = {
+    ...input.udk,
+    signedStartsOn: toDate(input.udk.signedStartsOn),
+    signedExpiresOn: toDate(input.udk.signedExpiresOn),
+  };
+
+  const sasQueryParams = generateBlobSASQueryParameters(
+    {
+      containerName: input.container,
+      blobName: input.blobName,
+      permissions,
+      protocol: SASProtocol.Https,
+      startsOn,
+      expiresOn,
+      version: '2020-02-10',
+      contentDisposition: input.contentDisposition,
+    },
+    normalizedUdk,
+    input.account,
+  );
+
+  return {
+    sasToken: sasQueryParams.toString(),
+    expiresAt: expiresOn,
   };
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
 import type { UserDelegationKey } from '@azure/storage-blob';
-import { buildDirectoryWriteSas } from '../../src/lib/sas-builder.js';
+import { buildDirectoryWriteSas, buildReadBlobSas } from '../../src/lib/sas-builder.js';
 
 const ACCOUNT = 'laifudev';
 const CONTAINER = 'laifu-cloud';
@@ -223,5 +223,77 @@ describe('buildDirectoryWriteSas', () => {
     it('reject invalid container name (starts with -)', () => {
       expect(() => buildDirectoryWriteSas({ ...validInput, container: '-foo' })).toThrow(/container/);
     });
+  });
+});
+
+describe('buildReadBlobSas', () => {
+  const ACCOUNT = 'stlingxidev';
+  const CONTAINER = 'laifu-cloud';
+  const BLOB_NAME = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/reports/q2.pdf';
+
+  it('generates a blob-scoped read SAS (sr=b, sp=r)', () => {
+    const { sasToken } = buildReadBlobSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      blobName: BLOB_NAME,
+      udk: fakeUdk(),
+      ttlSeconds: 300,
+    });
+    const params = parseSas(sasToken);
+    expect(params['sr']).toBe('b');
+    expect(params['sp']).toBe('r');
+  });
+
+  it('includes spr=https and a sig', () => {
+    const { sasToken } = buildReadBlobSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      blobName: BLOB_NAME,
+      udk: fakeUdk(),
+      ttlSeconds: 300,
+    });
+    const params = parseSas(sasToken);
+    expect(params['spr']).toBe('https');
+    expect(params['sig']).toBeDefined();
+  });
+
+  it('omits rscd when contentDisposition not specified', () => {
+    const { sasToken } = buildReadBlobSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      blobName: BLOB_NAME,
+      udk: fakeUdk(),
+      ttlSeconds: 300,
+    });
+    const params = parseSas(sasToken);
+    expect(params['rscd']).toBeUndefined();
+  });
+
+  it('includes rscd when contentDisposition specified', () => {
+    const { sasToken } = buildReadBlobSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      blobName: BLOB_NAME,
+      udk: fakeUdk(),
+      ttlSeconds: 300,
+      contentDisposition: 'attachment; filename="x.pdf"',
+    });
+    const params = parseSas(sasToken);
+    expect(params['rscd']).toBe('attachment; filename="x.pdf"');
+  });
+
+  it('returns expiresAt approximately now + ttlSeconds', () => {
+    const before = Date.now();
+    const { expiresAt } = buildReadBlobSas({
+      account: ACCOUNT,
+      container: CONTAINER,
+      blobName: BLOB_NAME,
+      udk: fakeUdk(),
+      ttlSeconds: 300,
+    });
+    const after = Date.now();
+    const ms = expiresAt.getTime();
+    expect(ms).toBeGreaterThanOrEqual(before + 300_000 - 5000);
+    expect(ms).toBeLessThanOrEqual(after + 300_000 + 5000);
   });
 });
