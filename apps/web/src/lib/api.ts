@@ -1,5 +1,7 @@
 import type {
   AuthMeResponse,
+  CloudListResponse,
+  EntitlementChangeResponse,
   PurchaseResponse,
   StatusResponse,
   ThreadCreateRequest,
@@ -89,3 +91,27 @@ export const getMyWechatBind = (): Promise<WechatBindingInfoResponse> =>
 
 export const unbindWechat = (): Promise<WechatUnbindResponse> =>
   json('/api/wechat/bind', { method: 'DELETE' });
+
+// === Cloud Drive (P4+P5) ===
+
+export const enableCloud = (): Promise<EntitlementChangeResponse> =>
+  json('/api/entitlements/cloud/enable', { method: 'POST' });
+
+export const disableCloud = (): Promise<EntitlementChangeResponse> =>
+  json('/api/entitlements/cloud/disable', { method: 'POST' });
+
+export const cloudList = (prefix = ''): Promise<CloudListResponse> => {
+  const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+  return json(`/api/cloud/list${q}`);
+};
+
+/**
+ * 构造下载 URL（不发请求）。前端用 `window.open(url)` 让浏览器跟 302 走到 Blob。
+ *  dispose='inline' (默认): SAS 不带 rscd，浏览器按 content-type 决定显示/下载
+ *  dispose='attachment': SAS 带 rscd，强制下载并用 metadata.title 当文件名
+ */
+export const cloudDownloadUrl = (path: string, dispose: 'inline' | 'attachment' = 'inline'): string => {
+  const params = new URLSearchParams({ path });
+  if (dispose === 'attachment') params.set('dispose', 'attachment');
+  return `/api/cloud/download?${params.toString()}`;
+};
