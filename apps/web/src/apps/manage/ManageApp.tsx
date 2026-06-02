@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext.js';
 import { IconSpark, IconGlobe, IconFile, IconMessage, IconFolder } from '../../lib/icons.js';
 import { BuyCloudButton } from './BuyCloudButton.js';
 import { DisableCloudButton } from './DisableCloudButton.js';
 import { useEntitlements } from '../../lib/entitlements-context.js';
+import { getMyWechatBind } from '../../lib/api.js';
 
 const caps = [
   { id: 'web',    name: '联网搜索', icon: <IconGlobe size={22} color="var(--accent)" /> },
@@ -15,6 +17,20 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
   const nick = auth.status === 'authenticated' ? auth.user.nickname ?? '未命名' : '';
   const ent = useEntitlements();
   const cloudOwned = ent.observed.includes('cloud');
+
+  // 拉一下 wechat 绑定状态决定按钮文案 (绑定 / 解绑)
+  // null = 还没拿到结果 → 不显示文案,避免闪烁
+  const [wechatBound, setWechatBound] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) setWechatBound(false);   // 5s 兜底 → 默认未绑
+    }, 5000);
+    void getMyWechatBind()
+      .then((info) => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(info.bound); } })
+      .catch(() => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(false); } });
+    return () => { cancelled = true; window.clearTimeout(timeoutId); };
+  }, []);
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 22 }}>
@@ -32,10 +48,12 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
           </div>
           <button
             className="btn btn-primary"
-            style={{ background: '#16a34a' }}
+            style={{ background: wechatBound ? '#6b7280' : '#16a34a' }}
             onClick={onOpenWechat}
+            title={wechatBound ? '查看绑定 / 解绑' : '通过扫码绑定微信'}
           >
-            <IconMessage size={15} />绑定微信
+            <IconMessage size={15} />
+            {wechatBound === null ? '微信…' : wechatBound ? '解绑微信' : '绑定微信'}
           </button>
         </div>
 
