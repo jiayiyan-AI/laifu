@@ -12,6 +12,8 @@ import { buildChatRouter } from './api/chat.js';
 import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
+import { buildCloudRouter } from './api/cloud.js';
+import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { makeEntitlementsDao } from './db/entitlements-dao.js';
 import { makeObservedStateDao } from './db/observed-state-dao.js';
@@ -165,6 +167,38 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       secret: config.auth.gatewaySecret,
       getTokenVersion: (uid) => entitlementsDao.getTokenVersion(uid),
     }));
+
+    // P2: cloud data plane (SAS / list / download)
+    // Only wire when cloud config is populated (otherwise local-dev without Azure creds would crash).
+    if (config.azure.storageAccount && config.cloud.blobEndpoint) {
+      const blobServiceClient = getBlobServiceClient({
+        accountName: config.azure.storageAccount,
+        blobEndpoint: config.cloud.blobEndpoint,
+      });
+      const udkCache = getUserDelegationKeyCache({
+        accountName: config.azure.storageAccount,
+        blobEndpoint: config.cloud.blobEndpoint,
+        udkLifetimeSeconds: config.cloud.udkLifetimeSeconds,
+      });
+
+      app.use(buildCloudRouter({
+        secret: config.auth.gatewaySecret,
+        config: {
+          accountName: config.azure.storageAccount,
+          container: config.cloud.container,
+          blobEndpoint: config.cloud.blobEndpoint,
+          writeSasTtlSeconds: config.cloud.writeSasTtlSeconds,
+          readSasTtlSeconds: config.cloud.readSasTtlSeconds,
+        },
+        entitlements: entitlementsDao,
+        udkCache,
+        blobServiceClient,
+        sessionMw,
+      }));
+      console.log('[gateway] cloud routes mounted (account=' + config.azure.storageAccount + ')');
+    } else {
+      console.log('[gateway] cloud routes skipped (AZURE_STORAGE_ACCOUNT not set)');
+    }
 
     app.use(buildStatusRouter(getCache, sessionMw, entitlementsDao, observedStateDao));
   } else {
