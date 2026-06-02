@@ -6,10 +6,12 @@ import { Dock, type DockAppId } from './Dock.js';
 import { Window } from './Window.js';
 import { Onboarding } from '../onboarding/Onboarding.js';
 import * as api from '../lib/api.js';
-import { IconSpark, IconGrid, IconMessage } from '../lib/icons.js';
+import { IconSpark, IconGrid, IconMessage, IconFolder } from '../lib/icons.js';
 import { ChatApp } from '../apps/chat/ChatApp.js';
 import { ManageApp } from '../apps/manage/ManageApp.js';
 import { WechatApp } from '../apps/wechat/WechatApp.js';
+import { FilesApp } from '../apps/files/FilesApp.js';
+import { useEntitlements } from '../lib/entitlements-context.js';
 
 type AppId = DockAppId | 'wechat';
 
@@ -17,6 +19,7 @@ const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
   if (id === 'chat') return <ChatApp />;
   if (id === 'manage') return <ManageApp onOpenWechat={() => openApp('wechat')} />;
   if (id === 'wechat') return <WechatApp />;
+  if (id === 'files') return <FilesApp />;
   return null;
 };
 
@@ -24,9 +27,11 @@ const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: numb
   chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
   manage: { title: '我的助理', icon: <IconGrid size={14} />,    w: 780, h: 580 },
   wechat: { title: '微信绑定', icon: <IconMessage size={14} />, w: 560, h: 440 },
+  files:  { title: '文件',     icon: <IconFolder size={14} />,  w: 900, h: 600 },
 };
 
 export const Desktop = () => {
+  const { observed } = useEntitlements();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
 
@@ -76,7 +81,7 @@ export const Desktop = () => {
           );
         })}
       </div>
-      <Dock onOpen={openApp} openApps={new Set(openApps)} />
+      <Dock onOpen={openApp} openApps={new Set(openApps)} entitlements={observed} />
     </div>
   );
 };
