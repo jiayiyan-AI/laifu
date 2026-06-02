@@ -1,6 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response, type RequestHandler } from 'express';
 import { makeContainerTokenMiddleware } from '../auth/container-token.js';
-import { buildDirectoryWriteSas } from '../lib/sas-builder.js';
+import { buildDirectoryWriteSas, buildReadBlobSas } from '../lib/sas-builder.js';
+import { buildContentDisposition } from '../lib/content-disposition.js';
 import type { EntitlementsDao } from '../db/entitlements-dao.js';
 import type { UserDelegationKeyCache } from '../lib/user-delegation-key-cache.js';
 import { validateVirtualPath } from '@lingxi/shared';
@@ -129,6 +130,66 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     } catch (err) {
       res.status(502).json({ error: 'blob list failed', message: String(err) });
     }
+  });
+
+  router.get('/api/cloud/download', deps.sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+
+    const active = await deps.entitlements.listActive(userId);
+    if (!active.includes(FEATURE)) {
+      res.status(403).json({ error: 'cloud entitlement not active' });
+      return;
+    }
+
+    const pathParam = req.query['path'] as string | undefined;
+    if (!pathParam) {
+      res.status(400).json({ error: 'path query parameter required' });
+      return;
+    }
+
+    const v = validateVirtualPath(pathParam);
+    if (!v.ok) {
+      res.status(400).json({ error: `invalid path: ${v.error}` });
+      return;
+    }
+
+    const dispose = (req.query['dispose'] as string) === 'attachment' ? 'attachment' : 'inline';
+    const fullPath = `${userId}/${pathParam}`;
+    const containerClient = deps.blobServiceClient.getContainerClient(deps.config.container);
+    const blobClient = containerClient.getBlobClient(fullPath);
+
+    // HEAD: verify exists + get title for filename
+    let props: { contentType?: string; metadata?: Record<string, string> };
+    try {
+      props = await blobClient.getProperties() as any;
+    } catch (err: any) {
+      if (err?.statusCode === 404 || /not found/i.test(String(err))) {
+        res.status(404).json({ error: 'blob not found' });
+        return;
+      }
+      res.status(502).json({ error: 'blob head failed', message: String(err) });
+      return;
+    }
+
+    // Build SAS
+    const udk = await deps.udkCache.get();
+    let contentDisposition: string | undefined;
+    if (dispose === 'attachment') {
+      const title = decodeB64Utf8(props.metadata?.['title']) ?? pathParam.split('/').pop() ?? 'download';
+      contentDisposition = buildContentDisposition('attachment', title);
+    }
+
+    const sas = buildReadBlobSas({
+      account: deps.config.accountName,
+      container: deps.config.container,
+      blobName: fullPath,
+      udk,
+      ttlSeconds: deps.config.readSasTtlSeconds,
+      contentDisposition,
+    });
+
+    const url = `${deps.config.blobEndpoint}/${deps.config.container}/${fullPath}?${sas.sasToken}`;
+    res.redirect(302, url);
   });
 
   return router;

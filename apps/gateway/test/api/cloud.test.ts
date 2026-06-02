@@ -217,3 +217,95 @@ describe('GET /api/cloud/list', () => {
     expect(res.body.files[0].metadata.session_id).toBeNull();
   });
 });
+
+describe('GET /api/cloud/download', () => {
+  function makeDownloadApp(opts: {
+    pathExists?: boolean;
+    blobTitle?: string;
+    listActive?: any;
+  }) {
+    const app = express();
+    app.use(express.json());
+    app.use(buildCloudRouter({
+      secret: SECRET,
+      config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
+      entitlements: {
+        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
+        getTokenVersion: vi.fn(),
+      } as any,
+      udkCache: { get: vi.fn().mockResolvedValue(fakeUdk()) } as any,
+      blobServiceClient: {
+        getContainerClient: () => ({
+          listBlobsByHierarchy: () => (async function*() {})(),
+          getBlobClient: () => ({
+            getProperties: () => {
+              if (opts.pathExists === false) {
+                const err: any = new Error('not found');
+                err.statusCode = 404;
+                return Promise.reject(err);
+              }
+              return Promise.resolve({
+                contentType: 'application/pdf',
+                contentLength: 1024,
+                lastModified: new Date(),
+                metadata: { title: Buffer.from(opts.blobTitle ?? 'Report').toString('base64') },
+              });
+            },
+          }),
+        }),
+      } as any,
+      sessionMw: ((req: any, _res: any, next: any) => { req.session = { user_id: USER_ID }; next(); }) as any,
+    }));
+    return app;
+  }
+
+  it('302 redirects to blob URL with SAS (default inline)', async () => {
+    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=reports/q2.pdf');
+    expect(res.status).toBe(302);
+    expect(res.headers['location']).toMatch(new RegExp(`^${BLOB_ENDPOINT}/${CONTAINER}/${USER_ID}/reports/q2.pdf\\?`));
+    expect(res.headers['location']).not.toMatch(/rscd=/);
+  });
+
+  it('attachment dispose adds rscd with ASCII filename', async () => {
+    const res = await request(makeDownloadApp({ blobTitle: 'Report' }))
+      .get('/api/cloud/download?path=reports/q2.pdf&dispose=attachment');
+    expect(res.status).toBe(302);
+    expect(res.headers['location']).toMatch(/rscd=/);
+    expect(res.headers['location']).toMatch(/attachment/);
+  });
+
+  it('attachment with Chinese title encodes via RFC 5987 (filename*=UTF-8)', async () => {
+    const res = await request(makeDownloadApp({ blobTitle: '销售报告.pdf' }))
+      .get('/api/cloud/download?path=reports/q2.pdf&dispose=attachment');
+    expect(res.status).toBe(302);
+    const loc = res.headers['location'];
+    expect(decodeURIComponent(loc)).toMatch(/filename\*=UTF-8''/);
+  });
+
+  it('404 when blob does not exist', async () => {
+    const res = await request(makeDownloadApp({ pathExists: false }))
+      .get('/api/cloud/download?path=missing.pdf');
+    expect(res.status).toBe(404);
+  });
+
+  it('400 on path with ..', async () => {
+    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=../etc/passwd');
+    expect(res.status).toBe(400);
+  });
+
+  it('400 on absolute path', async () => {
+    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=/abs/path.pdf');
+    expect(res.status).toBe(400);
+  });
+
+  it('400 when path query missing', async () => {
+    const res = await request(makeDownloadApp({})).get('/api/cloud/download');
+    expect(res.status).toBe(400);
+  });
+
+  it('403 when cloud entitlement not active', async () => {
+    const app = makeDownloadApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const res = await request(app).get('/api/cloud/download?path=x.pdf');
+    expect(res.status).toBe(403);
+  });
+});
