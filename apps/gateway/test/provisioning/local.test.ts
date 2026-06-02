@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { homedir } from 'node:os';
 import { provisionContainerLocal } from '../../src/provisioning/local.js';
+
+// Mock child_process before importing the module under test
+vi.mock('node:child_process', () => ({
+  exec: vi.fn((_cmd: string, cb: any) => cb(null, { stdout: 'true\n', stderr: '' })),
+}));
+
+import { signTokenAndInjectLocal, restartContainerAppLocal } from '../../src/provisioning/local.js';
+
+const TOKEN_PATH = path.join(homedir(), '.hermes-dev', '.hermes', '.laifu_user_token');
 
 const finalReadyRow = {
   user_id: 'u1',
@@ -52,5 +64,56 @@ describe('provisionContainerLocal', () => {
     expect(readyUpdate.progress_pct).toBe(100);
 
     expect(mockCache.set).toHaveBeenCalled();
+  });
+});
+
+describe('signTokenAndInjectLocal', () => {
+  beforeEach(async () => {
+    await fs.rm(TOKEN_PATH, { force: true });
+  });
+
+  it('writes a signed JWT to ~/.hermes-dev/.hermes/.laifu_user_token', async () => {
+    await signTokenAndInjectLocal('6e8b21f0-3a4c-4f3d-9b9e-1a2b3c4d5e6f', 3);
+    const written = await fs.readFile(TOKEN_PATH, 'utf8');
+    expect(written.split('.').length).toBe(3);   // JWT has 3 parts
+  });
+});
+
+describe('restartContainerAppLocal', () => {
+  it('calls docker inspect then docker restart when container is running', async () => {
+    const { exec } = await import('node:child_process');
+    const mockExec = vi.mocked(exec);
+    mockExec.mockReset();
+    // First call: docker inspect returns "true" (running)
+    mockExec.mockImplementationOnce((_cmd: any, cb: any) => cb(null, { stdout: 'true\n', stderr: '' }) as any);
+    // Second call: docker restart succeeds
+    mockExec.mockImplementationOnce((_cmd: any, cb: any) => cb(null, { stdout: '', stderr: '' }) as any);
+
+    await restartContainerAppLocal('any-uuid');
+
+    expect(mockExec).toHaveBeenCalledTimes(2);
+    expect(mockExec.mock.calls[0]![0]).toContain('docker inspect');
+    expect(mockExec.mock.calls[1]![0]).toContain('docker restart');
+  });
+
+  it('skips restart silently when container not running', async () => {
+    const { exec } = await import('node:child_process');
+    const mockExec = vi.mocked(exec);
+    mockExec.mockReset();
+    mockExec.mockImplementationOnce((_cmd: any, cb: any) => cb(null, { stdout: 'false\n', stderr: '' }) as any);
+
+    await restartContainerAppLocal('any-uuid');
+
+    expect(mockExec).toHaveBeenCalledTimes(1);  // only inspect, no restart
+  });
+
+  it('skips restart silently when container not found', async () => {
+    const { exec } = await import('node:child_process');
+    const mockExec = vi.mocked(exec);
+    mockExec.mockReset();
+    mockExec.mockImplementationOnce((_cmd: any, cb: any) => cb(new Error('no such container'), null) as any);
+
+    // Should not throw
+    await expect(restartContainerAppLocal('any-uuid')).resolves.toBeUndefined();
   });
 });

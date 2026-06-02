@@ -3,6 +3,13 @@ import type { ContainerMappingCache } from '../db/cache.js';
 import type { ContainerMapping } from '@lingxi/shared';
 import { signLaifuUserToken } from '../lib/gateway-token.js';
 import { config } from '../config.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { homedir } from 'node:os';
+import { promisify } from 'node:util';
+import { exec as execCb } from 'node:child_process';
+
+const exec = promisify(execCb);
 
 const STEPS = [
   { step: '正在创建账户与订单', pct: 5 },
@@ -61,6 +68,20 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
   }
 };
 
+// Dev mode constants — matching scripts/dev-hermes.sh
+// HOST_VOL is the bind-mount source on the dev box: ${HOME}/.hermes-dev → /home/hermes
+const DEV_HOST_VOL = path.join(homedir(), '.hermes-dev');
+const DEV_TOKEN_PATH = path.join(DEV_HOST_VOL, '.hermes', '.laifu_user_token');
+const DEV_CONTAINER_NAME = 'lingxi-hermes-dev';
+
+/**
+ * Write the new LAIFU_USER_TOKEN to the host volume file. The entrypoint reads
+ * this file as a fallback when env doesn't have a token (which happens on
+ * `docker restart` since restart reuses the original `docker run` env).
+ *
+ * In production (Azure), provisioning/azure.ts updates the Container App env
+ * directly. This local path is dev-only.
+ */
 export const signTokenAndInjectLocal = async (
   userId: string,
   tokenVersion: number,
@@ -68,11 +89,36 @@ export const signTokenAndInjectLocal = async (
   const token = signLaifuUserToken({
     userId, tokenVersion, secret: config.auth.gatewaySecret,
   });
-  console.log(`[provisioning/local] would inject LAIFU_USER_TOKEN for ${userId} (version=${tokenVersion}, len=${token.length})`);
-  // P1 不做真注入 — local 容器需要手动重启,token 通过 /api/me/entitlements + /api/auth/refresh-token 流程自然刷新。
+  await fs.mkdir(path.dirname(DEV_TOKEN_PATH), { recursive: true });
+  await fs.writeFile(DEV_TOKEN_PATH, token, { mode: 0o600 });
+  console.log(`[provisioning/local] wrote LAIFU_USER_TOKEN to ${DEV_TOKEN_PATH} (version=${tokenVersion})`);
 };
 
-export const restartContainerAppLocal = async (userId: string): Promise<void> => {
-  console.log(`[provisioning/local] would restart container for ${userId}`);
-  // dev 流程靠 pnpm dev:hermes,无法远程触发重启。开发者手动重启。
+/**
+ * Restart the dev hermes container. Reuses the original `docker run` env from
+ * dev-hermes.sh (which is fine; the entrypoint will pick up the new token from
+ * the host volume file written by signTokenAndInjectLocal).
+ *
+ * No-op if the container isn't running (warns but doesn't throw — dev may be
+ * working on something else and not have hermes up).
+ */
+export const restartContainerAppLocal = async (_userId: string): Promise<void> => {
+  try {
+    const { stdout } = await exec(`docker inspect -f "{{.State.Running}}" ${DEV_CONTAINER_NAME}`);
+    if (stdout.trim() !== 'true') {
+      console.log(`[provisioning/local] ${DEV_CONTAINER_NAME} not running — skipping restart`);
+      return;
+    }
+  } catch {
+    console.log(`[provisioning/local] ${DEV_CONTAINER_NAME} not found — skipping restart`);
+    return;
+  }
+
+  try {
+    await exec(`docker restart ${DEV_CONTAINER_NAME}`);
+    console.log(`[provisioning/local] restarted ${DEV_CONTAINER_NAME}`);
+  } catch (err) {
+    console.error(`[provisioning/local] docker restart failed:`, err);
+    throw err;
+  }
 };
