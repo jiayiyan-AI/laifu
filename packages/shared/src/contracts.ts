@@ -39,6 +39,10 @@ export interface StatusResponse {
   provisioning_step: string | null;
   progress_pct: number;
   error_message: string | null;
+  // P1 加: entitlement 闭环字段。Task 2 暂用 optional；Task 9 status.ts 返回它们后改为必填。
+  entitlements_desired?: string[];    // user_entitlements 表里 active 的 feature
+  entitlements_observed?: string[];   // container_observed_state 里容器最后报告的
+  container_token_version?: number;   // 当前 users.token_version（前端用来比对 observed）
 }
 
 // === Auth 契约 ===
@@ -149,3 +153,42 @@ export interface CloudWriteSasResponse {
  * write SAS 通常给 racwl，read SAS 通常只给 r。
  */
 export type CloudSasPermission = 'r' | 'a' | 'c' | 'w' | 'l' | 'd';
+
+// === P1 Entitlement / Token 契约 ===
+
+/**
+ * 容器侧拉取自己开通的 features (GET /api/me/entitlements)。
+ * 返回的 entitlements 已经过 active 过滤（disabled_at IS NULL）。
+ */
+export interface EntitlementsList {
+  entitlements: string[];   // e.g. ['cloud']
+  token_version: number;    // 当前 users.token_version；容器据此决定是否需要续签
+}
+
+/**
+ * 容器 entrypoint 完成 skill 软链后回报 (POST /api/me/observed-entitlements)。
+ * gateway 写到 container_observed_state，让前端等待 modal 能等到容器真生效。
+ */
+export interface ObservedEntitlementsReport {
+  observed: string[];        // 实际软链到 ~/.hermes/skills/ 的 feature 列表
+  token_version: number;     // 容器启动时 JWT 里的 token_version；让 gateway 检测版本漂移
+}
+
+/**
+ * 续签端点 (POST /api/auth/refresh-token)。响应是新 token。
+ * 请求体为空，鉴权靠 Authorization: Bearer <旧 token>（含 grace 接受）。
+ */
+export interface RefreshTokenResponse {
+  token: string;             // 新签 JWT (90d exp)
+  expires_at: string;        // ISO-8601, exp 字段的人可读形式
+}
+
+/**
+ * Entitlement 修改端点的响应 (POST /api/entitlements/{feature}/{enable,disable})。
+ * 返回当前 active entitlements。restart 是异步触发的，前端用 /api/status 轮询。
+ */
+export interface EntitlementChangeResponse {
+  ok: true;
+  entitlements: string[];
+  changed: boolean;           // 是否真发生了状态变更 (active <-> disabled)
+}
