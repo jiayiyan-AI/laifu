@@ -44,7 +44,14 @@ export const makeContainerTokenMiddleware = (
       return;
     }
 
-    const currentVersion = await opts.tokenVersionFetcher(userId);
+    let currentVersion: number | null;
+    try {
+      currentVersion = await opts.tokenVersionFetcher(userId);
+    } catch (err) {
+      console.error(`[container-token] tokenVersionFetcher threw for user ${userId}:`, err);
+      res.status(500).json({ error: 'internal' });
+      return;
+    }
     if (currentVersion === null) {
       res.status(401).json({ error: 'unknown user' });
       return;

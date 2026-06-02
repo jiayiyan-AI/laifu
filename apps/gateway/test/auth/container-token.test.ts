@@ -66,4 +66,14 @@ describe('container-token middleware', () => {
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/revoked|version/i);
   });
+
+  it('500 when tokenVersionFetcher throws (DB error doesnt hang request)', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('db down'));
+    const token = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: SECRET });
+    const res = await request(makeApp(fetcher))
+      .get('/whoami')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('internal');
+  });
 });
