@@ -100,3 +100,120 @@ describe('GET /api/cloud/sas', () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe('GET /api/cloud/list', () => {
+  function fakeListBlobs(items: Array<{ kind: 'prefix' | 'blob'; name: string; meta?: any; size?: number; contentType?: string }>) {
+    return async function* () {
+      for (const i of items) {
+        if (i.kind === 'prefix') {
+          yield { kind: 'prefix', name: i.name };
+        } else {
+          yield {
+            kind: 'blob',
+            name: i.name,
+            properties: {
+              contentLength: i.size ?? 0,
+              lastModified: new Date('2026-06-02T10:00:00Z'),
+              contentType: i.contentType ?? 'application/pdf',
+            },
+            metadata: i.meta ?? {},
+          };
+        }
+      }
+    };
+  }
+
+  function makeListApp(opts: { listFn?: any; listActive?: any; sessionUserId?: string }) {
+    const userId = opts.sessionUserId ?? USER_ID;
+    const app = express();
+    app.use(express.json());
+    app.use(buildCloudRouter({
+      secret: SECRET,
+      config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
+      entitlements: {
+        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
+        getTokenVersion: vi.fn().mockResolvedValue(0),
+      } as any,
+      udkCache: { get: vi.fn() } as any,
+      blobServiceClient: {
+        getContainerClient: () => ({
+          listBlobsByHierarchy: opts.listFn ?? (() => fakeListBlobs([])()),
+          getBlobClient: () => ({ getProperties: vi.fn() }),
+        }),
+      } as any,
+      sessionMw: ((req: any, _res: any, next: any) => { req.session = { user_id: userId }; next(); }) as any,
+    }));
+    return app;
+  }
+
+  it('returns folders and files at root for entitled user', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'prefix', name: `${USER_ID}/reports/` },
+      { kind: 'blob', name: `${USER_ID}/q2.pdf`, size: 1024, contentType: 'application/pdf',
+        meta: { title: Buffer.from('Q2 Sales').toString('base64'), session_id: 'main' } },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.status).toBe(200);
+    expect(res.body.folders).toEqual([{ virtual_path: 'reports/' }]);
+    expect(res.body.files).toHaveLength(1);
+    expect(res.body.files[0].virtual_path).toBe('q2.pdf');
+    expect(res.body.files[0].size).toBe(1024);
+    expect(res.body.files[0].metadata.title).toBe('Q2 Sales');
+    expect(res.body.files[0].metadata.session_id).toBe('main');
+  });
+
+  it('respects prefix query parameter', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/reports/q1.pdf`, size: 200 },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list?prefix=reports/');
+    expect(res.status).toBe(200);
+    expect(res.body.files[0].virtual_path).toBe('reports/q1.pdf');
+    expect(listFn.mock.calls[0][1].prefix).toBe(`${USER_ID}/reports/`);
+  });
+
+  it('rejects prefix with .. (path traversal)', async () => {
+    const app = makeListApp({});
+    const res = await request(app).get('/api/cloud/list?prefix=../other/');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects prefix starting with / (absolute)', async () => {
+    const app = makeListApp({});
+    const res = await request(app).get('/api/cloud/list?prefix=/abs/');
+    expect(res.status).toBe(400);
+  });
+
+  it('403 when cloud entitlement not active', async () => {
+    const app = makeListApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.status).toBe(403);
+  });
+
+  it('decodes Chinese title from metadata base64', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/销售.pdf`, size: 100,
+        meta: { title: Buffer.from('销售报告').toString('base64'),
+                description: Buffer.from('Q2 季度').toString('base64'),
+                tags: Buffer.from('a,b,c').toString('base64') } },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.body.files[0].metadata.title).toBe('销售报告');
+    expect(res.body.files[0].metadata.description).toBe('Q2 季度');
+    expect(res.body.files[0].metadata.tags).toEqual(['a', 'b', 'c']);
+  });
+
+  it('handles file without metadata (placeholder strings/null)', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/x.txt`, size: 0, meta: {} },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.status).toBe(200);
+    expect(res.body.files[0].metadata.title).toBe('x.txt');
+    expect(res.body.files[0].metadata.session_id).toBeNull();
+  });
+});

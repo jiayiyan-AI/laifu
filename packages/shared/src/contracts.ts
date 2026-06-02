@@ -192,3 +192,31 @@ export interface EntitlementChangeResponse {
   entitlements: string[];
   changed: boolean;           // 是否真发生了状态变更 (active <-> disabled)
 }
+
+/**
+ * Cloud drive list response (P2 /api/cloud/list).
+ * gateway 在此端点统一解码 metadata 的 base64 字段，前端不再解码。
+ */
+export interface CloudFileItem {
+  virtual_path: string;       // relative to <user_id>/
+  size: number;
+  last_modified: string;      // ISO-8601
+  content_type: string | null;
+  metadata: {
+    title: string;            // decoded UTF-8
+    session_id: string | null;
+    published_at: string | null;
+    tool_version: string | null;
+    description: string | null;
+    tags: string[] | null;
+  };
+}
+
+export interface CloudFolderItem {
+  virtual_path: string;       // relative to <user_id>/, with trailing /
+}
+
+export interface CloudListResponse {
+  folders: CloudFolderItem[];
+  files: CloudFileItem[];
+}
