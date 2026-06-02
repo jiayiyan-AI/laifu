@@ -102,6 +102,9 @@ COPY --chown=hermes:hermes server.py /app/server.py
 RUN mkdir -p /opt/hermes-skills && chown hermes:hermes /opt/hermes-skills
 COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
 
+# 装 cloud-publish Hermes skill 的 Python CLI（以 root 身份安装到系统路径）
+RUN pip install --no-cache-dir -e /opt/hermes-skills/cloud/
+
 USER hermes
 
 EXPOSE 8080
