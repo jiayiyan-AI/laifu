@@ -21,6 +21,10 @@
 
 set -e
 
+# 注: NFS subPath 子目录的 owner 由 ACA initContainer (init-chown) 在主容器启动前 chown,
+# 见 apps/gateway/src/provisioning/azure.ts 的 initContainers 块。
+# 这里不能用 sudo — ACA 默认 no_new_privs=true 禁止任何 setuid 提权。
+
 SEED=/home/hermes-seed
 HOME_DIR=/home/hermes
 CFG="$HOME_DIR/.hermes/config.yaml"

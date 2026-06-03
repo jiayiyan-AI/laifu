@@ -1,8 +1,8 @@
 # Azure 部署 — 仍需人工注意的事项
 
-代码/Bicep/CI 能自动化的坑都已经修掉了 (`infra/bicep/main.bicep` 加齐 5 个 role assignment + deployer KV 写权限; `scripts/build-deploy.sh` 用 vite lib mode 把 gateway 打成单文件 + 扁平 npm 依赖, 配合 bicep 里 `SCM_DO_BUILD_DURING_DEPLOYMENT=false`, Oryx 不再作妖, CI 直接 `az webapp deploy --type zip`; `parameters.*.json` 默认 `qwen-plus` 对齐 DashScope)。
+代码/Bicep/CI 能自动化的坑都已经修掉了 (`infra/bicep/main.bicep` 加齐 6 个 role assignment + deployer KV 写权限; `scripts/build-deploy.sh` 用 vite lib mode 把 gateway 打成单文件 + 扁平 npm 依赖, 配合 bicep 里 `SCM_DO_BUILD_DURING_DEPLOYMENT=false`, Oryx 不再作妖, CI 直接 `az webapp deploy --type zip`; `parameters.*.json` 默认 `qwen-plus` 对齐 DashScope)。
 
-这份文档现在只留**两类无法靠代码消除的认知陷阱**——Supabase 的 key 体系 + App Service 的 SCM 怪癖。新人接手或部署 prod 时扫一遍即可。
+这份文档现在留**几类无法靠代码消除的认知陷阱**——Supabase 的 key 体系 + App Service 的 SCM 怪癖 + storage 的 HNS 一次性 flag。新人接手或部署 prod 时扫一遍即可。
 
 > 流程性的"先做什么再做什么"看 `infra/README.md`; 架构总览看 `docs/deployment.md`; 新环境从零拉起的完整脚本见本文末尾"下次部署 prod 环境的简化版步骤"。
 
@@ -70,6 +70,39 @@ az resource update --resource-group rg-lingxi-dev \
 
 ---
 
+## 注意 4: Storage Account `isHnsEnabled` 是创建时一次性 flag, 改不掉
+
+**现象**: 已存在的 storage account 想给云盘加目录级 SAS 隔离, 直接改 bicep 加 `isHnsEnabled: true` 重部 — 部署成功但 flag 还是 `false`, `az storage container create` 也能建, 但签出的 SAS 走不到 `sr=d`, 多租户隔离失效。
+
+**原因**: ADLS Gen2 的 hierarchical namespace 是**创建时一次性决定**的 storage account 属性, ARM API 接受 update payload 但**会被静默忽略**。
+
+**解决**: 只能**销毁现有 storage account 再重建**。如果是 dev 环境无存量数据, 删 RG → purge KV → 重跑 bicep 是最简单的。生产无法这样做的话, 走"新建一个 HNS account, 跟旧 flat account 并存, 应用层 env 切到新 account"的渐进路径。
+
+```bash
+# dev 重建路线 (无存量数据)
+az group delete --name rg-lingxi-dev --yes
+az keyvault purge --name kv-lingxi-dev --location southeastasia   # purge soft-deleted KV 才能复用同名
+cd infra/bicep && ./deploy.sh dev
+```
+
+> 同 storage account 同时跑 HNS Blob (云盘) 和 File Share (每用户 Hermes home) 是 OK 的, Azure 支持。不必拆成两个 account。
+
+---
+
+## 注意 5: 给 gateway 的 system identity 加 `Storage Blob Data Owner` 是签 User Delegation Key 的硬条件
+
+**现象**: 云盘 enable 后, 浏览器侧调 `/api/cloud/list` 返回 500 `AuthorizationPermissionMismatch`; gateway 日志显示 `getUserDelegationKey` 403。
+
+**原因**: gateway 用 system identity 找 storage 签 SAS — 但签 UDK (User Delegation Key) **必须** Data 面 role, 不是 control 面 role。Bicep 里 `Storage Account Contributor` 只够建/删 File Share, 不够签 UDK。
+
+**解决**: Bicep 里**两个 role 同时给**:
+- `Storage Account Contributor` — 控制面, 建 File Share 给每用户 Hermes home 用
+- `Storage Blob Data Owner` — 数据面, 签 UDK 给云盘用 (role def id `b7e6dc6d-f1e8-4753-8033-0f276bb0955b`)
+
+`infra/bicep/main.bicep` 当前两个都有, 不需要再动。但**手工建 storage account 跳过 bicep 时记得补**。
+
+---
+
 ## 下次部署 prod 环境的简化版步骤
 
 按这个顺序, 应该 30 分钟以内完成:
@@ -80,8 +113,14 @@ cd infra/bicep
 ./deploy.sh prod
 
 # 2. 填 KV (按 prod 的真实凭据)
+# ⚠️ 这一步必须在 Step 5 (deploy gateway zip) 之前完成。
+#    顺序反了 → gateway 启动时 KV reference 全部 `SecretNotFound` → node exit 1 →
+#    后续灌 secret + az webapp restart 都救不回来, 因为 App Service KV reference cache 不会自动重 resolve。
+#    详见 docs/known-issues.md #9。
+#    应急手势 (顺序反了之后): `az webapp config appsettings set --settings "KV_REFRESH_TRIGGER=$(date +%s)"`
 KV=kv-lingxi-prod
 az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
+az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)"   # 容器 ↔ gateway JWT 签发密钥, 必填
 az keyvault secret set --vault-name $KV --name supabase-url --value "..."
 az keyvault secret set --vault-name $KV --name supabase-service-role-key --value "..."   # 注意 1: 必须 eyJ... 开头
 az keyvault secret set --vault-name $KV --name google-client-id --value "..."
@@ -90,7 +129,8 @@ az keyvault secret set --vault-name $KV --name anthropic-api-key --value "TODO" 
 az keyvault secret set --vault-name $KV --name dashscope-api-key --value "..."
 
 # 3. 跑 Supabase migration
-# 浏览器打开 prod project sql editor, 复制 infra/supabase/migrations/*.sql 跑
+# 浏览器打开 prod project sql editor, 复制 infra/supabase/migrations/*.sql 依次跑
+# (确认 0006_cloud_entitlements 也跑了 — 没跑云盘 enable 直接 500)
 
 # 4. 推 Hermes 镜像
 cd docker/hermes
@@ -100,7 +140,7 @@ ACR_NAME=acrlingxiprod IMAGE_TAG=latest ./build-and-push.sh
 #    (a) 推 main 触发 CI 自动部署 (需先在 GitHub repo Secrets 配 AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID)
 #    (b) 或手动跑下面这段:
 cd /Users/flyknife/Desktop/laifu
-./scripts/build-deploy.sh
+./scripts/build-deploy.sh    # 已自动 build shared
 cd app-service-deploy && zip -rq ../deploy.zip . -x '*.map' && cd ..
 az webapp deploy -g rg-lingxi-prod -n app-lingxi-prod-gateway \
   --src-path deploy.zip --type zip
@@ -110,6 +150,7 @@ az webapp deploy -g rg-lingxi-prod -n app-lingxi-prod-gateway \
 
 # 7. 验证
 curl https://app-lingxi-prod-gateway.azurewebsites.net/healthz   # 应该 {"ok":true}
+#  云盘流程: 登录 → 创建数字员工 → 启用云盘 → /api/status 看 entitlements_observed:["cloud"]
 ```
 
 应用代码每次更新只需重跑步骤 5 (或推 main 走 CI), 不用动 bicep/secret。

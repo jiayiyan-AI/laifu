@@ -25,6 +25,9 @@
 | OAuth redirect | `:9000/api/auth/google/callback` | `https://<host>/api/auth/google/callback` | `PUBLIC_BASE_URL` + Google Console |
 | Secret 来源 | `apps/gateway/.env.local` 手填 | KV → App Service appSettings 注入 | bicep KV reference |
 | 前后端域 | 跨端口 (9000 / 3000) | 同域 | `FRONTEND_BASE_URL` env |
+| 容器 → gateway 回调 (entrypoint 拉 entitlements) | `host.docker.internal:9000` (dev-hermes.sh 注入) | `https://<app-service>` (Azure 路径下 gateway provisioning 时注入) | `GATEWAY_BASE_URL` env (容器视角) |
+| 容器 JWT 签发密钥 (LAIFU_USER_TOKEN) | `.env.local` 手填随便值 | KV `gateway-secret` → App Service → 容器读 | `GATEWAY_SECRET` env (gateway 侧) |
+| 云盘 storage | dev 用同一个 HNS account `stlingxidev` (或 azurite) | prod HNS account `stlingxiprod` | `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_CONTAINER` |
 
 ---
 
