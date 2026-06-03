@@ -2,6 +2,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { ContainerAppsAPIClient } from '@azure/arm-appcontainers';
 import { StorageManagementClient } from '@azure/arm-storage';
 import { config } from '../config.js';
+import { signLaifuUserToken } from '../lib/gateway-token.js';
 
 const credential = new DefaultAzureCredential();
 let _containerApps: ContainerAppsAPIClient | null = null;
@@ -172,4 +173,52 @@ export const getContainerAppState = async (
     state: r.provisioningState,
     fqdn: r.configuration?.ingress?.fqdn ? `https://${r.configuration.ingress.fqdn}` : null,
   };
+};
+
+/**
+ * 给指定用户的 Container App 注入新的 LAIFU_USER_TOKEN。
+ * 调用方应已经 bump 过 token_version；本函数只负责 sign + write。
+ */
+export const signTokenAndInjectAzure = async (
+  userId: string,
+  tokenVersion: number,
+): Promise<void> => {
+  const token = signLaifuUserToken({
+    userId,
+    tokenVersion,
+    secret: config.auth.gatewaySecret,
+  });
+  const appName = `hermes-${userId}`;
+  const current = await getContainerApps().containerApps.get(
+    config.azure.resourceGroup, appName,
+  );
+  const containers = current.template?.containers ?? [];
+  if (containers.length === 0) {
+    throw new Error(`signTokenAndInjectAzure: no containers in ${appName}`);
+  }
+  const env = (containers[0]!.env ?? []).filter((e: { name?: string }) => e.name !== 'LAIFU_USER_TOKEN');
+  env.push({ name: 'LAIFU_USER_TOKEN', value: token });
+  containers[0]!.env = env;
+  await getContainerApps().containerApps.beginUpdateAndWait(
+    config.azure.resourceGroup, appName,
+    { template: { containers } } as any,
+  );
+};
+
+/**
+ * 触发 Container App 重启 (ACA restartRevision)。
+ * 拉新 env 起容器,entrypoint 会读 LAIFU_USER_TOKEN + 拉 entitlements + 软链 skill。
+ */
+export const restartContainerAppAzure = async (userId: string): Promise<void> => {
+  const appName = `hermes-${userId}`;
+  const app = await getContainerApps().containerApps.get(
+    config.azure.resourceGroup, appName,
+  );
+  const latestRevisionName = app.latestRevisionName;
+  if (!latestRevisionName) {
+    throw new Error(`restartContainerAppAzure: no revision for ${appName}`);
+  }
+  await getContainerApps().containerAppsRevisions.restartRevision(
+    config.azure.resourceGroup, appName, latestRevisionName,
+  );
 };

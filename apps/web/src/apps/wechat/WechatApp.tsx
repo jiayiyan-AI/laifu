@@ -29,21 +29,35 @@ const SUB_HINT: Record<SubStatus, string> = {
 export const WechatApp = () => {
   const [state, setState] = useState<State>({ kind: 'loading' });
 
-  // mount: 拉当前绑定状态
+  // mount: 拉当前绑定状态。带 5s 超时兜底,避免 fetch hang 时 UI 永远卡在 loading
   useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) {
+        console.warn('[wechat-bind] info fetch timed out (>5s), defaulting to unbound');
+        setState({ kind: 'unbound' });
+      }
+    }, 5000);
+
     void (async () => {
       try {
         const info = await getMyWechatBind();
+        if (cancelled) return;
+        window.clearTimeout(timeoutId);
         if (info.bound) {
           setState({ kind: 'bound', ilink_bot_id: info.ilink_bot_id, bound_at: info.bound_at });
         } else {
           setState({ kind: 'unbound' });
         }
       } catch (e) {
+        if (cancelled) return;
+        window.clearTimeout(timeoutId);
         console.error('[wechat-bind] info failed', e);
         setState({ kind: 'unbound' });
       }
     })();
+
+    return () => { cancelled = true; window.clearTimeout(timeoutId); };
   }, []);
 
   // 轮询: 仅当 awaiting_scan 且 sub 还在 active 状态 (wait/scaned)

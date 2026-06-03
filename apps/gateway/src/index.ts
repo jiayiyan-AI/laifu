@@ -12,13 +12,24 @@ import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
 import { buildThreadsRouter } from './api/threads.js';
 import { buildChatRouter } from './api/chat.js';
+import { buildEntitlementsRouter } from './api/entitlements.js';
+import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
+import { buildAuthRefreshRouter } from './api/auth-refresh.js';
+import { buildCloudRouter } from './api/cloud.js';
+import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
+import { makeEntitlementsDao } from './db/entitlements-dao.js';
+import { makeObservedStateDao } from './db/observed-state-dao.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
 import { provisionContainer } from './provisioning/manager.js';
 import { provisionContainerLocal } from './provisioning/local.js';
 import { recoverProvisioning } from './provisioning/recovery.js';
 import * as azureModule from './provisioning/azure.js';
+import {
+  signTokenAndInjectLocal,
+  restartContainerAppLocal,
+} from './provisioning/local.js';
 import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
@@ -100,6 +111,18 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   }
 
   if (sbResolved) {
+    // P1 DAOs (instantiated once per app)
+    const entitlementsDao = makeEntitlementsDao(sbResolved);
+    const observedStateDao = makeObservedStateDao(sbResolved);
+
+    // P1 provisioner-aware helpers (real Azure or local mock)
+    const signAndInject = config.provisioner === 'azure'
+      ? azureModule.signTokenAndInjectAzure
+      : signTokenAndInjectLocal;
+    const restartContainer = config.provisioner === 'azure'
+      ? azureModule.restartContainerAppAzure
+      : restartContainerAppLocal;
+
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
       sb: sbResolved,
@@ -128,8 +151,63 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         sessionMw,
       }));
     }
+
+    // P1 routes (entitlements + container-side + token refresh)
+    app.use(buildEntitlementsRouter({
+      entitlements: entitlementsDao,
+      restartContainer,
+      signTokenAndInject: signAndInject,
+      sessionMw,
+    }));
+
+    app.use(buildMeEntitlementsRouter({
+      secret: config.auth.gatewaySecret,
+      entitlements: entitlementsDao,
+      observedState: observedStateDao,
+    }));
+
+    app.use(buildAuthRefreshRouter({
+      secret: config.auth.gatewaySecret,
+      getTokenVersion: (uid) => entitlementsDao.getTokenVersion(uid),
+    }));
+
+    // P2: cloud data plane (SAS / list / download)
+    // Only wire when cloud config is populated (otherwise local-dev without Azure creds would crash).
+    if (config.azure.storageAccount && config.cloud.blobEndpoint) {
+      const blobServiceClient = getBlobServiceClient({
+        accountName: config.azure.storageAccount,
+        blobEndpoint: config.cloud.blobEndpoint,
+      });
+      const udkCache = getUserDelegationKeyCache({
+        accountName: config.azure.storageAccount,
+        blobEndpoint: config.cloud.blobEndpoint,
+        udkLifetimeSeconds: config.cloud.udkLifetimeSeconds,
+      });
+
+      app.use(buildCloudRouter({
+        secret: config.auth.gatewaySecret,
+        config: {
+          accountName: config.azure.storageAccount,
+          container: config.cloud.container,
+          blobEndpoint: config.cloud.blobEndpoint,
+          writeSasTtlSeconds: config.cloud.writeSasTtlSeconds,
+          readSasTtlSeconds: config.cloud.readSasTtlSeconds,
+        },
+        entitlements: entitlementsDao,
+        udkCache,
+        blobServiceClient,
+        sessionMw,
+      }));
+      console.log('[gateway] cloud routes mounted (account=' + config.azure.storageAccount + ')');
+    } else {
+      console.log('[gateway] cloud routes skipped (AZURE_STORAGE_ACCOUNT not set)');
+    }
+
+    app.use(buildStatusRouter(getCache, sessionMw, entitlementsDao, observedStateDao));
+  } else {
+    // Supabase unavailable (test/healthz-only): mount status without P1 DAO enrichment
+    app.use(buildStatusRouter(getCache, sessionMw));
   }
-  app.use(buildStatusRouter(getCache, sessionMw));
 
   // 同进程托管 web 静态产物 (部署到 App Service 时前后端同源)。
   // WEB_DIST_PATH 显式指定优先; 否则按 zip 部署后的相对位置 (web-dist/ 与 dist/ 并列) 找; 找不到就跳过 (本地 dev 走 Vite)

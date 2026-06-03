@@ -1,5 +1,10 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext.js';
-import { IconSpark, IconGlobe, IconFile, IconMessage } from '../../lib/icons.js';
+import { IconSpark, IconGlobe, IconFile, IconMessage, IconFolder } from '../../lib/icons.js';
+import { BuyCloudButton } from './BuyCloudButton.js';
+import { DisableCloudButton } from './DisableCloudButton.js';
+import { useEntitlements } from '../../lib/entitlements-context.js';
+import { getMyWechatBind } from '../../lib/api.js';
 
 const caps = [
   { id: 'web',    name: '联网搜索', icon: <IconGlobe size={22} color="var(--accent)" /> },
@@ -10,6 +15,22 @@ const caps = [
 export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
   const auth = useAuth();
   const nick = auth.status === 'authenticated' ? auth.user.nickname ?? '未命名' : '';
+  const ent = useEntitlements();
+  const cloudOwned = ent.observed.includes('cloud');
+
+  // 拉一下 wechat 绑定状态决定按钮文案 (绑定 / 解绑)
+  // null = 还没拿到结果 → 不显示文案,避免闪烁
+  const [wechatBound, setWechatBound] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) setWechatBound(false);   // 5s 兜底 → 默认未绑
+    }, 5000);
+    void getMyWechatBind()
+      .then((info) => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(info.bound); } })
+      .catch(() => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(false); } });
+    return () => { cancelled = true; window.clearTimeout(timeoutId); };
+  }, []);
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 22 }}>
@@ -27,15 +48,17 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
           </div>
           <button
             className="btn btn-primary"
-            style={{ background: '#16a34a' }}
+            style={{ background: wechatBound ? '#6b7280' : '#16a34a' }}
             onClick={onOpenWechat}
+            title={wechatBound ? '查看绑定 / 解绑' : '通过扫码绑定微信'}
           >
-            <IconMessage size={15} />绑定微信
+            <IconMessage size={15} />
+            {wechatBound === null ? '微信…' : wechatBound ? '解绑微信' : '绑定微信'}
           </button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>已装备能力 · {caps.length}</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>已装备能力 · {cloudOwned ? caps.length + 1 : caps.length}</div>
         </div>
         <div style={{ display: 'grid', gap: 13, gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
           {caps.map((c) => (
@@ -45,7 +68,42 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
               <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>已装备</div>
             </div>
           ))}
+          {cloudOwned && (
+            <DisableCloudButton trigger={(open) => (
+              <div key="cloud" style={{ position: 'relative', padding: 14, border: '1px solid var(--accent)', background: 'var(--accent-weak2)', borderRadius: 12 }}>
+                <button
+                  onClick={open}
+                  title="退订云盘"
+                  style={{ position: 'absolute', top: 6, right: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--muted)', fontSize: 14 }}
+                >
+                  ✕
+                </button>
+                <IconFolder size={22} color="var(--accent)" />
+                <div style={{ fontWeight: 600, marginTop: 10 }}>云盘</div>
+                <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>已装备</div>
+              </div>
+            )} />
+          )}
         </div>
+
+        {!cloudOwned && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '24px 0 12px' }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>功能市场</div>
+            </div>
+            <div className="card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 14 }}>
+              <span style={{ fontSize: 26 }}>☁️</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>云盘</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  让助理把成果保存到云端，桌面会出现"文件"应用
+                </div>
+                <div style={{ fontSize: 12, marginTop: 2, color: 'var(--accent-d)' }}>价格: 免费</div>
+              </div>
+              <BuyCloudButton onReady={() => { /* Desktop will react via context */ }} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

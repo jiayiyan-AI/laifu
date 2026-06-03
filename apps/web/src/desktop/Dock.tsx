@@ -1,34 +1,55 @@
 import type { ReactNode } from 'react';
-import { IconSpark, IconGrid } from '../lib/icons.js';
+import { IconSpark, IconGrid, IconFolder } from '../lib/icons.js';
 
-export type DockAppId = 'chat' | 'manage';
+export type DockAppId = 'chat' | 'manage' | 'files';
 
-const apps: { id: DockAppId; name: string; icon: ReactNode; c1: string; c2: string }[] = [
+interface AppDef { id: DockAppId; name: string; icon: ReactNode; c1: string; c2: string }
+
+const baseApps: AppDef[] = [
   { id: 'chat',   name: '灵犀助理', icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
   { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,  c1: '#3b82f6', c2: '#1d4ed8' },
 ];
 
-export const Dock = ({ onOpen, openApps }: { onOpen: (id: DockAppId) => void; openApps: ReadonlySet<string> }) => (
-  <div style={{
-    position: 'absolute', bottom: 9, left: '50%', transform: 'translateX(-50%)',
-    display: 'flex', alignItems: 'flex-end', gap: 11, padding: '8px 11px',
-    borderRadius: 22, zIndex: 1000,
-    background: 'rgba(255,255,255,0.32)',
-    backdropFilter: 'blur(26px) saturate(180%)',
-    border: '1px solid rgba(255,255,255,0.5)',
-    boxShadow: '0 14px 44px rgba(0,0,0,0.3)',
-  }}>
-    {apps.map((a) => (
-      <button key={a.id} title={a.name} onClick={() => onOpen(a.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <div style={{
-          width: 52, height: 52, borderRadius: 14, display: 'flex',
-          alignItems: 'center', justifyContent: 'center', color: '#fff',
-          background: `linear-gradient(160deg, ${a.c1}, ${a.c2})`,
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 7px 16px rgba(0,0,0,0.22)',
-          transition: 'transform 0.18s cubic-bezier(0.25,1.4,0.5,1)',
-        }}>{a.icon}</div>
-        <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', marginTop: 4, opacity: openApps.has(a.id) ? 1 : 0 }} />
-      </button>
-    ))}
-  </div>
-);
+const conditionalApps: Record<string, AppDef> = {
+  cloud: { id: 'files', name: '文件', icon: <IconFolder size={24} />, c1: '#22c55e', c2: '#15803d' },
+};
+
+interface DockProps {
+  onOpen: (id: DockAppId) => void;
+  openApps: ReadonlySet<string>;
+  entitlements: string[];
+}
+
+export const Dock = ({ onOpen, openApps, entitlements }: DockProps) => {
+  const apps: AppDef[] = [
+    ...baseApps,
+    ...entitlements
+      .filter((feature) => conditionalApps[feature])
+      .map((feature) => conditionalApps[feature]!),
+  ];
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 9, left: '50%', transform: 'translateX(-50%)',
+      display: 'flex', alignItems: 'flex-end', gap: 11, padding: '8px 11px',
+      borderRadius: 22, zIndex: 1000,
+      background: 'rgba(255,255,255,0.32)',
+      backdropFilter: 'blur(26px) saturate(180%)',
+      border: '1px solid rgba(255,255,255,0.5)',
+      boxShadow: '0 14px 44px rgba(0,0,0,0.3)',
+    }}>
+      {apps.map((a) => (
+        <button key={a.id} title={a.name} onClick={() => onOpen(a.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 14, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', color: '#fff',
+            background: `linear-gradient(160deg, ${a.c1}, ${a.c2})`,
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 7px 16px rgba(0,0,0,0.22)',
+            transition: 'transform 0.18s cubic-bezier(0.25,1.4,0.5,1)',
+          }}>{a.icon}</div>
+          <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', marginTop: 4, opacity: openApps.has(a.id) ? 1 : 0 }} />
+        </button>
+      ))}
+    </div>
+  );
+};

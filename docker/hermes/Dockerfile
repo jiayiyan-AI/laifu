@@ -23,9 +23,14 @@
 FROM python:3.12-slim
 
 # ============ 系统依赖 ============
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 替换 apt mirror 到阿里云,绕开国内访问 deb.debian.org 的网络问题
+# (兼容 Debian 12+ 的 deb822 sources 和老格式 /etc/apt/sources.list)
+RUN (sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+     || sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null \
+     || true) \
+ && apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
-    nodejs npm ripgrep sudo \
+    nodejs npm ripgrep sudo jq \
     && rm -rf /var/lib/apt/lists/*
 
 # ============ 创建非 root 用户 ============
@@ -90,6 +95,25 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 COPY --chown=hermes:hermes server.py /app/server.py
+
+# ============ Hermes skills 占位目录 ============
+# P1 阶段为 cloud_publish 留一个能软链的目标 (SKILL.md 占位)。
+# P3 会替换 SKILL.md + 加 cloud_publish CLI 实现。
+RUN mkdir -p /opt/hermes-skills && chown hermes:hermes /opt/hermes-skills
+COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
+
+# 装 cloud-publish Hermes skill 的 Python CLI
+# ⚠️ 不能装到 /home/hermes/.local/ — 那里 dev 模式被 -v host volume 整盘 mount 覆盖。
+# 装到 hermes-agent venv (/opt/hermes-agent/venv/),在 /opt 下不会被 volume 影响,
+# 然后软链到 /usr/local/bin/ 让任何 PATH 配置都能找到。
+# 走清华 pypi mirror 避免国内访问 pypi.org 慢/超时。
+# unset PIP_USER (line 77 env 设了 PIP_USER=1, 但 user 模式装到 /home/hermes/.local/
+# 会被 dev volume 覆盖)。这里强制装到系统 /usr/local 路径,在 /opt 同样不会被
+# volume mount mask。
+RUN unset PIP_USER PYTHONUSERBASE && pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -e /opt/hermes-skills/cloud/
 
 USER hermes
 

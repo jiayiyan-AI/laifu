@@ -6,6 +6,7 @@ dist/
 .DS_Store
 .vitest/
 coverage/
+# 部署产物 (from main)
 dist-deploy
 app-service-deploy/
 deploy.zip
@@ -14,3 +15,10 @@ apps/web/vite.config.js
 apps/web/vite.config.d.ts
 apps/web/vitest.config.js
 apps/web/vitest.config.d.ts
+
+# Python (cloud-publish skill 本地开发副产物)
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+*.whl

@@ -39,6 +39,10 @@ export interface StatusResponse {
   provisioning_step: string | null;
   progress_pct: number;
   error_message: string | null;
+  // P1 字段 (Task 11 起必填；status 路由始终返回，默认 []/0)
+  entitlements_desired: string[];     // user_entitlements 表里 active 的 feature
+  entitlements_observed: string[];    // container_observed_state 里容器最后报告的
+  container_token_version: number;    // 当前 users.token_version（前端用来比对 observed）
 }
 
 // === Auth 契约 ===
@@ -124,4 +128,95 @@ export type WechatBindingInfoResponse =
 
 export interface WechatUnbindResponse {
   ok: true;
+}
+
+// === Cloud Drive 契约 (P0 起步，P1/P2 继续扩展) ===
+
+/**
+ * Container（hermes 容器内）拿到的写 SAS 配置。
+ * P1 `/api/cloud/sas` 端点返回此 shape。
+ *
+ * `sas_token` 已经是 directory-scoped (sr=d, sdd=1)，授权范围严格限制在
+ * `<container>/<prefix>` 子树。客户端拼 URL 时用：
+ *   `${blob_endpoint}/${container}/${prefix}<virtual_path>?${sas_token}`
+ */
+export interface CloudWriteSasResponse {
+  blob_endpoint: string;      // e.g. "https://laifudev.blob.core.windows.net"
+  container: string;          // "laifu-cloud"
+  prefix: string;             // "<user_id>/", 含尾 /
+  sas_token: string;          // 不含前导 '?' 的 query 字符串
+  expires_at: string;         // ISO-8601
+}
+
+/**
+ * Cloud drive 操作允许的权限集合（spec §五）。
+ * write SAS 通常给 racwl，read SAS 通常只给 r。
+ */
+export type CloudSasPermission = 'r' | 'a' | 'c' | 'w' | 'l' | 'd';
+
+// === P1 Entitlement / Token 契约 ===
+
+/**
+ * 容器侧拉取自己开通的 features (GET /api/me/entitlements)。
+ * 返回的 entitlements 已经过 active 过滤（disabled_at IS NULL）。
+ */
+export interface EntitlementsList {
+  entitlements: string[];   // e.g. ['cloud']
+  token_version: number;    // 当前 users.token_version；容器据此决定是否需要续签
+}
+
+/**
+ * 容器 entrypoint 完成 skill 软链后回报 (POST /api/me/observed-entitlements)。
+ * gateway 写到 container_observed_state，让前端等待 modal 能等到容器真生效。
+ */
+export interface ObservedEntitlementsReport {
+  observed: string[];        // 实际软链到 ~/.hermes/skills/ 的 feature 列表
+  token_version: number;     // 容器启动时 JWT 里的 token_version；让 gateway 检测版本漂移
+}
+
+/**
+ * 续签端点 (POST /api/auth/refresh-token)。响应是新 token。
+ * 请求体为空，鉴权靠 Authorization: Bearer <旧 token>（含 grace 接受）。
+ */
+export interface RefreshTokenResponse {
+  token: string;             // 新签 JWT (90d exp)
+  expires_at: string;        // ISO-8601, exp 字段的人可读形式
+}
+
+/**
+ * Entitlement 修改端点的响应 (POST /api/entitlements/{feature}/{enable,disable})。
+ * 返回当前 active entitlements。restart 是异步触发的，前端用 /api/status 轮询。
+ */
+export interface EntitlementChangeResponse {
+  ok: true;
+  entitlements: string[];
+  changed: boolean;           // 是否真发生了状态变更 (active <-> disabled)
+}
+
+/**
+ * Cloud drive list response (P2 /api/cloud/list).
+ * gateway 在此端点统一解码 metadata 的 base64 字段，前端不再解码。
+ */
+export interface CloudFileItem {
+  virtual_path: string;       // relative to <user_id>/
+  size: number;
+  last_modified: string;      // ISO-8601
+  content_type: string | null;
+  metadata: {
+    title: string;            // decoded UTF-8
+    session_id: string | null;
+    published_at: string | null;
+    tool_version: string | null;
+    description: string | null;
+    tags: string[] | null;
+  };
+}
+
+export interface CloudFolderItem {
+  virtual_path: string;       // relative to <user_id>/, with trailing /
+}
+
+export interface CloudListResponse {
+  folders: CloudFolderItem[];
+  files: CloudFileItem[];
 }
