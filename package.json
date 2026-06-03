@@ -5,6 +5,8 @@
   "description": "灵犀 — 数字员工平台 monorepo",
   "scripts": {
     "build": "pnpm -r build",
+    "build:deploy": "scripts/build-deploy.sh",
+    "start": "node apps/gateway/dist/index.js",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "dev": "concurrently -n hermes,gateway,web -c yellow,cyan,magenta --kill-others-on-fail 'pnpm dev:hermes' 'pnpm dev:gateway' 'pnpm dev:web'",
@@ -15,7 +17,7 @@
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "devDependencies": {
     "concurrently": "^10.0.0",

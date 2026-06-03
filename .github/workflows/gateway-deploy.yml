@@ -1,0 +1,92 @@
+name: Deploy Gateway+Web to App Service
+
+# 部署路线: build-deploy.sh 产 app-service-deploy/ → zip → az webapp deploy → smoke。
+#
+# vite lib mode 把 gateway 打成单文件 + npm install 产扁平 node_modules, 部署单元跟
+# 任何普通 Node 项目无异。配合 bicep 里 SCM_DO_BUILD_DURING_DEPLOYMENT=false, Oryx
+# 不会去 build/重排 node_modules, 直接用 zip 内容启动。
+#
+# 历史背景: 上一版用 storage 上传 + WEBSITE_RUN_FROM_PACKAGE=<SAS URL> 绕开 Oryx,
+# 那是 pnpm symlink 时代的解法; monorepo bundle 化后不再需要。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'scripts/build-deploy.sh'
+      - 'scripts/gen-deploy-pkg.mjs'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/gateway-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Target env'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, prod]
+
+concurrency:
+  group: gateway-deploy-${{ github.event.inputs.env || 'dev' }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write    # OIDC 联邦认证
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ENV: ${{ github.event.inputs.env || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build deploy package
+        run: ./scripts/build-deploy.sh
+
+      - name: Zip
+        run: |
+          cd app-service-deploy
+          zip -rq ../deploy.zip . -x '*.map'
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy zip to App Service
+        run: |
+          az webapp deploy \
+            -g "rg-lingxi-${TARGET_ENV}" \
+            -n "app-lingxi-${TARGET_ENV}-gateway" \
+            --src-path deploy.zip --type zip
+
+      - name: Smoke test /healthz
+        run: |
+          HOST="app-lingxi-${TARGET_ENV}-gateway.azurewebsites.net"
+          for i in 1 2 3 4 5 6 7 8; do
+            sleep 10
+            if curl -sf "https://${HOST}/healthz" >/dev/null; then
+              echo "✅ /healthz OK (attempt $i)"
+              exit 0
+            fi
+            echo "attempt $i failed, retrying..."
+          done
+          echo "❌ /healthz failed after retries"
+          exit 1

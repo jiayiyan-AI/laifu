@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "tsx watch src/entry.ts",
+    "build": "vite build",
+    "start": "node dist/index.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
@@ -21,6 +21,7 @@
     "cookie-parser": "^1.4.7",
     "express": "^4.19.0",
     "jsonwebtoken": "^9.0.3",
+    "undici": "^8.3.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
@@ -33,7 +34,7 @@
     "supertest": "^6.3.4",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
-    "undici": "^8.3.0",
-    "vitest": "^1.4.0"
+    "vite": "^8.0.0",
+    "vitest": "^4.1.0"
   }
 }
