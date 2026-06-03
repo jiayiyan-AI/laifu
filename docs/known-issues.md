@@ -50,3 +50,207 @@
 
 - **影响**：测试方法选择问题, 与架构无关。
 - **应对**：真实平台上 Hermes 自己用 `~/.hermes/memories/` 管理。
+
+### #8 `az containerapp exec` 引号嵌套地狱 — 用 stdin + base64 绕开
+
+- **现象**: 想在 ACA 容器里跑一段稍复杂的脚本 (含引号、`>`、heredoc), 用 `az containerapp exec --command "sh -c '...'"` 各种形式拼, 远端会报 `Syntax error: Unterminated quoted string`、`grep: Trailing backslash`、或者本地 sh 直接把脚本当文件名解析。原因: 本地 zsh / az CLI 命令行 / 远端 sh 三层都有自己的引号处理, 互相吃逃逸字符, inline heredoc 在 ws 通道上也基本传不过去。
+- **解决手势**: 把脚本 base64 编码后从 stdin 喂给目标解释器, 命令里只有一段裸 base64 字符串, 完全没引号要逃。
+
+  ```bash
+  # 1. 本地把脚本编码 (注意 printf 不加末尾换行, 不要用 echo)
+  B64=$(printf '%s' "$PYSCRIPT" | base64 | tr -d '\n')
+
+  # 2. 远端解码后 pipe 给 python3 (其他解释器同理: bash、node 都行)
+  script -q /dev/null az containerapp exec -g $RG -n $APP \
+    --command "sh -c \"echo $B64 | base64 -d | python3\""
+  ```
+
+  关键: 外层 `--command` 用双引号包, 内层 sh 命令也用双引号, 中间的 `$B64` 在本地展开成一长串无引号的安全字符 (base64 字母集本身无 shell 特殊字符), 远端 sh 拿到的就是 `echo XXX... | base64 -d | python3`, 一路畅通。
+- **何时用**: 任何想在 ACA 容器里跑超过单行简单命令的场景 — sqlite probe / 临时数据迁移脚本 / 调 SDK 测试连通性都适用。`docs/poc.md` Step 7 就是按这个手势跑通的。
+- **替代方案**: 把脚本预先打进镜像 (`COPY scripts/`) 然后 exec 调用 — 一次性临时用嫌重, 长期调试工具值得做。
+
+### #7 `ContainerMappingCache` 是进程内 Map, 没有 TTL / 失效机制
+
+- **现象**: 在 supabase 里手动清掉 `container_mapping` 行 (例如 dev 环境清理孤儿数据), gateway 仍然认为容器存在 — 下游 `/api/entitlements/cloud/enable` 等接口拿陈旧的 `container_name` 去 ACA 找不到, 返回 500 `ResourceNotFound`。
+- **原因**: `apps/gateway/src/db/cache.ts:ContainerMappingCache` 启动时 `loadAll()` 把整张表读进内存 Map, 之后只在 `purchase` / `provisioning` 路径主动 `set()`. 没有任何机制把外部数据库改动同步回缓存。
+- **应对** (运维侧):
+  - dev 环境清完 DB, **重启 App Service** (`az webapp stop && az webapp start`, 注意 `restart` 不一定真重启 worker) 让 gateway 重读
+  - 生产应避免手动改 DB; 用 admin 接口去删
+- **何时根治**: 加监听 (Supabase realtime) 或定时 reload 才能彻底; 目前用户量小, 不值当。
+
+### #9 App Service Key Vault reference cache 启动失败后不会自动重 resolve
+
+- **现象**: 新 KV 刚创建时 secret 还没灌, 但 App Service 已经先部署 — gateway 启动时所有 KV reference 状态 `SecretNotFound`, node 进程 exit 1 (`Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` 这类错), App Service stuck 在 startup failure 循环。后来灌好 secret + `az webapp restart` 仍**不会**触发重 resolve, 状态依然 `SecretNotFound`。
+- **原因**: App Service 那层有自己的 KV reference cache, restart 只是重启 worker, 不刷 cache。Cache 只在 **app settings 实际变更**时刷新, 普通 restart 不触发。
+- **正确顺序 (新环境首次部署)**:
+  1. `./deploy.sh dev` 建好 KV + role assignment
+  2. **回灌 8 个 secret** (灌到 KV)
+  3. 再 `az webapp deploy --src-path deploy.zip` 部署代码
+- **已发生的灾难恢复手势**:
+  ```bash
+  # 触发 appsettings 变更 → 强制 App Service 重读所有 KV reference
+  az webapp config appsettings set -g rg-lingxi-dev -n app-lingxi-dev-gateway \
+    --settings "KV_REFRESH_TRIGGER=$(date +%s)" --output none
+  # ~30 秒后所有 reference 转 Resolved, app 自动重启成功
+  ```
+- **验证 KV reference 实时状态** (不在 portal 里翻):
+  ```bash
+  az rest --method get --url "https://management.azure.com/subscriptions/<SUB>/resourceGroups/rg-lingxi-dev/providers/Microsoft.Web/sites/app-lingxi-dev-gateway/config/configreferences/appsettings?api-version=2022-03-01" \
+    --query "value[].{name:name, status:properties.status}" -o table
+  ```
+  正常应该全是 `Resolved`; 出现 `SecretNotFound` / `AccessDenied` 就走上面的手势。
+- **更深层根治**: 把 KV secret 写入也搬到 Bicep (用 `Microsoft.KeyVault/vaults/secrets` 资源声明), deploy 完 secret 就齐, 永远不会出现 "代码到了但 secret 没到" 的窗口。当前是手动灌, 因为某些 secret 是从第三方 (Google OAuth / Anthropic) 拿到的, Bicep 里写明文不合适。
+
+### #10 ACA 容器 `no_new_privs=true` 禁 sudo, subPath 子目录 owner 必须用 initContainer 修
+
+- **现象**: 用 `volumeMount.subPath` 让多用户共享 NFS share 时, ACA 自动 mkdir 出的子目录 owner=root:root, 0755。主容器以非 root 用户 (hermes UID 1000) 启动时, 第一行 `touch /home/hermes/.initialized` 就 `Permission denied` 报错挂掉。试图在 entrypoint 里 `sudo chown hermes:hermes /home/hermes` 修也失败:
+  ```
+  sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
+  sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.
+  ```
+- **原因**: ACA 默认给所有容器开 `no_new_privs=true` 这个 Linux kernel 安全 flag, **禁止任何 setuid 提权, 连 sudo 都不行**。这是平台层硬限制, 用户改不了 (类似坑 #9 的 KV cache, 平台底层 behaviour)。
+- **关键发现**: ACA `BaseContainer` schema **没有 `securityContext` / `runAsUser` 字段**, 不能在 container 配置里 override image 的 USER。
+- **正解 — initContainer**:
+  - ACA 支持 `template.initContainers`, 它们以 image 默认 USER 启动 (跑完 exit 0 才启动主容器)
+  - 用一个**默认 USER 是 root 的 image** (我们用 `mcr.microsoft.com/cbl-mariner/busybox:2.0`, 微软 Mariner busybox, ~2MB, 公网可拉)
+  - init container 挂相同 volume + 相同 subPath, 跑一行 `chown 1000:1000 /home/hermes`
+  - 主容器 (hermes image, USER hermes) 起来时 owner 已正确, 干净启动
+- **实现位置**: `apps/gateway/src/provisioning/azure.ts:createContainerApp` 的 `template.initContainers`。完整方案见 [nfs.md §十](./nfs.md#十-多租户共享-share--subpath-隔离-2026-06-03-已落地)。
+- **诊断手势**:
+  ```bash
+  # 看容器 console (会看到 sudo 错或 Permission denied 之类)
+  WS=$(az monitor log-analytics workspace list -g rg-lingxi-dev --query "[0].customerId" -o tsv)
+  az monitor log-analytics query -w "$WS" --analytics-query \
+    "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '<NAME>' \
+       | where TimeGenerated > ago(15m) | order by TimeGenerated desc | take 30 \
+       | project TimeGenerated, ContainerName_s, Log_s" -o tsv
+  ```
+- **后人警告**: 任何"在 ACA 容器内提权"的方案 (sudo / setuid 二进制 / 改文件 mode 0777 然后 chown) 都因为 `no_new_privs` 失效。**唯一通用解就是 initContainer 用 root image**, 别再试别的方向。
+
+
+---
+
+## 🟢 已修复 (保留作为踩坑记录)
+
+### #6 ~~Hermes `state.db` 在 Azure Files (SMB) 上写不进去, 多轮对话上下文全丢~~ — **已修 (2026-06-03)**
+
+> **修复方案**: 整盘换 NFS 4.1 — Premium FileStorage + VNet (Service Endpoint) + ACA `nfsAzureFile` binding。详见 [nfs.md](./nfs.md)。
+>
+> **验证**: 端到端跑通, `GET /api/threads/:id/messages` 不再 502, 历史对话正常回显。容器内 sqlite probe 三种 PRAGMA 全 OK (vs SMB 时单连接零竞争都失败)。
+>
+> 下面的现象/排查/根因/方案对比段落原样保留, 它们记录了完整的论证过程, 是未来类似"网络存储 + 文件锁"调试的参考样本。新人接手时只需要知道结论, 不需要重读。
+
+#### 表面现象
+
+- Web 端打开一个**昨天聊过的旧对话**，前端立刻请求 `GET /api/threads/:id/messages` 拿历史 → **502 Bad Gateway**，响应体 `{"error":"container returned 500"}`
+- 微信入站 (`/wechat`) 触发的 thread 同样会复现
+- 不是稳定 502，是间歇 —— 偶尔能拿到 200，但返回的 `messages` 是空数组
+
+#### 排查证据
+
+调用链：浏览器 → gateway `GET /api/threads/:id/messages` (`apps/gateway/src/api/chat.ts:67`) → 容器 `GET /history` (`docker/hermes/server.py:245`) → `load_history()` (`docker/hermes/server.py:166`) → `hermes_state.SessionDB.get_messages(uuid)`
+
+Log Analytics 查询 (`ContainerAppConsoleLogs_CL`) 多次命中：
+
+```
+[server] load_history failed: database is locked
+[server] GET /history?session_id=web%3Athr_xxx HTTP/1.1  500
+```
+
+进容器 (`az containerapp exec`) 验证文件状态：
+
+| 路径 | 状态 |
+|------|------|
+| `/home/hermes/.hermes/state.db` | **0 字节**, 最后修改时间停在容器启动后不久 |
+| `/home/hermes/.hermes/sessions/` | 空目录 |
+| `/home/hermes/.hermes/_gateway_session_map.json` | 正常更新, 包含 `web:thr_xxx → 20260603_xxx_xxx` 的映射 |
+
+#### 根因
+
+**SQLite + Azure Files (SMB 协议) 文件锁不兼容**。
+
+Hermes 用 SQLite 文件 `state.db` 存所有 session 数据。Azure Files 默认对外暴露 SMB 协议端点, 容器把 `/home/hermes` 通过 SMB 挂载 (`mount` 输出确认: `cifs vers=3.1.1`, 无 `nobrl` 选项)。
+
+SQLite 在打开数据库时就会用 `fcntl(F_SETLK)` 尝试拿 reserved/exclusive byte-range lock 初始化文件 — **即使没有其他进程访问, 这一步也必跑**。Azure Files SMB 服务端对 byte-range lock 的实现历史上不可靠 (Linux 内核 CIFS 客户端已知问题), SQLite 拿不到肯定答复立刻判 `SQLITE_BUSY`。SQLite 官方文档明确警告: **强烈建议避免在网络文件系统上使用 SQLite**。
+
+**实证 (2026-06-03 在容器 `hermes-8a599ed4` 内跑的 probe)**:
+
+| 测试 | 结果 |
+|------|------|
+| `/tmp` (容器本地 tmpfs), 单连接新文件, 建表+INSERT | ✅ OK |
+| `/home/hermes/.hermes/` (SMB), 单连接新文件, 建表+INSERT | ❌ `database is locked` |
+| 同上 + `PRAGMA journal_mode=wal` | ❌ 连 PRAGMA 都执行不了 |
+| 同上 + `PRAGMA locking_mode=EXCLUSIVE` | ❌ PRAGMA 能执行, INSERT 失败 |
+
+**关键结论: 不是"有竞争才坏", 是"动 SQLite 就坏"**。无任何竞争的全新文件, 用唯一一个连接做最简单的写, 在 SMB 路径上直接失败。WAL / EXCLUSIVE / 只读 + retry 等"调连接参数"的方向已被实证排除。
+
+实际触发的失败链：
+
+1. Hermes chat subprocess 执行成功, stdout 返回 reply, gateway 拿到响应 200 OK
+2. 但 hermes 内部把 message 持久化进 `state.db` 这一步在 SMB 上拿锁失败 → 文件停留在 0 字节
+3. 下一次 `GET /history` 进来, 打开同一个文件再次拿锁失败 → `database is locked` 异常 → 容器 500 → gateway 502
+
+普通文件 IO (如 `_gateway_session_map.json` 374B、`config.yaml` 850B、`models_dev_cache.json` 2.16MB) 走 SMB 完全正常, 不依赖 `fcntl` 字节范围锁。**只有 SQLite (以及任何依赖 POSIX advisory lock 的工具) 踩坑**。
+
+#### 衍生影响（比 502 严重得多）
+
+`call_hermes` (`docker/hermes/server.py:204`) 调 hermes CLI 时用 `--resume <uuid>` 让 hermes 从 `state.db` 恢复历史 context。由于 db 是空的, **每条消息进入 hermes 时都没有任何历史 context, 等于每次都是全新对话的第 1 轮**。
+
+表现为：
+
+- 多轮对话上下文全断 ("你叫什么名字" → "我叫小明" → "我叫什么" 会答不上)
+- hermes 的 memories / SOUL 主动学到的人设也不会沉淀到 db
+- LLM 每次输入 token 都在低水位, 看似省钱实际是功能没实现
+- 微信入站走同一路径, 同样受影响
+
+**当前服务端从未真正记住任何对话, 整个对话应用本质上以 stateless 单 turn 在跑**。
+
+#### 候选方案与权衡
+
+> ⚠️ 后续调研发现 SQLite 雷区不止 hermes 一家踩 (pip cache、npm cacache、playwright cookies、Agent 帮用户写的 `db.sqlite3` 都是 sqlite, 都依赖 `fcntl` 锁)。**任何"只解 hermes 一家"的局部方案都不彻底**, 因为只要 home 还在 SMB 上, Agent 跑无关任务时仍会随机崩。
+>
+> **当前决策**: 直接走 **方案 B (切 NFS 4.1)**, 详细落地见 [nfs.md](./nfs.md)。下表保留是为了记录论证过程, 别按这个表选了。
+
+按"成本 / 工程量 / 根治程度"排序：
+
+| 方案 | 月成本增加 | 工程量 | 根治程度 | 备注 |
+|------|----------|------|---------|------|
+| A. `state.db` 走容器本地盘 + 定期导出回 Azure Files | $0 | 小 (改 entrypoint + server.py) | ⚠️ **只解 hermes 一家**, pip/npm/playwright/用户项目仍踩雷 | 早期文档里以为是首选, 现已降级 |
+| **B. Azure Files 切到 Premium FileStorage + NFS 4.1 协议** | **~$16/月/用户** (实际部署 Provisioned v1, 100 GiB share × $0.16; 早期文档错把 v2 单价 $3.2 当成 v1, 已校正; v2 切换列入 [nfs.md §十](./nfs.md#十-未来优化-v1--v2-切换-todo-高优先级) 高优先 TODO) | 当前无存量用户场景下**小** (destroy-recreate dev/prod, 见 [nfs.md](./nfs.md)) | ✅ **全面根治**, 救活所有 SQLite 用户 | 已选定。VNet 走 Service Endpoint 即可, 不必上 Private Endpoint, 无 €2/天费用 |
+| C. gateway 把消息历史改写到 Supabase 当权威源 | $0 (走现有 Supabase) | 大 (动 gateway + 数据模型 + 重做 prompt 组装) | ⚠️ **只解 hermes 一家**, pip/npm/playwright 仍踩雷 | 解决的是 hermes 这一家的 db 问题, 不解决 SMB 整体不能 host sqlite 的根本矛盾 |
+| D. 只在 `server.py` 加 `mode=ro` 只读 + retry | $0 | 极小 | ❌ **已实证无效** | 写入会失败, 多轮 context 问题不解决; 而且 SMB 上连读路径也是先拿锁, 仍会 `database is locked` |
+
+不可行的方案 (已实证或权威排除):
+
+- **把整个 `/home/hermes` 搬出 Azure Files**：违反架构核心 (`architecture.md` 第三/五章 "每用户一个 volume、整盘挂载"), 否决
+- **Premium SMB**：SMB 协议层 advisory lock 缺陷依然存在, SKU 换不掉, 否决
+- **CIFS mount 加 `nobrl` 关掉字节范围锁**：ACA/App Service 的 CIFS mount 选项由平台后端控制, **用户不能改**, 此路不通 (Microsoft 官方答复)
+- **`PRAGMA journal_mode=wal` / `locking_mode=EXCLUSIVE`**: 已在 `hermes-8a599ed4` 容器内 probe 实证, 在 SMB 路径上**单连接零竞争**都失败, 切 PRAGMA 这一步本身就报锁错
+- **任意 SQLite 客户端侧调参 (timeout、busy_handler、unix-dotfile VFS 等)**: 同上, 问题在"打开数据库时拿初始锁"这一步, 客户端怎么调都绕不开
+- **让 hermes 把 session 存到非 SQLite 后端 (Postgres/Supabase)**: 已查 hermes 源码 (`hermes_state.py`), `SessionDB` 直接 `sqlite3.connect()` 写死, 无 DSN/plugin 抽象。第三方 `elhenro/hermes-pg` 只替换 memory 不碰 session
+
+#### 当前决策
+
+**已执行方案 B (2026-06-03)**, 落地清单与执行记录见 [nfs.md](./nfs.md)。当时决策的理由:
+
+1. 不止 hermes 一家踩 sqlite (上面 callout 已说), 只有切 NFS 是真根治
+2. 真实成本 ~$16/月/用户 (dev 1 用户 = $16, 实际部署的 Provisioned v1 模型; 早期文档误以为 $3.2 是 v1 价, 实际是 v2 价, 已校正); 5+ 用户必须切 v2 见 [nfs.md §十](./nfs.md#十-未来优化-v1--v2-切换-todo-高优先级)
+3. 平台当时无存量用户, destroy-recreate 无代价, 是切换的最佳窗口
+4. 代码改动极小 (Bicep 加 VNet + Premium account, gateway `azure.ts` 改 50 行)
+
+切换已于 2026-06-03 完成, 本节归入"已修复"类。
+
+#### 排查命令速查
+
+```bash
+# 看实际错误
+az monitor log-analytics query -w <workspace-customer-id> \
+  --analytics-query "ContainerAppConsoleLogs_CL \
+    | where ContainerAppName_s == 'hermes-<suffix>' \
+    | where Log_s contains 'load_history' or Log_s contains 'database is locked' \
+    | order by TimeGenerated desc | take 50"
+
+# 进容器看 db 文件大小 (需要 pty, 用 script 包一层)
+script -q /dev/null az containerapp exec -g rg-lingxi-dev -n hermes-<suffix> \
+  --command "ls -la /home/hermes/.hermes/"
+```

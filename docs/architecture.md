@@ -134,7 +134,7 @@ flowchart TB
 
 - **为什么选它**：缩容到 0 零计费、按秒计费、有免费额度（每月 180K vCPU-秒 + 360K GiB-秒 + 200 万次请求）、支持 Azure Files 持久化
 - **缩容到 0 的计费确认**：微软官方文档明确写明 "When a revision is scaled to zero replicas, no resource consumption charges are incurred."——50 个 Container 全部 sleep 时计算费用 = $0
-- **Environment 隐藏成本注意**：如果给 Container Apps Environment 配了 VNet 或 Private Endpoint，会产生约 €2/天的网络基础设施费用。**使用默认配置（不配 VNet）则无此费用**
+- **Environment 隐藏成本注意**：CAE 配 **Private Endpoint** 会产生约 €2/天的网络基础设施费用。**Service Endpoint 不收基础设施费**, 当前架构走 NFS 挂载必须给 CAE 配 VNet (见第五节), 但只开 Service Endpoint, **无 €2/天费用**。早期文档建议"不配 VNet 省钱"已不再适用 (SMB 路径被 SQLite 锁问题否决)。
 - **对比 Fly.io**：功能相似，同为容器托管 + 按需扩缩。Azure 有免费额度且生态熟悉。小规模时 Azure 更便宜，规模大了差距缩小
 - **对比 Cloudflare Containers**：CF 无持久化存储（致命，Hermes 的记忆/session/workspace 在容器 sleep 后会丢失）、最大规格仅 0.5vCPU + 4GiB、总并发上限低（40GiB 内存 / 40 vCPU）、仍在 Beta 阶段
 - **对比 E2B**：E2B 是一次性执行沙盒，用完即毁，无法持久化 Hermes 状态。适合"跑段代码"场景，不适合需要长期积累记忆的 Agent
@@ -150,7 +150,9 @@ flowchart TB
 - **必须开启 Always On**（B1 及以上支持），防止空闲时进程被回收导致 iLink polling 中断
 - **推荐起步配置**：B1 档（1C 1.75GB，约 $13/月），可支撑几百个并发 polling
 
-### 5. 存储层：Azure Files + 整个 home 目录挂载
+### 5. 存储层：Azure Files (NFS 4.1) + 整个 home 目录挂载
+
+> ⚠️ **协议是 NFS 4.1, 不是 SMB**。早期版本走 SMB, 撞上 [known-issues.md#6](./known-issues.md) 的 SQLite 锁问题 (pip cache / npm cacache / playwright cookies / hermes state.db 全部依赖 fcntl 锁, SMB 上拿不到), 已在零用户阶段切到 NFS。详细落地见 [nfs.md](./nfs.md)。Premium FileStorage SSD + Provisioned v2 SSD NFS, dev+prod 合计 ~$6/月。CAE 必须挂 VNet (Service Endpoint, 不收基础设施费)。
 
 ```mermaid
 flowchart TB
@@ -159,18 +161,18 @@ flowchart TB
     end
 
     subgraph Container A
-        CA_RO[只读层 来自 Image]
+        CA_RO["只读层 来自 Image<br/>(含 /opt/hermes-agent 源码)"]
         CA_VOL["/home/hermes → Azure Files user_a/home"]
     end
 
     subgraph Container B
-        CB_RO[只读层 来自 Image]
+        CB_RO["只读层 来自 Image<br/>(含 /opt/hermes-agent 源码)"]
         CB_VOL["/home/hermes → Azure Files user_b/home"]
     end
 
     subgraph Azure Files
-        AF_A["user_a/home/<br/>.hermes/ .local/ .npm-global/<br/>workspace/ .config/gh/ ..."]
-        AF_B["user_b/home/<br/>.hermes/ .local/ .npm-global/<br/>workspace/ .config/gh/ ..."]
+        AF_A["user_a/home/<br/>.hermes/ (config + memories + sessions)<br/>.local/ .npm-global/<br/>.config/gh/ ..."]
+        AF_B["user_b/home/<br/>.hermes/ (config + memories + sessions)<br/>.local/ .npm-global/<br/>.config/gh/ ..."]
     end
 
     IMG --> CA_RO
@@ -185,6 +187,7 @@ flowchart TB
 
 - **方案**：每用户一个 Azure Files volume，挂载到容器的 `/home/hermes`（整个 home 目录）
 - **为什么挂整个 home 而非逐个子目录**：Agent 可能使用任意 CLI 工具（GitHub CLI → `~/.config/gh/`、Azure CLI → `~/.azure/`、SSH → `~/.ssh/` 等），各工具的认证和配置存储路径各不相同，逐个枚举挂不完。挂载整个 home 一劳永逸
+- **Hermes 源码不在 home 里**：源码装在镜像只读层 `/opt/hermes-agent`，home 里只放 `.hermes/`（config + memories + sessions）、`.local/`（pip 包）、`.npm-global/` 等真正的"用户数据"。这样镜像升级时所有用户自动跑新版本代码，volume 里的数据保持不变。早期版本把源码装在 `~/.hermes/hermes-agent`，会被 volume 锁死老版本，已废弃
 - **成本**：Azure Files 约 $0.06/GB/月，Hermes 的配置和记忆文件很小，单用户通常几十到几百 MB
 - **用户隔离**：每个 Container 挂自己的 volume，容器内看到的路径都是 `/home/hermes`，但背后对应的宿主机存储完全不同，天然隔离
 
@@ -324,15 +327,15 @@ errcode -2（限流）→ 指数退避重试，最大间隔 30s
 | context_token 必须持久化 | 存 DB，重启不丢 |
 | iLink 目前不支持群聊 | 只支持单聊（DM），产品文案里需说明 |
 
-## 五、调度层方案（已采纳方案 B，方案 A 作为对照保留）
+## 五、调度层方案（当前实际走方案 A，方案 B 作为后续演进路径保留）
 
 Gateway 收到用户消息后，如何调用 Hermes 处理并拿到回复？这是整个系统的核心调度问题。
 
-**结论**：MVP 直接走**方案 B（Container Apps Job + 异步队列）**。
+**当前实现**：**方案 A（每用户独立 Container App + 同步 HTTP `POST /chat`）**。代码在 `apps/gateway/src/api/chat.ts`，每用户 ACA 由 `apps/gateway/src/provisioning/azure.ts` 创建。
 
-**理由**：Phase B 实测 ACA Ingress 4 分钟超时坐实，Azure Files 上 `npm install -g` 就能撞到。Hermes Agent 经常调工具/编译/装包/多轮推理，复杂任务很容易超 4 分钟 —— 方案 A 不是 MVP 凑合方案，是注定要返工的方案。详见 `docs/02-mvp-plan.md` §一。
+**注定要切方案 B 的理由**：ACA Ingress 4 分钟超时是硬上限（见 `docs/known-issues.md#2`），Hermes Agent 调工具/装包/多轮推理很容易超时。目前靠 DashScope qwen-plus 回复快暂时压住，未来切更慢模型或更重任务时必须切方案 B（Job + 异步队列）。
 
-方案 A 仍保留在下文作为对照，便于理解为什么不选它。
+下文两方案并列保留，便于切换时对照。
 
 ---
 
@@ -381,17 +384,20 @@ import { ContainerAppsAPIClient } from "@azure/arm-appcontainers";
 async function createUserContainer(userId: string) {
   const appName = `hermes-${userId}`;
   await client.containerApps.beginCreateOrUpdate(RESOURCE_GROUP, appName, {
-    location: "eastasia",
+    location: "southeastasia",
     template: {
       containers: [{
         name: "hermes",
         image: `${ACR_HOST}/hermes-base:v1`,
         resources: { cpu: 0.5, memory: "1Gi" },
         volumeMounts: [
-          { volumeName: "hermes-data", mountPath: "/home/hermes/.hermes" },
-          { volumeName: "workspace", mountPath: "/home/hermes/workspace" }
+          // 整盘挂 home,覆盖 Hermes 数据 + pip/npm 包 + 各类 CLI 认证
+          { volumeName: "hermes-home", mountPath: "/home/hermes" }
         ]
       }],
+      volumes: [
+        { name: "hermes-home", storageType: "AzureFile", storageName: bindingName }
+      ],
       scale: { minReplicas: 0, maxReplicas: 1 }
     },
     configuration: {
@@ -524,7 +530,7 @@ Gateway
 ```typescript
 async function createHermesJob() {
   await client.jobs.beginCreateOrUpdate(RESOURCE_GROUP, "hermes-job", {
-    location: "eastasia",
+    location: "southeastasia",
     configuration: {
       triggerType: "Manual",
       replicaTimeout: 1800,     // 最长 30 分钟
@@ -569,8 +575,8 @@ async function dispatchToHermes(userId: string, msg: ILinkMessage) {
           { name: "MESSAGE_ID", value: messageId },
         ],
         volumeMounts: [
-          { volumeName: `user-${userId}-data`, mountPath: "/home/hermes/.hermes" },
-          { volumeName: `user-${userId}-workspace`, mountPath: "/home/hermes/workspace" }
+          // 整盘挂 home (与方案 A 保持一致)
+          { volumeName: `user-${userId}-home`, mountPath: "/home/hermes" }
         ]
       }]
     }
@@ -610,7 +616,7 @@ async function pollForResult(messageId: string, userId: string, contextToken: st
 ```
 容器启动：
   1. 读环境变量 USER_ID, MESSAGE_ID
-  2. Azure Files volume 已自动挂载到 /home/hermes/.hermes 和 /home/hermes/workspace
+  2. Azure Files volume 已自动挂载到 /home/hermes（整盘挂，覆盖 .hermes/、workspace/、pip/npm 包等）
   3. 从 DB 读消息内容
   4. 调用 Hermes CLI 处理消息：
      hermes chat --quiet -q "<消息内容>"
@@ -735,7 +741,9 @@ CREATE TABLE messages (
 
 ## 七、成本结构（Azure 基础设施）
 
-> 以下仅核算 Azure 基础设施成本，LLM API 费用另行计算。价格基于 Azure 官方定价（East Asia 区域），实际请以 [Azure 定价计算器](https://azure.microsoft.com/en-us/pricing/calculator/) 为准。
+> 以下仅核算 Azure 基础设施成本，LLM API 费用另行计算。价格基于 Azure 官方定价（Southeast Asia 区域），实际请以 [Azure 定价计算器](https://azure.microsoft.com/en-us/pricing/calculator/) 为准。
+>
+> ⚠️ Hermes home 存储已切到 **Azure Files NFS 4.1 (Premium FileStorage, Provisioned v1) + 多租户共享 share + subPath 隔离** — 见 [nfs.md §十](./nfs.md#十-多租户共享-share--subpath-隔离-2026-06-03-已落地)。**所有用户共用 1 个 100 GiB share, 每人挂自己的子目录, 总成本固定 $16/月不随用户数增长**。下面成本表已按这个新模型重算。
 
 ### 7.1 各服务单价参考
 
@@ -747,8 +755,10 @@ CREATE TABLE messages (
 | | GiB 内存活跃秒 | $0.000003/s | |
 | | HTTP 请求 | $0.40/百万次 | |
 | | **每月免费额度** | — | 180K vCPU-s + 360K GiB-s + 200 万次请求 |
-| **Azure Files（Hot）** | 数据存储 | ~$0.06/GB/月 | 按实际用量 |
+| **Premium FileStorage NFS v1** (hermes-shared, 全用户共用) | share quota | $0.16/GiB/月 | 最小 100 GiB → **$16/月固定**, 用 subPath 给所有用户分子目录, 不随用户数增长 |
+| **Azure Files Blob** (云盘, StorageV2 Hot) | 数据存储 | ~$0.021/GB/月 | 按实际用量, 早期 ≤$1/月可忽略 |
 | | 事务 | ~$0.015/万次 | 读写操作 |
+| **VNet (Service Endpoint only)** | — | **$0** | Service Endpoint 不收基础设施费; Private Endpoint 才有 ~€2/天 |
 
 ### 7.2 单用户成本建模
 
@@ -756,11 +766,13 @@ CREATE TABLE messages (
 
 | 用户类型 | 日均对话轮数 | 每轮 Hermes 执行时长 | 日活跃秒数 | 月计算成本（扣除免费额度前） | 月存储成本 |
 |---------|------------|-------------------|----------|--------------------------|----------|
-| 轻度用户 | 5 轮 | 30s | 150s | $0.14 | ~$0.01 |
-| 中度用户 | 20 轮 | 60s | 1,200s | $1.08 | ~$0.03 |
-| 重度用户 | 50 轮 | 90s | 4,500s | $4.05 | ~$0.06 |
+| 轻度用户 | 5 轮 | 30s | 150s | $0.14 | 摊到共享 $16, 详 §7.4 |
+| 中度用户 | 20 轮 | 60s | 1,200s | $1.08 | 同上 |
+| 重度用户 | 50 轮 | 90s | 4,500s | $4.05 | 同上 |
 
 > **计算公式**：月成本 = 日活跃秒 × 30天 × (1 × $0.000024 + 2 × $0.000003) = 日活跃秒 × 30 × $0.000030
+>
+> **存储成本是固定项**: 100 GiB 共享 share = $16/月, 与用户数无关; 用户增多时逼近 100 GiB 顶才需要升预配 (升 200 GiB = $32, 一行命令)
 
 ### 7.3 免费额度能撑多少用户
 
@@ -773,41 +785,49 @@ CREATE TABLE messages (
 | 重度用户 | 4,500s × 30天 × 1 = **135,000** | **1-2 个** |
 
 > 早期用户少且以轻度使用为主时（≤40 人），Container Apps 计算费仍可完全在免费额度内。中度以上用户超过 5 个就会开始产生计算费用。
+>
+> NFS 存储 $16/月固定**不在免费额度内**, 是首日就开始计费的硬底价 — 换取 SMB 上 SQLite 锁失败问题根治 (见 [known-issues #6](./known-issues.md#6))。
 
 ### 7.4 不同规模下的月基础设施成本
 
 ```mermaid
 xychart-beta
     title "Azure 基础设施月成本（$）— 按用户规模"
-    x-axis ["10人", "50人", "100人", "500人"]
+    x-axis ["1人", "10人", "50人", "100人", "500人"]
     y-axis "月成本 ($)" 0 --> 1000
-    bar [14, 36, 139, 956]
+    bar [30, 30, 56, 156, 985]
 ```
 
-| 规模 | App Service | Container Apps 计算 | Azure Files | **月总成本** |
-|------|------------|-------------------|-------------|------------|
-| **10 用户** | $13 | $0（免费额度内） | ~$1 | **~$14** |
-| **50 用户** | $13 | ~$20 | ~$3 | **~$36** |
-| **100 用户** | $13 | ~$120 | ~$6 | **~$139** |
-| **500 用户** | $26（升 B2） | ~$900 | ~$30 | **~$956** |
+| 规模 | App Service | Container Apps 计算 | NFS 共享 share | 云盘 Blob | **月总成本** |
+|------|------------|-------------------|----------------|-----------|------------|
+| **1 用户** (当前 dev) | $13 | $0（免费额度内） | $16 | ~$0 | **~$30** |
+| **10 用户** | $13 | $0（免费额度内） | $16 | ~$1 | **~$30** |
+| **50 用户** | $13 | ~$20 | $16 | ~$3 | **~$56** |
+| **100 用户** | $13 | ~$120 | $16-32 (撞顶时升预配) | ~$6 | **~$156** |
+| **500 用户** | $26（升 B2） | ~$900 | ~$80 (升到 500 GiB) | ~$26 | **~$985** |
+
+> **NFS 共享 share + subPath 方案让存储成本基本不随用户数增长**: 50 人量级仅 $16, 100 人量级最多 $32 (升 200 GiB), 远低于改造前每用户 $16 线性增长的模型 (100 人 = $1600)。详细方案见 [nfs.md §十](./nfs.md#十-多租户共享-share--subpath-隔离-2026-06-03-已落地)。
+>
+> 真正的规模成本主导项变回 **Container Apps 计算费** — 500 人量级接近 $900, 这是正常的"按用 → 按计算量计费"结构。
 
 ### 7.5 成本结构占比
 
 ```mermaid
 pie title 早期（10 用户）
     "App Service B1" : 13
-    "Azure Files" : 1
+    "NFS 共享 share" : 16
+    "云盘 Blob" : 1
     "Container Apps" : 0
 ```
 
 ```mermaid
 pie title 规模化（500 用户）
     "App Service B2" : 26
-    "Azure Files" : 30
+    "NFS + 云盘 Blob" : 106
     "Container Apps" : 900
 ```
 
-> **核心结论**：早期 Azure 基础设施成本极低（~$14/月），几乎只有 App Service 月租。规模化后 Container Apps 按秒计费成为主要支出项（500 人量级接近 $1000/月），需要在产品定价时充分考虑这一项。
+> **核心结论**：早期 Azure 基础设施成本 ~$30/月 (App Service + 固定 NFS share), 与用户数无关。规模化后 Container Apps 按秒计费成为主要支出项（500 人量级 ~$985/月），需要在产品定价时充分考虑这一项。共享 share + subPath 方案让存储部分基本恒定, 不再是早期"每用户 $16 线性增长"的成本噩梦。
 
 ### 7.6 替代方案对比：Cloudflare Workers + Fly.io
 
@@ -922,11 +942,13 @@ flowchart LR
 | **Gateway（iLink 长轮询）** | 同上（App Service 包含） | Durable Object ≈ **$0**（免费额度内） |
 | **Hermes 容器计算** | $0.000030/s（1 vCPU + 2 GiB） | **~$0.0000276/s**（performance-1x：1 dedicated vCPU + 2GB）|
 | **容器停止时** | $0（缩容到 0 零费用） | **$0.225/用户/月**（rootfs 1.5GB × $0.15） |
-| **持久化存储** | Azure Files ≈ $0.06/GB/月（按用量） | Fly Volumes = **$0.15/GB/月（按预分配）** |
+| **持久化存储** | 共享 NFS share = **$16/月固定** (100 GiB, 全用户共用 + subPath 隔离) + 云盘 Blob ~$0.021/GB | Fly Volumes = **$0.15/GB/月（按预分配, 每用户 1 GB ≈ $0.15）** |
 | **免费计算额度** | 180K vCPU-s + 360K GiB-s | **无**（Fly.io 无免费计算） |
 | **出站带宽** | 包含 | Asia $0.04/GB |
 
 > 为公平对比，Fly.io 选用 **performance-1x**（dedicated vCPU），与 Azure 的 dedicated 1 vCPU 算力对等。如改用 shared-cpu 系列可再便宜 5 倍，但会被邻居抢占算力，对 Hermes 的工具脚本（pip install、编译、playwright）执行时长不友好。
+>
+> **存储模型差异**: Azure 共享 NFS share 是固定预配 (100 GiB $16/月封顶), Fly Volumes 按预分配 GB 线性增长 (每用户 1 GB ≈ $0.15)。早期 Azure 偏贵 (Fly 起步几乎免费), 用户量 100+ 之后 Azure 反而更便宜 (Fly 100 用户 = $15, Azure 仍 $16; Fly 500 用户 = $75, Azure ~$80, 持平; 再往上 Azure 优势扩大)。
 
 #### 不同规模成本对比
 
@@ -936,18 +958,18 @@ flowchart LR
 | Gateway | $13 | $5 | $13 | $5 | $13 | $5 | $26 | $5 |
 | 容器计算 | $0 | $10 | $20 | $50 | $120 | $99 | $900 | $497 |
 | 停机存储 | — | $2.3 | — | $11.3 | — | $22.5 | — | $112.5 |
-| 持久化存储 | $1 | $1.5 | $3 | $7.5 | $6 | $15 | $30 | $75 |
+| 持久化存储 | $17 (NFS $16 + Blob $1) | $1.5 | $19 (NFS $16 + Blob $3) | $7.5 | $22-38 (NFS $16-32 + Blob $6) | $15 | $106 (NFS $80 + Blob $26) | $75 |
 | 带宽 | — | ~$0.5 | — | ~$2 | — | ~$4 | — | ~$20 |
-| **合计** | **$14** | **$19.3** | **$36** | **$75.8** | **$139** | **$145.5** | **$956** | **$709.5** |
+| **合计** | **~$30** | **$19.3** | **~$52** | **$75.8** | **~$155-171** | **$145.5** | **~$1,032** | **$709.5** |
 
-> 容器计算假设中度用户（日均 20 轮 × 60s）。Azure：1 vCPU + 2 GiB；Fly.io：performance-1x（1 dedicated vCPU + 2 GiB），算力对等。停机存储按 Docker image ~1.5GB rootfs 估算，持久化存储按每用户 1GB 预分配。
+> 容器计算假设中度用户（日均 20 轮 × 60s）。Azure：1 vCPU + 2 GiB；Fly.io：performance-1x（1 dedicated vCPU + 2 GiB），算力对等。停机存储按 Docker image ~1.5GB rootfs 估算。Azure 持久化按 100 GiB NFS share ($16) + 200 GiB (100 人撞顶时升预配) + 500 GiB (500 人) 估算; Fly 端按每用户 1 GB 预分配。
 
 ```mermaid
 xychart-beta
-    title "月基础设施成本对比（$，对等算力）"
+    title "月基础设施成本对比（$）"
     x-axis ["10人", "50人", "100人", "500人"]
-    y-axis "月成本 ($)" 0 --> 1000
-    bar "Azure" [14, 36, 139, 956]
+    y-axis "月成本 ($)" 0 --> 1100
+    bar "Azure" [30, 52, 163, 1032]
     bar "CF+Fly" [19, 76, 146, 710]
 ```
 
@@ -955,16 +977,17 @@ xychart-beta
 
 | 维度 | Azure 全家桶 | CF Workers + Fly.io |
 |------|------------|-------------------|
-| **早期成本（≤10人）** | ✅ ~$14，免费额度兜底，反而更省 | ⚠️ ~$19，从第一个用户就开始计费 |
-| **中期成本（50-100人）** | ⚠️ $36-139，过 50 人后免费额度耗尽，开始攀升 | ⚠️ $76-146，与 Azure 接近，互有胜负 |
-| **规模成本（500人）** | ❌ ~$956 | ✅ ~$710，约为 Azure 的 75% |
-| **成本结构** | 计算贵、存储便宜、免费额度缓冲 | 计算便宜、存储贵（预分配 + 停机也收费） |
+| **早期成本（≤10人）** | ⚠️ ~$30 (固定 NFS $16 + App Service $13 是地板) | ✅ ~$19, 从第一个用户起算 |
+| **中期成本（50-100人）** | ⚠️ $52-163, 共享 NFS 让增速极平 | ⚠️ $76-146, 与 Azure 互有胜负 |
+| **规模成本（500人）** | ❌ ~$1,032 | ✅ ~$710 |
+| **成本结构** | 共享 NFS 固定 + 计算贵 + 免费额度缓冲 | 计算便宜、存储按 GB 预分配 + 停机也收费 |
 | **Gateway 架构** | ✅ 单一 App Service 搞定一切 | ✅ 全在 Cloudflare 内（Workers + DO） |
 | **运维复杂度** | ✅ 单一云、统一控制台 | ⚠️ 两家服务商（CF + Fly） |
 | **生态成熟度** | ✅ 企业级、文档全 | ⚠️ Fly.io 较小众，偶有稳定性问题 |
 | **全球部署** | 需手动多区域 | ✅ CF 天然全球边缘 + Fly 多区域简单 |
 | **缩容到 0** | ✅ 零费用 | ⚠️ 停机仍收 rootfs 存储费 |
 | **iLink 轮询上限** | 受 App Service 内存限制（B1 ~数百用户） | DO 单实例 ~1000 用户（子请求数上限） |
+| **文件锁能力** | ✅ NFS 4.1 (SQLite / fcntl 正常) | ✅ ext4 (本地文件系统, 标准 POSIX 锁) |
 
 ## 八、扩容路径
 
@@ -994,7 +1017,7 @@ timeline
 | 国内运营 AI 聊天服务需备案 | 合规 | 正式上线前需办理生成式 AI 备案 |
 | Container 冷启动延迟（缩容到 0 后几秒到十几秒） | 体验 | Gateway 先回复"思考中..."，再等 Hermes 响应 |
 | iLink bot_token 约 24h 过期需用户重新扫码 | 体验 | 定时检测 + 提前通知用户，未来关注 iLink 是否支持自动续期 |
-| HTTP 长请求超时（方案 A 特有） | 可靠性 | 选方案 B 可规避 |
+| HTTP 长请求超时（方案 A 当前实现的固有限制） | 可靠性 | 短期靠模型回复快压住；切方案 B 才能根治 |
 | 容器销毁后用户安装的包丢失 | 功能 | pip/npm 安装目录必须挂载到 Azure Files（见下方说明） |
 
 ### ⚠️ 关键约束：容器内安装的包必须持久化
@@ -1016,26 +1039,37 @@ timeline
 ```dockerfile
 # 创建非 root 用户
 RUN useradd -m hermes
+
+# Hermes 源码装在镜像只读层 /opt（不在 home,避免被 volume 锁死老版本）
+# ... install hermes-agent to /opt/hermes-agent ...
+
 USER hermes
 
-# Python: 强制所有 pip install 都走 --user 模式，目标目录指向 home
+# 显式锁定 Hermes 数据目录,落在 volume 里
+ENV HERMES_HOME=/home/hermes/.hermes
+
+# Python: 强制所有 pip install 都走 --user 模式,目标目录指向 home
 ENV PIP_USER=1
 ENV PYTHONUSERBASE=/home/hermes/.local
 
 # Node: 全局包安装目录指向 home 下
 ENV NPM_CONFIG_PREFIX=/home/hermes/.npm-global
 
-# PATH 里加上这两个 bin 目录，装完直接能用
-ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:$PATH"
+# PATH 里加上这两个 bin 目录 + Hermes venv,装完直接能用
+ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/opt/hermes-agent/venv/bin:$PATH"
 ```
 
 这样 Agent 执行 `pip install requests` 或 `npm install -g typescript` 时，包会自动装到 home 目录下，Agent 无需加任何特殊参数，完全无感。
 
-**新用户初始化问题**：Azure Files volume 挂载到 `/home/hermes` 后，会遮盖 image 里预置的默认文件（`.bashrc`、Hermes 初始配置等）。新用户的 volume 是空的，需要初始化：
+**新用户初始化问题**：Azure Files volume 挂载到 `/home/hermes` 后，会遮盖 image 里预置的默认文件（`.bashrc`、Hermes 初始 `.hermes/config.yaml` 等）。新用户的 volume 是空的，需要初始化：
 
 ```dockerfile
-# 构建时把默认 home 内容存到种子目录（不会被 volume 遮盖）
-RUN cp -a /home/hermes /home/hermes-seed
+# 构建时把 home 里的初始骨架（.hermes/、shell rc 等，不含源码）存到种子目录
+# 源码在 /opt/hermes-agent,不需要 seed,所以 seed 体积很小（< 10MB）
+USER root
+RUN cp -a /home/hermes /home/hermes-seed \
+    && chown -R hermes:hermes /home/hermes-seed
+USER hermes
 
 ENTRYPOINT ["/entrypoint.sh"]
 ```
@@ -1058,7 +1092,7 @@ exec "$@"
 
 - [x] Gateway 技术选型 — Node.js 24 + Express/Fastify, 部署在 Azure App Service B1
 - [x] 微信 Gateway 基于官方 iLink Bot API（long-polling 模式）接入 — App Service 集中管理所有用户的 iLink 会话
-- [x] 调度层方案选择 — **采纳方案 B（Job + 异步队列）**，见第五章
+- [x] 调度层方案选择 — **当前走方案 A（同步 HTTP），方案 B（Job + 异步队列）作为遇到长任务时的演进路径**，见第五章
 - [ ] 用户注册/管理/计费系统设计
 - [ ] Hermes Docker Image 的构建
 - [ ] LLM API 成本由谁承担（平台包 vs 用户自带 key）

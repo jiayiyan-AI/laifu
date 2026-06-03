@@ -23,8 +23,9 @@ az account set -s <SUB_ID>
 # 2. 在 Key Vault 里填 secret (名字必须与 main.bicep 里 SecretName 一致)
 KV=kv-lingxi-dev
 az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
+az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)"   # 容器 ↔ gateway JWT 签发密钥
 az keyvault secret set --vault-name $KV --name supabase-url --value "https://xxx.supabase.co"
-az keyvault secret set --vault-name $KV --name supabase-service-role-key --value "..."
+az keyvault secret set --vault-name $KV --name supabase-service-role-key --value "..."   # 必须 eyJ... JWT, 不是 sb_secret_*
 az keyvault secret set --vault-name $KV --name google-client-id --value "..."
 az keyvault secret set --vault-name $KV --name google-client-secret --value "..."
 az keyvault secret set --vault-name $KV --name anthropic-api-key --value "sk-..."
@@ -49,8 +50,7 @@ curl https://app-lingxi-dev-gateway.azurewebsites.net/healthz   # {"ok":true}
 
 ### 环境
 
-- `parameters.dev.json` — B1 SKU, 调试
-- `parameters.prod.json` — P0v3 SKU, 生产
+- `parameters.dev.json` / `parameters.prod.json` — 当前都用 B1 SKU（southeastasia, qwen-plus）。区别只在 `env` 字段和派生的资源命名。规模化后再单独调 prod 的 SKU。
 
 ### 不在 Bicep 里的东西
 

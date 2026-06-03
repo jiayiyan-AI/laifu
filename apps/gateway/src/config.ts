@@ -40,9 +40,12 @@ export const config = {
   azure: {
     subscriptionId: process.env['AZURE_SUBSCRIPTION_ID'] ?? '',
     resourceGroup: process.env['AZURE_RESOURCE_GROUP'] ?? '',
-    location: process.env['AZURE_LOCATION'] ?? 'eastasia',
+    location: process.env['AZURE_LOCATION'] ?? 'southeastasia',
     containerAppsEnv: process.env['AZURE_CONTAINER_APPS_ENV'] ?? '',
     storageAccount: process.env['AZURE_STORAGE_ACCOUNT'] ?? '',
+    // Premium FileStorage account (NFS), 给 hermes home 用。与 storageAccount (StorageV2 云盘) 是两个独立 account。
+    // SMB 上 SQLite 锁失败 (known-issues#6), 必须走 NFS。
+    storageAccountNfs: process.env['AZURE_STORAGE_ACCOUNT_NFS'] ?? '',
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
     acrName: process.env['AZURE_ACR_NAME'] ?? '',           // 用来拿 listCredentials
     hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes:v1',
@@ -79,6 +82,7 @@ export const validateConfig = () => {
     required('AZURE_RESOURCE_GROUP');
     required('AZURE_CONTAINER_APPS_ENV');
     required('AZURE_STORAGE_ACCOUNT');
+    required('AZURE_STORAGE_ACCOUNT_NFS');
     required('AZURE_ACR_LOGIN_SERVER');
     required('AZURE_ACR_NAME');
     if (config.cloud.udkLifetimeSeconds > 7 * 24 * 3600) {

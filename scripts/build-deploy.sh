@@ -29,7 +29,8 @@ echo "[build-deploy] 1/5 清理 $OUT/"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-echo "[build-deploy] 2/5 vite build gateway (lib mode, bundle + inline shared)"
+echo "[build-deploy] 2/5 build shared (gateway bundle 内联依赖) + vite build gateway"
+pnpm --filter @lingxi/shared build >/dev/null
 pnpm --filter @lingxi/gateway build >/dev/null
 
 echo "[build-deploy] 3/5 vite build web"
