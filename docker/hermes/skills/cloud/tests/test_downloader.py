@@ -66,6 +66,13 @@ class TestListFiles:
         kwargs = inst.list_blobs.call_args.kwargs
         assert kwargs['name_starts_with'] == 'user123/reports/'
 
+    def test_title_falls_back_to_basename_when_no_metadata(self):
+        with mock.patch('cloud_publish.downloader.ContainerClient') as MockCC:
+            inst = MockCC.from_container_url.return_value
+            inst.list_blobs.return_value = [_fake_blob('user123/reports/q2.pdf', 5)]
+            out = list_files(_SAS)
+        assert out[0]['title'] == 'q2.pdf'
+
 
 class TestDownloadFile:
     def test_writes_file_and_returns_size(self, tmp_path):
@@ -98,6 +105,16 @@ class TestDownloadFile:
         sas_cache.force_refresh.assert_called_once()
         assert out.read_bytes() == b'ok'
         assert size == 2
+        # 验证刷新后的 SAS 真的被用于重建 URL（第二次 from_blob_url 用新 token）
+        second_url = MockBC.from_blob_url.call_args_list[1].args[0]
+        assert 'sig=new' in second_url
+
+    def test_403_without_sas_cache_raises(self, tmp_path):
+        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC:
+            inst = MockBC.from_blob_url.return_value
+            inst.download_blob.side_effect = _http_error(403)
+            with pytest.raises(RuntimeError, match='403'):
+                download_file(_SAS, 'x.pdf', str(tmp_path / 'x'))
 
     def test_5xx_retries_then_raises(self, tmp_path):
         with mock.patch('cloud_publish.downloader.BlobClient') as MockBC, \
