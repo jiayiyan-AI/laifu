@@ -8,7 +8,7 @@ export interface UploadHandle {
 interface Props {
   currentPath: string;             // 形如 '' 或 'inbox/'
   existingPaths: Set<string>;      // 当前云盘已有文件的 virtual_path 全集
-  onUploaded: () => void;          // 任一文件成功后触发（用于刷新）
+  onUploaded: () => void;          // 所有上传尝试结束后触发（无论成功失败，用于刷新列表）
 }
 
 interface ProgressItem { name: string; fraction: number; error?: string; }
@@ -98,9 +98,9 @@ export const UploadController = forwardRef<UploadHandle, Props>(({ currentPath, 
               {pendingConflicts.map((f) => <div key={f.name}>{f.name}</div>)}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn" onClick={() => resolveConflict('cancel')}><span>取消</span></button>
-              <button className="btn" onClick={() => resolveConflict('skip')}><span>跳过已存在</span></button>
-              <button className="btn" onClick={() => resolveConflict('overwrite')}><span>全部覆盖</span></button>
+              <button className="btn" onClick={() => resolveConflict('cancel')}>取消</button>
+              <button className="btn" onClick={() => resolveConflict('skip')}>跳过已存在</button>
+              <button className="btn" onClick={() => resolveConflict('overwrite')}>全部覆盖</button>
             </div>
           </div>
         </div>
