@@ -31,6 +31,7 @@ async function runPool(files: File[], currentPath: string, onProgress: (name: st
   const worker = async () => {
     while (idx < files.length) {
       const f = files[idx++];
+      if (!f) break;
       const vp = `${currentPath}${f.name}`;
       try {
         await api.cloudUpload(f, vp, { onProgress: (frac) => onProgress(f.name, frac) });

@@ -34,7 +34,7 @@ describe('FileList', () => {
     renderList({ files: [mkFile()], onSelectFile });
     fireEvent.click(screen.getByTestId('file-row-hello.pdf'));
     expect(onSelectFile).toHaveBeenCalled();
-    expect(onSelectFile.mock.calls[0][0]).toBe('hello.pdf');
+    expect(onSelectFile.mock.calls[0]?.[0]).toBe('hello.pdf');
   });
 
   it('double-click file triggers onActivateFile', () => {
