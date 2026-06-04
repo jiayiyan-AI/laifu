@@ -412,4 +412,16 @@ describe('POST /api/cloud/upload', () => {
       .attach('file', Buffer.from('x'), 'x.txt');
     expect(res.status).toBe(403);
   });
+
+  it('blob path is bound to the session user id (multi-tenant isolation)', async () => {
+    const OTHER_USER = '11111111-2222-3333-4444-555555555555';
+    const { app, getBlockBlobClient } = makeUploadApp({ sessionUserId: OTHER_USER });
+    const res = await request(app)
+      .post('/api/cloud/upload')
+      .field('virtual_path', 'shared/x.txt')
+      .attach('file', Buffer.from('x'), 'x.txt');
+    expect(res.status).toBe(200);
+    // 写入路径必须前缀到 session 用户,客户端无法越界写到别人目录
+    expect(getBlockBlobClient).toHaveBeenCalledWith(`${OTHER_USER}/shared/x.txt`);
+  });
 });
