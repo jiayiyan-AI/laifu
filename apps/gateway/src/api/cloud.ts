@@ -247,7 +247,7 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
 
     try {
       const containerClient = deps.blobServiceClient.getContainerClient(deps.config.container);
-      const blockBlob = (containerClient as any).getBlockBlobClient(fullPath);
+      const blockBlob = containerClient.getBlockBlobClient(fullPath);
       await blockBlob.uploadData(file.buffer, {
         blobHTTPHeaders: { blobContentType: contentType },
         metadata: {
