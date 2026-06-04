@@ -98,3 +98,21 @@ def test_sas_fetch_network_error_exit_3(capsys):
         MockSas.return_value.get.side_effect = RuntimeError('gateway 500')
         code, _ = _run(['--list'], _ENV, capsys)
     assert code == 3
+
+
+def test_list_prefix_gets_trailing_slash(capsys):
+    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+        MockSas.return_value.get.return_value = _SAS
+        mock_list.return_value = []
+        _run(['--list', '--prefix', 'reports'], _ENV, capsys)
+    assert mock_list.call_args.kwargs['sub_prefix'] == 'reports/'
+
+
+def test_list_empty_prefix_stays_empty(capsys):
+    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+        MockSas.return_value.get.return_value = _SAS
+        mock_list.return_value = []
+        _run(['--list'], _ENV, capsys)
+    assert mock_list.call_args.kwargs['sub_prefix'] == ''

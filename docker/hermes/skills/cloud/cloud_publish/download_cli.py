@@ -81,7 +81,10 @@ def main() -> None:
 
     if args.list:
         try:
-            files = list_files(sas, sub_prefix=args.prefix)
+            prefix = args.prefix
+            if prefix and not prefix.endswith('/'):
+                prefix += '/'
+            files = list_files(sas, sub_prefix=prefix)
         except Exception as exc:
             _fail(f'list failed: {exc}', 3)
         _emit({'ok': True, 'files': files})
