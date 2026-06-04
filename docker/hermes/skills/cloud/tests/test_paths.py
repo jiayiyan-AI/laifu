@@ -15,6 +15,7 @@ class TestInvalid:
         ('dir/', "must not end with '/'"),
         ('a/../b', "'..'"),
         ('a//b', 'empty segments'),
+        ('a\x01b', 'control characters'),
         ('x' * 1025, 'too long'),
     ])
     def test_rejects(self, vpath, msg):
