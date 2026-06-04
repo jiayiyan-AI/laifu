@@ -24,17 +24,14 @@ import json
 import mimetypes
 import os
 import pathlib
-import re
 import sys
 
 from cloud_publish.sas_cache import SasCache, AuthError  # noqa: E402  (top-level for mockability)
 from cloud_publish.metadata import build_metadata         # noqa: E402
 from cloud_publish.uploader import upload_blob            # noqa: E402
+from cloud_publish.paths import validate_virtual_path     # noqa: E402
 
 _MAX_FILE_BYTES = 10 * 1024 * 1024   # 10 MB
-_MAX_SEGMENT_LEN = 200
-_MAX_PATH_LEN = 1024
-_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 
 # ---------------------------------------------------------------------------
@@ -48,34 +45,6 @@ def _ok(blob_name: str, url: str) -> None:
 def _fail(msg: str, code: int) -> None:
     print(json.dumps({'ok': False, 'error': msg}), flush=True)
     sys.exit(code)
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-def _validate_virtual_path(vpath: str) -> None:
-    """Raise ValueError if virtual_path is invalid."""
-    if vpath.startswith('/'):
-        raise ValueError("virtual-path must not start with '/'")
-    if vpath.endswith('/'):
-        raise ValueError("virtual-path must not end with '/'")
-    if len(vpath) > _MAX_PATH_LEN:
-        raise ValueError(
-            f'virtual-path too long: {len(vpath)} chars > {_MAX_PATH_LEN}'
-        )
-    if _CONTROL_CHAR_RE.search(vpath):
-        raise ValueError('virtual-path contains control characters')
-    for segment in vpath.split('/'):
-        if segment == '..':
-            raise ValueError("virtual-path must not contain '..' segments")
-        if not segment:
-            raise ValueError('virtual-path must not contain empty segments (double slash)')
-        if len(segment) > _MAX_SEGMENT_LEN:
-            raise ValueError(
-                f"virtual-path segment '{segment}' too long: "
-                f'{len(segment)} chars > {_MAX_SEGMENT_LEN}'
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +89,7 @@ def main() -> None:
     # --- 2. Validate virtual-path ----------------------------------------
     virtual_path: str = args.virtual_path
     try:
-        _validate_virtual_path(virtual_path)
+        validate_virtual_path(virtual_path)
     except ValueError as exc:
         _fail(str(exc), 1)
 
