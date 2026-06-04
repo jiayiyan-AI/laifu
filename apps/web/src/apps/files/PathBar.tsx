@@ -2,11 +2,16 @@ import { IconReload } from '../../lib/icons.js';
 
 interface Props {
   currentPath: string;
+  selectedCount: number;
+  canPreview: boolean;
   onNavigate: (path: string) => void;
   onRefresh: () => void;
+  onUploadClick: () => void;
+  onPreview: () => void;
+  onDownload: () => void;
 }
 
-export const PathBar = ({ currentPath, onNavigate, onRefresh }: Props) => {
+export const PathBar = ({ currentPath, selectedCount, canPreview, onNavigate, onRefresh, onUploadClick, onPreview, onDownload }: Props) => {
   const segments = currentPath.split('/').filter(Boolean);
   return (
     <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
@@ -31,6 +36,13 @@ export const PathBar = ({ currentPath, onNavigate, onRefresh }: Props) => {
         );
       })}
       <div style={{ flex: 1 }} />
+      {selectedCount === 1 && canPreview && (
+        <button className="btn" onClick={onPreview} style={{ marginRight: 8 }}>预览</button>
+      )}
+      {selectedCount >= 1 && (
+        <button className="btn" onClick={onDownload} style={{ marginRight: 8 }}>下载{selectedCount > 1 ? `(${selectedCount})` : ''}</button>
+      )}
+      <button className="btn" onClick={onUploadClick} style={{ marginRight: 8 }}>上传</button>
       <button
         title="刷新"
         onClick={onRefresh}
