@@ -73,3 +73,28 @@ def test_blob_missing_exit_3(capsys):
         mock_dl.side_effect = FileNotFoundError('blob not found: a.txt')
         code, _ = _run(['--virtual-path', 'a.txt', '--output', '/tmp/a'], _ENV, capsys)
     assert code == 3
+
+
+def test_list_error_exit_3(capsys):
+    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+        MockSas.return_value.get.return_value = _SAS
+        mock_list.side_effect = RuntimeError('network error')
+        code, out = _run(['--list'], _ENV, capsys)
+    assert code == 3
+    assert json.loads(out)['ok'] is False
+
+
+def test_auth_error_exit_2(capsys):
+    from cloud_publish.sas_cache import AuthError
+    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas:
+        MockSas.return_value.get.side_effect = AuthError('jwt expired')
+        code, _ = _run(['--list'], _ENV, capsys)
+    assert code == 2
+
+
+def test_sas_fetch_network_error_exit_3(capsys):
+    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas:
+        MockSas.return_value.get.side_effect = RuntimeError('gateway 500')
+        code, _ = _run(['--list'], _ENV, capsys)
+    assert code == 3
