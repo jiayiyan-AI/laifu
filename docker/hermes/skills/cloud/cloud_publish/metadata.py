@@ -23,6 +23,7 @@ def build_metadata(
     tool_version: str = '0.1.0',
     description: str | None = None,
     tags: list[str] | None = None,
+    source: str = 'agent',
 ) -> dict[str, str]:
     """Return Azure Blob custom metadata dict (all string values).
 
@@ -42,6 +43,7 @@ def build_metadata(
         'title': _b64(title),
         'published_at': published_at,
         'tool_version': tool_version,
+        'source': source,
     }
 
     if session_id:

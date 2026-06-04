@@ -102,3 +102,15 @@ class TestBuildMetadata:
         )
         for k, v in meta.items():
             assert isinstance(v, str), f'key {k!r} has non-str value'
+
+
+def test_source_defaults_to_agent():
+    from cloud_publish.metadata import build_metadata
+    meta = build_metadata(title='x')
+    assert meta['source'] == 'agent'
+
+
+def test_source_can_be_overridden():
+    from cloud_publish.metadata import build_metadata
+    meta = build_metadata(title='x', source='web')
+    assert meta['source'] == 'web'
