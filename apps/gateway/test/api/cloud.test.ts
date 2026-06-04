@@ -216,6 +216,25 @@ describe('GET /api/cloud/list', () => {
     expect(res.body.files[0].metadata.title).toBe('x.txt');
     expect(res.body.files[0].metadata.session_id).toBeNull();
   });
+
+  it('passes through source=web from metadata', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/data.csv`, size: 10,
+        meta: { title: Buffer.from('data').toString('base64'), source: 'web' } },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.body.files[0].metadata.source).toBe('web');
+  });
+
+  it('defaults source to agent when metadata.source absent', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/old.pdf`, size: 10, meta: {} },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.body.files[0].metadata.source).toBe('agent');
+  });
 });
 
 describe('GET /api/cloud/download', () => {

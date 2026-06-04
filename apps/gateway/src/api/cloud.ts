@@ -210,5 +210,6 @@ function decodeBlobMetadata(raw: Record<string, string>, fallbackRelPath: string
     tool_version: raw['tool_version'] ?? null,
     description: decodeB64Utf8(raw['description']),
     tags: tagsRaw ? tagsRaw.split(',').map(s => s.trim()).filter(Boolean) : null,
+    source: raw['source'] === 'web' ? 'web' : 'agent',
   };
 }
