@@ -51,4 +51,9 @@ describe('PathBar', () => {
     fireEvent.click(screen.getByText('预览'));
     expect(onPreview).toHaveBeenCalled();
   });
+
+  it('preview button hidden when 1 selected but not previewable', () => {
+    renderBar({ selectedCount: 1, canPreview: false });
+    expect(screen.queryByText('预览')).not.toBeInTheDocument();
+  });
 });
