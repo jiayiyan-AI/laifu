@@ -12,6 +12,7 @@ setup(
     entry_points={
         'console_scripts': [
             'cloud-publish=cloud_publish.__main__:main',
+            'cloud-download=cloud_publish.download_cli:main',
         ],
     },
 )
