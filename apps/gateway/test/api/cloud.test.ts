@@ -328,3 +328,88 @@ describe('GET /api/cloud/download', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('POST /api/cloud/upload', () => {
+  function makeUploadApp(opts: { listActive?: any; uploadData?: any; sessionUserId?: string } = {}) {
+    const userId = opts.sessionUserId ?? USER_ID;
+    const uploadData = opts.uploadData ?? vi.fn().mockResolvedValue(undefined);
+    const getBlockBlobClient = vi.fn((_name: string) => ({ uploadData }));
+    const app = express();
+    app.use(express.json());
+    app.use(buildCloudRouter({
+      secret: SECRET,
+      config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
+      entitlements: {
+        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
+        getTokenVersion: vi.fn().mockResolvedValue(0),
+      } as any,
+      udkCache: { get: vi.fn() } as any,
+      blobServiceClient: {
+        getContainerClient: () => ({
+          getBlockBlobClient,
+          listBlobsByHierarchy: () => (async function*() {})(),
+          getBlobClient: () => ({ getProperties: vi.fn() }),
+        }),
+      } as any,
+      sessionMw: ((req: any, _res: any, next: any) => { req.session = { user_id: userId }; next(); }) as any,
+    }));
+    return { app, uploadData, getBlockBlobClient };
+  }
+
+  it('uploads a file and writes source=web metadata', async () => {
+    const { app, uploadData, getBlockBlobClient } = makeUploadApp();
+    const res = await request(app)
+      .post('/api/cloud/upload')
+      .field('virtual_path', 'inbox/data.csv')
+      .field('title', '我的数据')
+      .attach('file', Buffer.from('a,b,c\n1,2,3'), 'data.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.virtual_path).toBe('inbox/data.csv');
+    expect(getBlockBlobClient).toHaveBeenCalledWith(`${USER_ID}/inbox/data.csv`);
+    const opts = uploadData.mock.calls[0][1];
+    expect(opts.metadata.source).toBe('web');
+    expect(Buffer.from(opts.metadata.title, 'base64').toString('utf8')).toBe('我的数据');
+    expect(opts.blobHTTPHeaders.blobContentType).toMatch(/csv|text|octet/);
+  });
+
+  it('400 when virtual_path missing', async () => {
+    const { app } = makeUploadApp();
+    const res = await request(app).post('/api/cloud/upload').attach('file', Buffer.from('x'), 'x.txt');
+    expect(res.status).toBe(400);
+  });
+
+  it('400 when file field missing', async () => {
+    const { app } = makeUploadApp();
+    const res = await request(app).post('/api/cloud/upload').field('virtual_path', 'x.txt');
+    expect(res.status).toBe(400);
+  });
+
+  it('400 on path traversal', async () => {
+    const { app } = makeUploadApp();
+    const res = await request(app)
+      .post('/api/cloud/upload')
+      .field('virtual_path', '../other/x.txt')
+      .attach('file', Buffer.from('x'), 'x.txt');
+    expect(res.status).toBe(400);
+  });
+
+  it('413 when file exceeds 10MB', async () => {
+    const { app } = makeUploadApp();
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0x61);
+    const res = await request(app)
+      .post('/api/cloud/upload')
+      .field('virtual_path', 'big.bin')
+      .attach('file', big, 'big.bin');
+    expect(res.status).toBe(413);
+  });
+
+  it('403 when cloud entitlement not active', async () => {
+    const { app } = makeUploadApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const res = await request(app)
+      .post('/api/cloud/upload')
+      .field('virtual_path', 'x.txt')
+      .attach('file', Buffer.from('x'), 'x.txt');
+    expect(res.status).toBe(403);
+  });
+});

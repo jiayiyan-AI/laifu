@@ -1,11 +1,12 @@
 import { Router, type Router as RouterType, type Request, type Response, type RequestHandler } from 'express';
+import multer from 'multer';
 import { makeContainerTokenMiddleware } from '../auth/container-token.js';
 import { buildDirectoryWriteSas, buildReadBlobSas } from '../lib/sas-builder.js';
 import { buildContentDisposition } from '../lib/content-disposition.js';
 import type { EntitlementsDao } from '../db/entitlements-dao.js';
 import type { UserDelegationKeyCache } from '../lib/user-delegation-key-cache.js';
 import { validateVirtualPath } from '@lingxi/shared';
-import type { CloudWriteSasResponse, CloudListResponse, CloudFileItem, CloudFolderItem } from '@lingxi/shared';
+import type { CloudWriteSasResponse, CloudListResponse, CloudFileItem, CloudFolderItem, CloudUploadResponse } from '@lingxi/shared';
 import type { BlobServiceClient } from '@azure/storage-blob';
 
 export interface CloudRouterConfig {
@@ -26,6 +27,27 @@ export interface CloudRouterDeps {
 }
 
 const FEATURE = 'cloud';
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const uploadMw = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+});
+
+const uploadSingle: RequestHandler = (req, res, next) => {
+  uploadMw.single('file')(req, res, (err: any) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({ error: 'file too large (10MB limit)' });
+        return;
+      }
+      res.status(400).json({ error: String(err?.message ?? err) });
+      return;
+    }
+    next();
+  });
+};
 
 export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
   const router = Router();
@@ -192,6 +214,61 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     res.redirect(302, url);
   });
 
+  router.post('/api/cloud/upload', deps.sessionMw, uploadSingle, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+
+    const active = await deps.entitlements.listActive(userId);
+    if (!active.includes(FEATURE)) {
+      res.status(403).json({ error: 'cloud entitlement not active' });
+      return;
+    }
+
+    const file = (req as any).file as { buffer: Buffer; mimetype?: string; originalname?: string } | undefined;
+    if (!file) {
+      res.status(400).json({ error: 'file field required' });
+      return;
+    }
+
+    const virtualPath = (req.body?.virtual_path as string | undefined)?.trim() ?? '';
+    if (!virtualPath) {
+      res.status(400).json({ error: 'virtual_path field required' });
+      return;
+    }
+    const v = validateVirtualPath(virtualPath);
+    if (!v.ok) {
+      res.status(400).json({ error: `invalid virtual_path: ${v.error}` });
+      return;
+    }
+
+    const title = (req.body?.title as string | undefined)?.trim() || virtualPath.split('/').pop() || virtualPath;
+    const contentType = file.mimetype || 'application/octet-stream';
+    const fullPath = `${userId}/${virtualPath}`;
+    const nowIso = new Date().toISOString();
+
+    try {
+      const containerClient = deps.blobServiceClient.getContainerClient(deps.config.container);
+      const blockBlob = (containerClient as any).getBlockBlobClient(fullPath);
+      await blockBlob.uploadData(file.buffer, {
+        blobHTTPHeaders: { blobContentType: contentType },
+        metadata: {
+          title: encodeB64Utf8(title),
+          published_at: nowIso,
+          tool_version: '0.1.0',
+          source: 'web',
+        },
+      });
+      const body: CloudUploadResponse = {
+        ok: true,
+        virtual_path: virtualPath,
+        size: file.buffer.length,
+        last_modified: nowIso,
+      };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: 'blob upload failed', message: String(err) });
+    }
+  });
+
   return router;
 };
 
@@ -199,6 +276,10 @@ function decodeB64Utf8(s: string | undefined): string | null {
   if (!s) return null;
   try { return Buffer.from(s, 'base64').toString('utf8'); }
   catch { return null; }
+}
+
+function encodeB64Utf8(s: string): string {
+  return Buffer.from(s, 'utf8').toString('base64');
 }
 
 function decodeBlobMetadata(raw: Record<string, string>, fallbackRelPath: string): CloudFileItem['metadata'] {
