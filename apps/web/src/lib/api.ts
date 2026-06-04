@@ -1,6 +1,7 @@
 import type {
   AuthMeResponse,
   CloudListResponse,
+  CloudUploadResponse,
   EntitlementChangeResponse,
   PurchaseResponse,
   StatusResponse,
@@ -114,4 +115,47 @@ export const cloudDownloadUrl = (path: string, dispose: 'inline' | 'attachment' 
   const params = new URLSearchParams({ path });
   if (dispose === 'attachment') params.set('dispose', 'attachment');
   return `/api/cloud/download?${params.toString()}`;
+};
+
+export interface CloudUploadOpts {
+  title?: string;
+  onProgress?: (fraction: number) => void;  // 0..1
+}
+
+/**
+ * 上传文件到云盘（multipart 走 gateway 代理）。
+ * 用 XMLHttpRequest 以拿到上传进度（fetch 不支持 upload progress）。
+ */
+export const cloudUpload = (
+  file: File,
+  virtualPath: string,
+  opts: CloudUploadOpts = {},
+): Promise<CloudUploadResponse> => {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('virtual_path', virtualPath);
+    if (opts.title) form.append('title', opts.title);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/cloud/upload');
+    xhr.withCredentials = true;
+    if (opts.onProgress) {
+      xhr.upload.onprogress = (e: ProgressEvent) => {
+        if (e.lengthComputable) opts.onProgress!(e.loaded / e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText) as CloudUploadResponse); }
+        catch { reject(new Error('invalid upload response')); }
+      } else {
+        let msg = `upload → ${xhr.status}`;
+        try { const b = JSON.parse(xhr.responseText); if (b?.error) msg = `${xhr.status}: ${b.error}`; } catch { /* ignore */ }
+        reject(new Error(msg));
+      }
+    };
+    xhr.onerror = () => reject(new Error('upload network error'));
+    xhr.send(form);
+  });
 };
