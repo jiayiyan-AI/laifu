@@ -14,11 +14,14 @@ describe('isPreviewable', () => {
   it('false for csv', () => {
     expect(isPreviewable({ content_type: 'text/csv', virtual_path: 'a.csv' })).toBe(false);
   });
+  it('false for csv when content-type null (extension path)', () => {
+    expect(isPreviewable({ content_type: null, virtual_path: 'a.csv' })).toBe(false);
+  });
 });
 
 describe('sourceBadge', () => {
   it('returns a marker for web source', () => {
-    expect(sourceBadge('web')).not.toBe('');
+    expect(sourceBadge('web')).toBe('↥');
   });
   it('returns empty for agent source', () => {
     expect(sourceBadge('agent')).toBe('');
