@@ -9,4 +9,5 @@ export interface FileItem {
   content_type: string | null;
   title: string;                 // decoded UTF-8
   session_id: string | null;
+  source: 'web' | 'agent';       // 来源：web 上传 or agent 发布
 }
