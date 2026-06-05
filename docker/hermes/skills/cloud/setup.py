@@ -1,9 +1,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='cloud-publish',
+    name='cloud-file',
     version='0.1.0',
-    description='Publish files to laifu cloud drive (Hermes skill)',
+    description='Manage files on the laifu cloud drive (Hermes skill: ls/get/put)',
     packages=find_packages(exclude=['tests']),
     python_requires='>=3.10',
     install_requires=[
@@ -11,8 +11,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'cloud-publish=cloud_file.__main__:main',
-            'cloud-download=cloud_file.download_cli:main',
+            'cloud-file=cloud_file.cli:main',
         ],
     },
 )
