@@ -1,4 +1,4 @@
-"""Blob lister + downloader for cloud-download.
+"""Blob lister + downloader for cloud-file ls/get.
 
 Reuses the SAS issued by GET /api/cloud/sas (permissions racwl → read + list).
 """

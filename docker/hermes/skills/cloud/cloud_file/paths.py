@@ -1,4 +1,4 @@
-"""Virtual-path validation shared by cloud-publish and cloud-download."""
+"""Virtual-path validation shared by cloud-file subcommands."""
 
 import re
 

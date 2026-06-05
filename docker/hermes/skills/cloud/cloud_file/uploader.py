@@ -1,4 +1,4 @@
-"""Blob uploader for cloud-publish.
+"""Blob uploader for cloud-file put.
 
 Wraps azure-storage-blob's BlobClient with:
 - 3 retries (1 s / 2 s / 4 s) on 5xx HTTP errors
