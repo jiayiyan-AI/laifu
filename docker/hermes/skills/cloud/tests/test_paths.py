@@ -1,6 +1,6 @@
-"""Unit tests for cloud_publish.paths.validate_virtual_path."""
+"""Unit tests for cloud_file.paths.validate_virtual_path."""
 import pytest
-from cloud_publish.paths import validate_virtual_path
+from cloud_file.paths import validate_virtual_path
 
 
 class TestValid:

@@ -1,11 +1,11 @@
-"""Unit tests for cloud_publish.downloader."""
+"""Unit tests for cloud_file.downloader."""
 import unittest.mock as mock
 import datetime
 
 import pytest
 from azure.core.exceptions import HttpResponseError
 
-from cloud_publish.downloader import list_files, download_file
+from cloud_file.downloader import list_files, download_file
 
 _SAS = {
     'blob_endpoint': 'https://laifuprod.blob.core.windows.net',
@@ -40,7 +40,7 @@ class TestListFiles:
     def test_strips_user_prefix_and_decodes_title(self):
         import base64
         title_b64 = base64.b64encode('销售'.encode()).decode()
-        with mock.patch('cloud_publish.downloader.ContainerClient') as MockCC:
+        with mock.patch('cloud_file.downloader.ContainerClient') as MockCC:
             inst = MockCC.from_container_url.return_value
             inst.list_blobs.return_value = [
                 _fake_blob('user123/reports/q2.pdf', 100, title_b64, source='web'),
@@ -52,14 +52,14 @@ class TestListFiles:
         assert out[0]['size'] == 100
 
     def test_source_defaults_to_agent(self):
-        with mock.patch('cloud_publish.downloader.ContainerClient') as MockCC:
+        with mock.patch('cloud_file.downloader.ContainerClient') as MockCC:
             inst = MockCC.from_container_url.return_value
             inst.list_blobs.return_value = [_fake_blob('user123/a.txt', 1)]
             out = list_files(_SAS)
         assert out[0]['source'] == 'agent'
 
     def test_passes_full_prefix_to_list_blobs(self):
-        with mock.patch('cloud_publish.downloader.ContainerClient') as MockCC:
+        with mock.patch('cloud_file.downloader.ContainerClient') as MockCC:
             inst = MockCC.from_container_url.return_value
             inst.list_blobs.return_value = []
             list_files(_SAS, sub_prefix='reports/')
@@ -67,7 +67,7 @@ class TestListFiles:
         assert kwargs['name_starts_with'] == 'user123/reports/'
 
     def test_title_falls_back_to_basename_when_no_metadata(self):
-        with mock.patch('cloud_publish.downloader.ContainerClient') as MockCC:
+        with mock.patch('cloud_file.downloader.ContainerClient') as MockCC:
             inst = MockCC.from_container_url.return_value
             inst.list_blobs.return_value = [_fake_blob('user123/reports/q2.pdf', 5)]
             out = list_files(_SAS)
@@ -77,7 +77,7 @@ class TestListFiles:
 class TestDownloadFile:
     def test_writes_file_and_returns_size(self, tmp_path):
         out = tmp_path / 'q2.pdf'
-        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC:
+        with mock.patch('cloud_file.downloader.BlobClient') as MockBC:
             inst = MockBC.from_blob_url.return_value
             inst.download_blob.return_value.readall.return_value = b'hello-bytes'
             size = download_file(_SAS, 'reports/q2.pdf', str(out))
@@ -85,7 +85,7 @@ class TestDownloadFile:
         assert size == len(b'hello-bytes')
 
     def test_404_raises_filenotfound(self, tmp_path):
-        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC:
+        with mock.patch('cloud_file.downloader.BlobClient') as MockBC:
             inst = MockBC.from_blob_url.return_value
             inst.download_blob.side_effect = _http_error(404)
             with pytest.raises(FileNotFoundError):
@@ -93,7 +93,7 @@ class TestDownloadFile:
 
     def test_403_force_refresh_then_succeeds(self, tmp_path):
         out = tmp_path / 'q2.pdf'
-        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC:
+        with mock.patch('cloud_file.downloader.BlobClient') as MockBC:
             inst = MockBC.from_blob_url.return_value
             inst.download_blob.side_effect = [
                 _http_error(403),
@@ -110,15 +110,15 @@ class TestDownloadFile:
         assert 'sig=new' in second_url
 
     def test_403_without_sas_cache_raises(self, tmp_path):
-        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC:
+        with mock.patch('cloud_file.downloader.BlobClient') as MockBC:
             inst = MockBC.from_blob_url.return_value
             inst.download_blob.side_effect = _http_error(403)
             with pytest.raises(RuntimeError, match='403'):
                 download_file(_SAS, 'x.pdf', str(tmp_path / 'x'))
 
     def test_5xx_retries_then_raises(self, tmp_path):
-        with mock.patch('cloud_publish.downloader.BlobClient') as MockBC, \
-             mock.patch('cloud_publish.downloader.time.sleep') as mock_sleep:
+        with mock.patch('cloud_file.downloader.BlobClient') as MockBC, \
+             mock.patch('cloud_file.downloader.time.sleep') as mock_sleep:
             inst = MockBC.from_blob_url.return_value
             inst.download_blob.side_effect = _http_error(500)
             with pytest.raises(RuntimeError, match='retries'):

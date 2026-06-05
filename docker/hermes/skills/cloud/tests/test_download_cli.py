@@ -1,10 +1,10 @@
-"""Unit tests for cloud_publish.download_cli."""
+"""Unit tests for cloud_file.download_cli."""
 import json
 import unittest.mock as mock
 
 import pytest
 
-from cloud_publish import download_cli
+from cloud_file import download_cli
 
 
 def _run(argv, env, capsys):
@@ -25,8 +25,8 @@ _SAS = {'blob_endpoint': 'https://b.net', 'container': 'laifu-cloud',
 
 
 def test_list_outputs_files_json(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.list_files') as mock_list:
         MockSas.return_value.get.return_value = _SAS
         mock_list.return_value = [{'virtual_path': 'a.txt', 'size': 1, 'source': 'web',
                                    'last_modified': None, 'content_type': 'text/plain', 'title': 'a'}]
@@ -38,8 +38,8 @@ def test_list_outputs_files_json(capsys):
 
 
 def test_download_writes_and_reports(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.download_file') as mock_dl:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.download_file') as mock_dl:
         MockSas.return_value.get.return_value = _SAS
         mock_dl.return_value = 2048
         code, out = _run(['--virtual-path', 'reports/q2.pdf', '--output', '/tmp/q2.pdf'], _ENV, capsys)
@@ -67,8 +67,8 @@ def test_path_traversal_exit_1(capsys):
 
 
 def test_blob_missing_exit_3(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.download_file') as mock_dl:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.download_file') as mock_dl:
         MockSas.return_value.get.return_value = _SAS
         mock_dl.side_effect = FileNotFoundError('blob not found: a.txt')
         code, _ = _run(['--virtual-path', 'a.txt', '--output', '/tmp/a'], _ENV, capsys)
@@ -76,8 +76,8 @@ def test_blob_missing_exit_3(capsys):
 
 
 def test_list_error_exit_3(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.list_files') as mock_list:
         MockSas.return_value.get.return_value = _SAS
         mock_list.side_effect = RuntimeError('network error')
         code, out = _run(['--list'], _ENV, capsys)
@@ -86,23 +86,23 @@ def test_list_error_exit_3(capsys):
 
 
 def test_auth_error_exit_2(capsys):
-    from cloud_publish.sas_cache import AuthError
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas:
+    from cloud_file.sas_cache import AuthError
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas:
         MockSas.return_value.get.side_effect = AuthError('jwt expired')
         code, _ = _run(['--list'], _ENV, capsys)
     assert code == 2
 
 
 def test_sas_fetch_network_error_exit_3(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas:
         MockSas.return_value.get.side_effect = RuntimeError('gateway 500')
         code, _ = _run(['--list'], _ENV, capsys)
     assert code == 3
 
 
 def test_list_prefix_gets_trailing_slash(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.list_files') as mock_list:
         MockSas.return_value.get.return_value = _SAS
         mock_list.return_value = []
         _run(['--list', '--prefix', 'reports'], _ENV, capsys)
@@ -110,8 +110,8 @@ def test_list_prefix_gets_trailing_slash(capsys):
 
 
 def test_list_empty_prefix_stays_empty(capsys):
-    with mock.patch('cloud_publish.download_cli.SasCache') as MockSas, \
-         mock.patch('cloud_publish.download_cli.list_files') as mock_list:
+    with mock.patch('cloud_file.download_cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.download_cli.list_files') as mock_list:
         MockSas.return_value.get.return_value = _SAS
         mock_list.return_value = []
         _run(['--list'], _ENV, capsys)

@@ -20,9 +20,9 @@ import os
 import pathlib
 import sys
 
-from cloud_publish.sas_cache import SasCache, AuthError
-from cloud_publish.paths import validate_virtual_path
-from cloud_publish.downloader import list_files, download_file
+from cloud_file.sas_cache import SasCache, AuthError
+from cloud_file.paths import validate_virtual_path
+from cloud_file.downloader import list_files, download_file
 
 
 def _emit(obj: dict) -> None:

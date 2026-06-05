@@ -1,4 +1,4 @@
-"""Unit tests for cloud_publish.__main__ (the CLI entry point)."""
+"""Unit tests for cloud_file.__main__ (the CLI entry point)."""
 
 import json
 import pathlib
@@ -38,15 +38,15 @@ def _run(
     exit_code 0 when main() returns normally (success path),
     or the SystemExit code when main() calls sys.exit(N).
     """
-    from cloud_publish.__main__ import main
+    from cloud_file.__main__ import main
 
     env = env or _ENV
     sas = sas or _VALID_SAS
     upload_url = upload_url or 'https://laifuprod.blob.core.windows.net/laifu-cloud/user123/reports/sales.pdf'
 
     with mock.patch.dict('os.environ', env, clear=False), \
-         mock.patch('cloud_publish.__main__.SasCache') as MockSasCache, \
-         mock.patch('cloud_publish.__main__.upload_blob') as mock_upload, \
+         mock.patch('cloud_file.__main__.SasCache') as MockSasCache, \
+         mock.patch('cloud_file.__main__.upload_blob') as mock_upload, \
          mock.patch('sys.argv', ['cloud-publish'] + args):
 
         sas_instance = MockSasCache.return_value
@@ -112,15 +112,15 @@ class TestSuccessPath:
         pdf.write_bytes(b'content')
 
         with mock.patch.dict('os.environ', _ENV, clear=False), \
-             mock.patch('cloud_publish.__main__.SasCache') as MockSasCache, \
-             mock.patch('cloud_publish.__main__.upload_blob') as mock_upload, \
+             mock.patch('cloud_file.__main__.SasCache') as MockSasCache, \
+             mock.patch('cloud_file.__main__.upload_blob') as mock_upload, \
              mock.patch('sys.argv', ['cloud-publish', '--file', str(pdf),
                                      '--virtual-path', 'reports/sales.pdf']):
             sas_instance = MockSasCache.return_value
             sas_instance.get.return_value = _VALID_SAS
             mock_upload.return_value = 'https://example.com/blob'
 
-            from cloud_publish.__main__ import main
+            from cloud_file.__main__ import main
             try:
                 main()
             except SystemExit:
@@ -201,20 +201,20 @@ class TestAuthErrors:
         assert out['ok'] is False
 
     def test_auth_error_from_sas_cache_exit_2(self, tmp_path, capsys):
-        from cloud_publish.sas_cache import AuthError
+        from cloud_file.sas_cache import AuthError
 
         f = tmp_path / 'x.txt'
         f.write_bytes(b'hi')
 
         with mock.patch.dict('os.environ', _ENV, clear=False), \
-             mock.patch('cloud_publish.__main__.SasCache') as MockSasCache, \
+             mock.patch('cloud_file.__main__.SasCache') as MockSasCache, \
              mock.patch('sys.argv', ['cloud-publish', '--file', str(f),
                                      '--virtual-path', 'x.txt']):
             sas_instance = MockSasCache.return_value
             sas_instance.get.side_effect = AuthError('401 unauthorized')
 
             with pytest.raises(SystemExit) as exc_info:
-                from cloud_publish.__main__ import main
+                from cloud_file.__main__ import main
                 main()
 
         captured = capsys.readouterr()
@@ -242,14 +242,14 @@ class TestNetworkErrors:
         f.write_bytes(b'hi')
 
         with mock.patch.dict('os.environ', _ENV, clear=False), \
-             mock.patch('cloud_publish.__main__.SasCache') as MockSasCache, \
+             mock.patch('cloud_file.__main__.SasCache') as MockSasCache, \
              mock.patch('sys.argv', ['cloud-publish', '--file', str(f),
                                      '--virtual-path', 'x.txt']):
             sas_instance = MockSasCache.return_value
             sas_instance.get.side_effect = RuntimeError('connection refused')
 
             with pytest.raises(SystemExit) as exc_info:
-                from cloud_publish.__main__ import main
+                from cloud_file.__main__ import main
                 main()
 
         captured = capsys.readouterr()
@@ -279,15 +279,15 @@ class TestOutputIsValidJson:
         pdf.write_bytes(b'content')
 
         with mock.patch.dict('os.environ', _ENV, clear=False), \
-             mock.patch('cloud_publish.__main__.SasCache') as MockSasCache, \
-             mock.patch('cloud_publish.__main__.upload_blob') as mock_upload, \
+             mock.patch('cloud_file.__main__.SasCache') as MockSasCache, \
+             mock.patch('cloud_file.__main__.upload_blob') as mock_upload, \
              mock.patch('sys.argv', ['cloud-publish', '--file', str(pdf),
                                      '--virtual-path', 'reports/r.pdf']):
             sas_instance = MockSasCache.return_value
             sas_instance.get.return_value = _VALID_SAS
             mock_upload.return_value = 'https://example.com/blob'
 
-            from cloud_publish.__main__ import main
+            from cloud_file.__main__ import main
             try:
                 main()
             except SystemExit:

@@ -1,4 +1,4 @@
-"""Unit tests for cloud_publish.uploader."""
+"""Unit tests for cloud_file.uploader."""
 
 import pathlib
 import unittest.mock as mock
@@ -6,7 +6,7 @@ import unittest.mock as mock
 import pytest
 from azure.core.exceptions import HttpResponseError
 
-from cloud_publish.uploader import upload_blob
+from cloud_file.uploader import upload_blob
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def _http_error(status: int) -> HttpResponseError:
 
 class TestHappyPath:
     def test_returns_url_without_sas(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.return_value = None
 
@@ -62,7 +62,7 @@ class TestHappyPath:
         assert url == expected_url
 
     def test_upload_called_once(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.return_value = None
 
@@ -73,7 +73,7 @@ class TestHappyPath:
 
 class Test403ForceRefresh:
     def test_403_triggers_force_refresh_then_succeeds(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient:
             instance = MockClient.from_blob_url.return_value
             # First call raises 403, second succeeds
             instance.upload_blob.side_effect = [
@@ -98,7 +98,7 @@ class Test403ForceRefresh:
         assert url.startswith('https://laifuprod.blob.core.windows.net/laifu-cloud/')
 
     def test_403_without_sas_cache_raises(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(403)
 
@@ -106,7 +106,7 @@ class Test403ForceRefresh:
                 upload_blob(_SAS, _BLOB_NAME, tmp_file, _METADATA, _CONTENT_TYPE)
 
     def test_403_after_refresh_raises(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(403)  # both calls fail
 
@@ -122,8 +122,8 @@ class Test403ForceRefresh:
 
 class Test5xxRetry:
     def test_succeeds_on_third_attempt(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient, \
-             mock.patch('cloud_publish.uploader.time.sleep'):
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient, \
+             mock.patch('cloud_file.uploader.time.sleep'):
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = [
                 _http_error(500),
@@ -137,8 +137,8 @@ class Test5xxRetry:
         assert url.startswith('https://laifuprod.blob.core.windows.net/')
 
     def test_raises_after_all_retries_exhausted(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient, \
-             mock.patch('cloud_publish.uploader.time.sleep'):
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient, \
+             mock.patch('cloud_file.uploader.time.sleep'):
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(500)  # always 500
 
@@ -149,8 +149,8 @@ class Test5xxRetry:
         assert instance.upload_blob.call_count == 4
 
     def test_exponential_backoff_sleep_calls(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient, \
-             mock.patch('cloud_publish.uploader.time.sleep') as mock_sleep:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient, \
+             mock.patch('cloud_file.uploader.time.sleep') as mock_sleep:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(500)
 
@@ -164,8 +164,8 @@ class Test5xxRetry:
 
 class TestNonRetryableErrors:
     def test_400_raises_immediately(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient, \
-             mock.patch('cloud_publish.uploader.time.sleep') as mock_sleep:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient, \
+             mock.patch('cloud_file.uploader.time.sleep') as mock_sleep:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(400)
 
@@ -176,8 +176,8 @@ class TestNonRetryableErrors:
         mock_sleep.assert_not_called()
 
     def test_404_raises_immediately(self, tmp_file):
-        with mock.patch('cloud_publish.uploader.BlobClient') as MockClient, \
-             mock.patch('cloud_publish.uploader.time.sleep') as mock_sleep:
+        with mock.patch('cloud_file.uploader.BlobClient') as MockClient, \
+             mock.patch('cloud_file.uploader.time.sleep') as mock_sleep:
             instance = MockClient.from_blob_url.return_value
             instance.upload_blob.side_effect = _http_error(404)
 

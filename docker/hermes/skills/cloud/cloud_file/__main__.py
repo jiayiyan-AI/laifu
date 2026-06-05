@@ -26,10 +26,10 @@ import os
 import pathlib
 import sys
 
-from cloud_publish.sas_cache import SasCache, AuthError  # noqa: E402  (top-level for mockability)
-from cloud_publish.metadata import build_metadata         # noqa: E402
-from cloud_publish.uploader import upload_blob            # noqa: E402
-from cloud_publish.paths import validate_virtual_path     # noqa: E402
+from cloud_file.sas_cache import SasCache, AuthError  # noqa: E402  (top-level for mockability)
+from cloud_file.metadata import build_metadata         # noqa: E402
+from cloud_file.uploader import upload_blob            # noqa: E402
+from cloud_file.paths import validate_virtual_path     # noqa: E402
 
 _MAX_FILE_BYTES = 10 * 1024 * 1024   # 10 MB
 
