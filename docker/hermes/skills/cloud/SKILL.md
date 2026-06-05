@@ -38,7 +38,7 @@ cloud-file put /home/hermes/output/report.pdf reports/2026-06/sales.pdf --title 
 |---|---|---|
 | `ls` | `cloud-file ls [PREFIX]` | 列出文件,输出 `{"ok":true,"files":[{virtual_path,size,last_modified,content_type,source,title}]}` |
 | `get` | `cloud-file get <虚拟路径> [-o 本地路径]` | 下载;`-o` 缺省取虚拟路径 basename |
-| `put` | `cloud-file put <本地文件> <虚拟路径> [--title ...] [--description ...] [--tags a,b] [--session-id ...] [--content-type ...]` | 上传/发布;≤10MB;同虚拟路径覆盖 |
+| `put` | `cloud-file put <本地文件> <虚拟路径> [--title ...] [--description ...] [--tags a,b] [--session-id ...] [--content-type ...]` | 上传/发布;≤10MB;同虚拟路径覆盖;--title 缺省取虚拟路径 basename |
 
 `source` 字段:`web`=用户网页上传,`agent`=agent(`put`)发布。
 
@@ -49,4 +49,11 @@ cloud-file put /home/hermes/output/report.pdf reports/2026-06/sales.pdf --title 
 
 ## 输出与退出码
 
-stdout 一行 JSON。退出码:0=成功,1=参数错误,2=鉴权失败,3=网络/下载/上传失败(含文件不存在),4=其他。
+stdout 一行 JSON。成功时:
+- `ls`:`{"ok":true,"files":[{virtual_path,size,last_modified,content_type,source,title}]}`
+- `get`:`{"ok":true,"virtual_path":"...","output":"<本地路径>","size":<字节数>}`
+- `put`:`{"ok":true,"blob_name":"<user_id>/<虚拟路径>","url":"..."}`
+
+失败时:`{"ok":false,"error":"<message>"}`
+
+退出码:0=成功,1=参数错误,2=鉴权失败,3=网络/下载/上传失败(含文件不存在),4=其他。
