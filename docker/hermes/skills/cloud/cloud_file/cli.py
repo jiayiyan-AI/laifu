@@ -11,6 +11,7 @@ import mimetypes
 import os
 import pathlib
 import sys
+from typing import NoReturn
 
 from cloud_file.sas_cache import SasCache, AuthError
 from cloud_file.paths import validate_virtual_path
@@ -25,7 +26,7 @@ def _emit(obj: dict) -> None:
     print(json.dumps(obj), flush=True)
 
 
-def _fail(msg: str, code: int) -> None:
+def _fail(msg: str, code: int) -> NoReturn:
     _emit({'ok': False, 'error': msg})
     sys.exit(code)
 

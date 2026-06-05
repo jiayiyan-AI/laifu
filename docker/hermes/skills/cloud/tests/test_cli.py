@@ -133,3 +133,25 @@ def test_put_missing_jwt_exit_2(capsys, tmp_path):
     f = tmp_path / 'a.bin'; f.write_bytes(b'x')
     code, _ = _run(['put', str(f), 'a.bin'], {'GATEWAY_BASE_URL': 'https://gw.test'}, capsys)
     assert code == 2
+
+
+def test_put_missing_gateway_url_exit_4(capsys, tmp_path):
+    f = tmp_path / 'a.bin'; f.write_bytes(b'x')
+    code, _ = _run(['put', str(f), 'a.bin'], {'LAIFU_USER_TOKEN': 'jwt123'}, capsys)
+    assert code == 4
+
+
+def test_ls_empty_prefix_stays_empty(capsys):
+    with mock.patch('cloud_file.cli.SasCache') as MockSas, \
+         mock.patch('cloud_file.cli.list_files') as mock_list:
+        MockSas.return_value.get.return_value = _SAS
+        mock_list.return_value = []
+        _run(['ls'], _ENV, capsys)
+    assert mock_list.call_args.kwargs['sub_prefix'] == ''
+
+
+def test_ls_sas_network_error_exit_3(capsys):
+    with mock.patch('cloud_file.cli.SasCache') as MockSas:
+        MockSas.return_value.get.side_effect = RuntimeError('gateway 500')
+        code, _ = _run(['ls'], _ENV, capsys)
+    assert code == 3
