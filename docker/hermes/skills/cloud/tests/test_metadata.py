@@ -1,11 +1,11 @@
-"""Unit tests for cloud_publish.metadata."""
+"""Unit tests for cloud_file.metadata."""
 
 import base64
 import datetime
 
 import pytest
 
-from cloud_publish.metadata import build_metadata, _b64, MAX_METADATA_BYTES
+from cloud_file.metadata import build_metadata, _b64, MAX_METADATA_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -102,3 +102,15 @@ class TestBuildMetadata:
         )
         for k, v in meta.items():
             assert isinstance(v, str), f'key {k!r} has non-str value'
+
+
+def test_source_defaults_to_agent():
+    from cloud_file.metadata import build_metadata
+    meta = build_metadata(title='x')
+    assert meta['source'] == 'agent'
+
+
+def test_source_can_be_overridden():
+    from cloud_file.metadata import build_metadata
+    meta = build_metadata(title='x', source='web')
+    assert meta['source'] == 'web'

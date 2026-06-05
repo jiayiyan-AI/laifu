@@ -36,3 +36,15 @@ export function basename(virtualPath: string): string {
   const trimmed = virtualPath.replace(/\/+$/, '');
   return trimmed.split('/').pop() ?? trimmed;
 }
+
+export function isPreviewable(file: { content_type: string | null; virtual_path: string }): boolean {
+  const ct = file.content_type ?? '';
+  if (ct === 'application/pdf' || ct.startsWith('image/')) return true;
+  const ext = file.virtual_path.toLowerCase().split('.').pop() ?? '';
+  return ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext);
+}
+
+/** web 上传的文件返回一个小角标字符，agent 产出的返回空串。 */
+export function sourceBadge(source: 'web' | 'agent'): string {
+  return source === 'web' ? '↥' : '';
+}

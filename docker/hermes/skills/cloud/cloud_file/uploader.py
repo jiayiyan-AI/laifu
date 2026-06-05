@@ -1,4 +1,4 @@
-"""Blob uploader for cloud-publish.
+"""Blob uploader for cloud-file put.
 
 Wraps azure-storage-blob's BlobClient with:
 - 3 retries (1 s / 2 s / 4 s) on 5xx HTTP errors
@@ -14,7 +14,7 @@ from azure.core.exceptions import HttpResponseError
 from azure.storage.blob import BlobClient, ContentSettings
 
 if TYPE_CHECKING:
-    from cloud_publish.sas_cache import SasCache
+    from cloud_file.sas_cache import SasCache
 
 
 _MAX_RETRIES = 3

@@ -1,4 +1,4 @@
-"""SAS token cache for cloud-publish.
+"""SAS token cache for cloud-file.
 
 Reads / refreshes a cached SAS from ~/.hermes/_cloud_sas.json.
 Calls GET ${GATEWAY_BASE_URL}/api/cloud/sas if the cache is missing

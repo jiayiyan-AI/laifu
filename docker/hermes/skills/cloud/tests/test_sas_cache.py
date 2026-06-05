@@ -1,4 +1,4 @@
-"""Unit tests for cloud_publish.sas_cache."""
+"""Unit tests for cloud_file.sas_cache."""
 
 import datetime
 import json
@@ -8,7 +8,7 @@ import io
 
 import pytest
 
-from cloud_publish.sas_cache import SasCache, AuthError
+from cloud_file.sas_cache import SasCache, AuthError
 
 
 # ---------------------------------------------------------------------------

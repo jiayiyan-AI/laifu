@@ -209,6 +209,7 @@ export interface CloudFileItem {
     tool_version: string | null;
     description: string | null;
     tags: string[] | null;
+    source: 'web' | 'agent';  // 文件来源：web 上传 or agent 发布；旧文件缺省 'agent'
   };
 }
 
@@ -219,4 +220,15 @@ export interface CloudFolderItem {
 export interface CloudListResponse {
   folders: CloudFolderItem[];
   files: CloudFileItem[];
+}
+
+/**
+ * Web 上传响应 (POST /api/cloud/upload)。
+ * gateway 代理写 Blob 成功后返回。
+ */
+export interface CloudUploadResponse {
+  ok: true;
+  virtual_path: string;       // relative to <user_id>/
+  size: number;               // bytes written
+  last_modified: string;      // ISO-8601
 }

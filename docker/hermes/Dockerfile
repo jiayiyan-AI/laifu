@@ -97,12 +97,12 @@ RUN chmod +x /entrypoint.sh
 COPY --chown=hermes:hermes server.py /app/server.py
 
 # ============ Hermes skills 占位目录 ============
-# P1 阶段为 cloud_publish 留一个能软链的目标 (SKILL.md 占位)。
-# P3 会替换 SKILL.md + 加 cloud_publish CLI 实现。
+# P1 阶段为 cloud_file 留一个能软链的目标 (SKILL.md 占位)。
+# P3 会替换 SKILL.md + 加 cloud_file CLI 实现。
 RUN mkdir -p /opt/hermes-skills && chown hermes:hermes /opt/hermes-skills
 COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
 
-# 装 cloud-publish Hermes skill 的 Python CLI
+# 装 cloud-file Hermes skill 的 Python CLI
 # ⚠️ 不能装到 /home/hermes/.local/ — 那里 dev 模式被 -v host volume 整盘 mount 覆盖。
 # 装到 hermes-agent venv (/opt/hermes-agent/venv/),在 /opt 下不会被 volume 影响,
 # 然后软链到 /usr/local/bin/ 让任何 PATH 配置都能找到。
