@@ -103,3 +103,29 @@ describe('POST /api/entitlements/cloud/disable', () => {
     expect(restartContainer).toHaveBeenCalled();
   });
 });
+
+describe('feature allowlist', () => {
+  it('unknown feature → 404, no DAO call', async () => {
+    const enable = vi.fn();
+    const app = makeApp({
+      enable, disable: vi.fn(), listActive: vi.fn(),
+      bumpTokenVersion: vi.fn(), restartContainer: vi.fn(),
+      signTokenAndInject: vi.fn(),
+    });
+    const res = await request(app).post('/api/entitlements/bogus/enable');
+    expect(res.status).toBe(404);
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it('email is NOT yet allowed in sub-project A → 404', async () => {
+    const enable = vi.fn();
+    const app = makeApp({
+      enable, disable: vi.fn(), listActive: vi.fn(),
+      bumpTokenVersion: vi.fn(), restartContainer: vi.fn(),
+      signTokenAndInject: vi.fn(),
+    });
+    const res = await request(app).post('/api/entitlements/email/enable');
+    expect(res.status).toBe(404);
+    expect(enable).not.toHaveBeenCalled();
+  });
+});
