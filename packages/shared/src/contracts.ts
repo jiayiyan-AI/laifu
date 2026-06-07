@@ -293,3 +293,12 @@ export interface EmailSendResponse {
   id: string;                  // 落库的 outbound 邮件 id
   message_id: string;          // provider 返回的 Message-ID
 }
+
+/**
+ * 可经 /api/entitlements/:feature/(enable|disable) 管理的能力 id —— 单一来源。
+ * 网关 ALLOWED_FEATURES 由此派生; web catalog 的 removable 能力 id 必须与此集合一致
+ * (apps/web/src/lib/capabilities.test.ts 有防漂移断言)。
+ * 新增可装备能力时只改这里 + web catalog。
+ */
+export const MANAGEABLE_FEATURES = ['cloud', 'email'] as const;
+export type ManageableFeature = (typeof MANAGEABLE_FEATURES)[number];
