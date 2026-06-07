@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { IconGlobe, IconFile, IconMessage, IconFolder } from './icons.js';
+import { IconGlobe, IconFile, IconMessage, IconFolder, IconMail } from './icons.js';
 
 /** 确认/退订弹窗文案。`lines` 是弹窗里逐行的小字(价格/容量/影响说明)。 */
 export interface CapabilityCopy {
@@ -54,6 +54,25 @@ export const CAPABILITIES: Capability[] = [
       title: '退订云盘',
       desc: '退订后：',
       lines: ['• 桌面"文件"应用会消失', '• 已发布的文件保留（不删除），重新装备后可继续访问'],
+    },
+  },
+  {
+    id: 'email', name: '邮件', icon: <IconMail size={22} color="var(--accent)" />,
+    blurb: '给助理一个专属邮箱，可代收代发业务邮件（在对话里让它读信/回信）',
+    price: 0, removable: true, inMarket: true,
+    enableCopy: {
+      title: '邮件',
+      desc: '给助理一个专属邮箱地址，第三方可直接发邮件给它，你也可转发业务邮件进来。',
+      lines: [
+        '价格: 免费（后续可能收费）',
+        '装备后系统会自动分配一个邮箱地址',
+        '收到邮件不会主动通知，在对话里让助理「看看新邮件」即可',
+      ],
+    },
+    disableCopy: {
+      title: '退订邮件',
+      desc: '退订后：',
+      lines: ['• 助理不再能收发邮件', '• 已收到的邮件记录保留，重新装备后可继续访问'],
     },
   },
 ];

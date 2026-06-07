@@ -29,6 +29,7 @@ const wrap = (path: string) => ({ size = 18, color, className = '', strokeWidth 
 export const IconChat = wrap('<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/>');
 export const IconUser = wrap('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>');
 export const IconMessage = wrap('<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/>');
+export const IconMail = wrap('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>');
 export const IconCheck = wrap('<path d="M20 6 9 17l-5-5"/>');
 export const IconX = wrap('<path d="M18 6 6 18"/><path d="M6 6l12 12"/>');
 export const IconPlus = wrap('<path d="M12 5v14"/><path d="M5 12h14"/>');
