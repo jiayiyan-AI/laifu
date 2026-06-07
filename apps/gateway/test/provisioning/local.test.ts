@@ -1,8 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { provisionContainerLocal } from '../../src/provisioning/local.js';
+
+// 测试隔离: 把 HOME 指到临时目录。signTokenAndInjectLocal 在被测模块加载时就
+// 用 homedir() 算出 token 写入路径; 不 mock 的话, 跑这个测试会清掉并覆盖开发者
+// 真实的 ~/.hermes-dev/.hermes/.laifu_user_token —— 即本地 dev hermes 容器在用的 token。
+const { TEST_HOME } = vi.hoisted(() => ({
+  TEST_HOME: `${process.env.TMPDIR || '/tmp'}/lingxi-local-test-${process.pid}`.replace(/\/{2,}/g, '/'),
+}));
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => TEST_HOME };
+});
 
 // Mock child_process before importing the module under test
 vi.mock('node:child_process', () => ({
@@ -11,7 +22,12 @@ vi.mock('node:child_process', () => ({
 
 import { signTokenAndInjectLocal, restartContainerAppLocal } from '../../src/provisioning/local.js';
 
+// homedir() 已被 mock 成 TEST_HOME, 与被测模块算出的路径一致。
 const TOKEN_PATH = path.join(homedir(), '.hermes-dev', '.hermes', '.laifu_user_token');
+
+afterAll(async () => {
+  await fs.rm(TEST_HOME, { recursive: true, force: true });
+});
 
 const finalReadyRow = {
   user_id: 'u1',
