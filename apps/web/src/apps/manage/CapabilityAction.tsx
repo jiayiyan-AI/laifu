@@ -176,8 +176,8 @@ export const CapabilityRemove = ({ cap, trigger }: { cap: Capability; trigger: (
             <>
               <div style={{ fontWeight: 600, marginBottom: 10 }}>{copy.title}</div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 16, textAlign: 'left' }}>
-                {copy.desc}
-                {copy.lines?.map((l, i) => (<div key={i}>{l}</div>))}
+                <div style={{ marginBottom: 4 }}>{copy.desc}</div>
+                {copy.lines?.map((l, i) => (<div key={i} style={{ marginBottom: 2 }}>{l}</div>))}
               </div>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                 <button className="btn" onClick={() => setPhase('idle')}>取消</button>

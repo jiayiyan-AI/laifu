@@ -94,4 +94,42 @@ describe('CapabilityRemove', () => {
     fireEvent.click(screen.getByText(/确认退订/));
     await waitFor(() => expect(api.disableFeature).toHaveBeenCalledWith('cloud'));
   });
+
+  it('确认框点取消 → 不调 disableFeature', async () => {
+    render(
+      <EntitlementsProvider>
+        <CapabilityRemove cap={CLOUD} trigger={(open) => <button onClick={open}>✕</button>} />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByText('✕'));
+    await waitFor(() => expect(screen.getByText(/退订云盘/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/取消/));
+    await waitFor(() => expect(screen.queryByText(/确认退订/)).not.toBeInTheDocument());
+    expect(api.disableFeature).not.toHaveBeenCalled();
+  });
+
+  it('退订后轮询到 observed 不含 cloud → 弹窗关闭', async () => {
+    vi.mocked(api.disableFeature).mockResolvedValue({ ok: true, entitlements: [], changed: true });
+    vi.mocked(api.status)
+      .mockResolvedValueOnce({
+        status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null,
+        entitlements_desired: ['cloud'], entitlements_observed: ['cloud'], container_token_version: 1,
+      })
+      .mockResolvedValue({
+        status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null,
+        entitlements_desired: [], entitlements_observed: [], container_token_version: 2,
+      });
+    render(
+      <EntitlementsProvider>
+        <CapabilityRemove cap={CLOUD} trigger={(open) => <button onClick={open}>✕</button>} />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByText('✕'));
+    await waitFor(() => expect(screen.getByText(/退订云盘/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/确认退订/));
+    await waitFor(() => expect(api.disableFeature).toHaveBeenCalledWith('cloud'));
+    for (let i = 0; i < 5; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(2000); }); }
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    await waitFor(() => expect(screen.queryByText(/正在卸载/)).not.toBeInTheDocument());
+  });
 });
