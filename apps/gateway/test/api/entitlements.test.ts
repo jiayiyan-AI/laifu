@@ -117,15 +117,15 @@ describe('feature allowlist', () => {
     expect(enable).not.toHaveBeenCalled();
   });
 
-  it('email is NOT yet allowed in sub-project A → 404', async () => {
-    const enable = vi.fn();
+  it('email is now allowed (sub-project B) → enable proceeds', async () => {
+    const enable = vi.fn().mockResolvedValue({ changed: true });
     const app = makeApp({
-      enable, disable: vi.fn(), listActive: vi.fn(),
-      bumpTokenVersion: vi.fn(), restartContainer: vi.fn(),
-      signTokenAndInject: vi.fn(),
+      enable, disable: vi.fn(), listActive: vi.fn().mockResolvedValue(['email']),
+      bumpTokenVersion: vi.fn().mockResolvedValue(1), restartContainer: vi.fn().mockResolvedValue(undefined),
+      signTokenAndInject: vi.fn().mockResolvedValue(undefined),
     });
     const res = await request(app).post('/api/entitlements/email/enable');
-    expect(res.status).toBe(404);
-    expect(enable).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(enable).toHaveBeenCalledWith(USER_ID, 'email');
   });
 });

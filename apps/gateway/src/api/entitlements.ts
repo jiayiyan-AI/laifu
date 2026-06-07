@@ -1,9 +1,11 @@
 import { Router, type Router as RouterType, type Request, type Response, type RequestHandler } from 'express';
 import type { EntitlementsDao } from '../db/entitlements-dao.js';
 import type { EntitlementChangeResponse } from '@lingxi/shared';
+import { MANAGEABLE_FEATURES } from '@lingxi/shared';
 
 /** 允许通过此端点开关的能力。新增能力时在此追加(与前端 catalog 同步)。 */
-const ALLOWED_FEATURES = new Set<string>(['cloud']);   // 子项 B 会追加 'email'
+// 白名单派生自 @lingxi/shared 单一来源, 避免与前端 catalog 漂移 (见 capabilities.test.ts)。
+const ALLOWED_FEATURES = new Set<string>(MANAGEABLE_FEATURES);
 
 export interface EntitlementsRouterDeps {
   entitlements: EntitlementsDao;
