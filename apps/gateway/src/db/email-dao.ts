@@ -18,6 +18,7 @@ export interface OutboundInsert {
 export interface EmailDao {
   findUserByLocalpart(localpart: string): Promise<string | null>;
   getAddress(userId: string): Promise<{ localpart: string; display_name: string | null } | null>;
+  insertAddress(userId: string, localpart: string, displayName: string | null): Promise<void>;
   insertInbound(parsed: ParsedInboundEmail, userId: string): Promise<string>;
   insertOutbound(row: OutboundInsert): Promise<string>;
   list(userId: string, opts: { q?: string; limit: number }): Promise<EmailListItem[]>;
@@ -45,6 +46,15 @@ export const makeEmailDao = (sb: SupabaseClient): EmailDao => ({
       .eq('user_id', userId).maybeSingle();
     if (error) throw new Error(`getAddress: ${error.message}`);
     return data ? (data as { localpart: string; display_name: string | null }) : null;
+  },
+
+  async insertAddress(userId, localpart, displayName) {
+    const { error } = await sb.from('email_addresses').insert({
+      localpart: localpart.toLowerCase(),
+      user_id: userId,
+      display_name: displayName,
+    });
+    if (error) throw new Error(`insertAddress: ${error.message}`);
   },
 
   async insertInbound(parsed, userId) {

@@ -65,3 +65,20 @@ describe('emailDao.list', () => {
     expect(calls.limit).toBe(10);
   });
 });
+
+describe('emailDao.insertAddress', () => {
+  it('插入 localpart 行 (小写化 localpart)', async () => {
+    const { chain, calls } = mockSb({ data: null, error: null });
+    const dao = makeEmailDao(chain as any);
+    await dao.insertAddress('u1', 'U-AbC123', '顺成贸易');
+    expect(calls.inserted.localpart).toBe('u-abc123');
+    expect(calls.inserted.user_id).toBe('u1');
+    expect(calls.inserted.display_name).toBe('顺成贸易');
+  });
+
+  it('error → 抛出', async () => {
+    const { chain } = mockSb({ data: null, error: { message: 'duplicate key', code: '23505' } });
+    const dao = makeEmailDao(chain as any);
+    await expect(dao.insertAddress('u1', 'taken', null)).rejects.toThrow(/insertAddress/);
+  });
+});
