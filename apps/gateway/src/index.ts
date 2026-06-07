@@ -19,6 +19,7 @@ import { buildCloudRouter } from './api/cloud.js';
 import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
 import { getEmailProvider } from './lib/email/index.js';
 import { makeEmailDao } from './db/email-dao.js';
+import { ensureEmailAddress } from './api/email-provision.js';
 import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
@@ -156,12 +157,20 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       }));
     }
 
+    // emailDao 提前构造: entitlements onEnable 钩子(email 自动分配 handle)与下方 email 路由共用。
+    const emailDao = makeEmailDao(sbResolved);
+
     // P1 routes (entitlements + container-side + token refresh)
     app.use(buildEntitlementsRouter({
       entitlements: entitlementsDao,
       restartContainer,
       signTokenAndInject: signAndInject,
       sessionMw,
+      onEnable: async (userId, feature) => {
+        if (feature === 'email') {
+          await ensureEmailAddress(emailDao, userId);
+        }
+      },
     }));
 
     app.use(buildMeEntitlementsRouter({
@@ -172,7 +181,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
     // 邮件能力 (B1): inbound webhook (Basic-Auth) + 容器侧 list/get/send (containerAuth + email entitlement)
     {
-      const emailDao = makeEmailDao(sbResolved);
       const emailProvider = getEmailProvider({
         provider: config.email.provider,
         postmarkServerToken: config.email.postmarkServerToken,
