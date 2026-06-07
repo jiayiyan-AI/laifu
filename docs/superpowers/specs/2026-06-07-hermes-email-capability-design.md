@@ -215,6 +215,7 @@ Postmark 实现:`parseInbound` 直接吃 Postmark 解析好的 JSON(含 `Strippe
 - **转发邮件的真实收件人**: 客户转发的信,原收件人藏在正文里,助手回复时需读出来或让客户在指令里指明。SKILL.md 要求不确定就回聊天确认。
 - **开放收件箱 = 收垃圾**: 任意人可发到助手地址,垃圾全量落库。v1 靠 Postmark spam score 标记,客户/助手自行忽略;v2 加白名单。
 - **附件大小**: Postmark 单封 ≤ 10MB(与云盘上传限一致)。超限的附件入站会被截断/拒绝,需在 inbound handler 记录并跳过。
+- **catalog ↔ 后端白名单漂移**(来自子项 A 最终评审): 前端 `capabilities.tsx` 的能力 id、`api` feature 字符串、gateway `ALLOWED_FEATURES` 三处必须一致。加 `email` 时若漏掉 gateway 白名单会静默 404。本期落 email 时一并:要么从 `@lingxi/shared` 导出能力 id 列表派生白名单,要么加一个契约测试断言三处同步。
 
 ---
 
