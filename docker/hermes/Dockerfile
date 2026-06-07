@@ -113,7 +113,8 @@ COPY --chown=hermes:hermes skills/ /opt/hermes-skills/
 RUN unset PIP_USER PYTHONUSERBASE && pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
-    -e /opt/hermes-skills/cloud/
+    -e /opt/hermes-skills/cloud/ \
+    -e /opt/hermes-skills/email/
 
 USER hermes
 
