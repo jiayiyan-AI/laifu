@@ -16,6 +16,10 @@ import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildCloudRouter } from './api/cloud.js';
+import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
+import { getEmailProvider } from './lib/email/index.js';
+import { makeEmailDao } from './db/email-dao.js';
+import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { makeEntitlementsDao } from './db/entitlements-dao.js';
@@ -165,6 +169,31 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       entitlements: entitlementsDao,
       observedState: observedStateDao,
     }));
+
+    // 邮件能力 (B1): inbound webhook (Basic-Auth) + 容器侧 list/get/send (containerAuth + email entitlement)
+    {
+      const emailDao = makeEmailDao(sbResolved);
+      const emailProvider = getEmailProvider({
+        provider: config.email.provider,
+        postmarkServerToken: config.email.postmarkServerToken,
+      });
+      const emailContainerAuth = makeContainerTokenMiddleware({
+        secret: config.auth.gatewaySecret,
+        tokenVersionFetcher: (uid) => entitlementsDao.getTokenVersion(uid),
+      });
+      app.use(buildEmailRouter({
+        dao: emailDao,
+        provider: emailProvider,
+        config: {
+          domain: config.email.domain,
+          fromDefaultName: config.email.fromDefaultName,
+          inboundWebhookSecret: config.email.inboundWebhookSecret,
+        },
+        containerAuth: emailContainerAuth,
+        requireEmailEntitlement: makeEmailEntitlementMiddleware(entitlementsDao),
+      }));
+      console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
+    }
 
     app.use(buildAuthRefreshRouter({
       secret: config.auth.gatewaySecret,

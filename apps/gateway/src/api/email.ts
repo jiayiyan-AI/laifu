@@ -153,3 +153,22 @@ export const buildEmailRouter = (deps: EmailRouterDeps): RouterType => {
 
   return router;
 };
+
+import type { EntitlementsDao } from '../db/entitlements-dao.js';
+
+/** email entitlement gate: containerAuth 之后用, 查 user 是否 active 'email'. */
+export const makeEmailEntitlementMiddleware = (
+  entitlements: Pick<EntitlementsDao, 'listActive'>,
+): RequestHandler => async (req, res, next) => {
+  const userId = req.user_id!;
+  try {
+    const active = await entitlements.listActive(userId);
+    if (!active.includes('email')) {
+      res.status(403).json({ error: 'email entitlement not active' });
+      return;
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'internal', message: String(err) });
+  }
+};
