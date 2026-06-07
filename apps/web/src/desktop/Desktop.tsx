@@ -12,6 +12,7 @@ import { ManageApp } from '../apps/manage/ManageApp.js';
 import { WechatApp } from '../apps/wechat/WechatApp.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
 import { useEntitlements } from '../lib/entitlements-context.js';
+import { CAPABILITIES } from '../lib/capabilities.js';
 
 type AppId = DockAppId | 'wechat';
 
@@ -49,15 +50,17 @@ export const Desktop = () => {
     })();
   }, []);
 
-  const cloudObservedRef = useRef(observed.includes('cloud'));
+  // 记录上一轮 observed,任一带 desktopApp 的能力"新被装备"时自动开窗。
+  const prevObservedRef = useRef<string[]>(observed);
 
   useEffect(() => {
-    const had = cloudObservedRef.current;
-    const has = observed.includes('cloud');
-    if (!had && has) {
-      openApp('files');
+    const prev = new Set(prevObservedRef.current);
+    for (const cap of CAPABILITIES) {
+      if (cap.desktopApp && observed.includes(cap.id) && !prev.has(cap.id)) {
+        openApp(cap.desktopApp as AppId);
+      }
     }
-    cloudObservedRef.current = has;
+    prevObservedRef.current = observed;
   }, [observed]);
 
   if (ready === null) {

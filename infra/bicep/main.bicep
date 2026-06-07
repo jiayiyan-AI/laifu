@@ -332,6 +332,14 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
     ANTHROPIC_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=anthropic-api-key)'
     DASHSCOPE_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=dashscope-api-key)'
+
+    // 邮件能力 (子项 B)。prod 暂留 fake (Postmark 域名/DNS 验证完成前不真收发, 见 spec §八);
+    // 域名+DKIM+入站 webhook 就绪后把 EMAIL_PROVIDER 改 'postmark' + 填两个 KV secret 即可。
+    EMAIL_PROVIDER: 'fake'
+    EMAIL_DOMAIN: 'mail.localhost'
+    EMAIL_FROM_DEFAULT_NAME: '灵犀助理'
+    POSTMARK_INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-inbound-webhook-secret)'
+    POSTMARK_SERVER_TOKEN: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-server-token)'
   }
 }
 

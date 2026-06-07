@@ -15,3 +15,12 @@ model:
   api_key: "${DASHSCOPE_API_KEY}"
   request_timeout_seconds: 120
   stale_timeout_seconds: 300
+
+# ============================================================================
+# 禁用 Hermes 自带的邮件类 skill — 我们用自己的 laifu-email(email CLI, 走 gateway)。
+# 不禁的话, 自带 himalaya(IMAP/SMTP 客户端)类目就叫 "email", 模型做"看邮件"时
+# 会优先选它 → 提示"himalaya 没装", 抢掉我们的 skill。
+# ============================================================================
+skills:
+  disabled:
+    - himalaya

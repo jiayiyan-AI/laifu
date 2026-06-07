@@ -30,6 +30,8 @@ az keyvault secret set --vault-name $KV --name google-client-id --value "..."
 az keyvault secret set --vault-name $KV --name google-client-secret --value "..."
 az keyvault secret set --vault-name $KV --name anthropic-api-key --value "sk-..."
 az keyvault secret set --vault-name $KV --name dashscope-api-key --value "sk-..."   # 可填空字符串占位
+az keyvault secret set --vault-name $KV --name postmark-inbound-webhook-secret --value "$(openssl rand -hex 24)"  # 入站 webhook Basic-Auth; 与 Postmark inbound URL 内嵌密码一致
+az keyvault secret set --vault-name $KV --name postmark-server-token --value ""   # Postmark 发信 token; 暂 provider=fake 可填空占位, 切 postmark 时再填
 
 # 3. App Service 重启拉取 KV reference
 az webapp restart -g rg-lingxi-dev -n app-lingxi-dev-gateway

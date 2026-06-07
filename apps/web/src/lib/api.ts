@@ -95,11 +95,12 @@ export const unbindWechat = (): Promise<WechatUnbindResponse> =>
 
 // === Cloud Drive (P4+P5) ===
 
-export const enableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/enable', { method: 'POST' });
+// 通用能力开关
+export const enableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
+  json(`/api/entitlements/${encodeURIComponent(feature)}/enable`, { method: 'POST' });
 
-export const disableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/disable', { method: 'POST' });
+export const disableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
+  json(`/api/entitlements/${encodeURIComponent(feature)}/disable`, { method: 'POST' });
 
 export const cloudList = (prefix = ''): Promise<CloudListResponse> => {
   const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';

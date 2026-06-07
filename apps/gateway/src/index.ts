@@ -16,6 +16,11 @@ import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildCloudRouter } from './api/cloud.js';
+import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
+import { getEmailProvider } from './lib/email/index.js';
+import { makeEmailDao } from './db/email-dao.js';
+import { ensureEmailAddress } from './api/email-provision.js';
+import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { makeEntitlementsDao } from './db/entitlements-dao.js';
@@ -152,12 +157,20 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       }));
     }
 
+    // emailDao 提前构造: entitlements onEnable 钩子(email 自动分配 handle)与下方 email 路由共用。
+    const emailDao = makeEmailDao(sbResolved);
+
     // P1 routes (entitlements + container-side + token refresh)
     app.use(buildEntitlementsRouter({
       entitlements: entitlementsDao,
       restartContainer,
       signTokenAndInject: signAndInject,
       sessionMw,
+      onEnable: async (userId, feature) => {
+        if (feature === 'email') {
+          await ensureEmailAddress(emailDao, userId);
+        }
+      },
     }));
 
     app.use(buildMeEntitlementsRouter({
@@ -165,6 +178,30 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       entitlements: entitlementsDao,
       observedState: observedStateDao,
     }));
+
+    // 邮件能力 (B1): inbound webhook (Basic-Auth) + 容器侧 list/get/send (containerAuth + email entitlement)
+    {
+      const emailProvider = getEmailProvider({
+        provider: config.email.provider,
+        postmarkServerToken: config.email.postmarkServerToken,
+      });
+      const emailContainerAuth = makeContainerTokenMiddleware({
+        secret: config.auth.gatewaySecret,
+        tokenVersionFetcher: (uid) => entitlementsDao.getTokenVersion(uid),
+      });
+      app.use(buildEmailRouter({
+        dao: emailDao,
+        provider: emailProvider,
+        config: {
+          domain: config.email.domain,
+          fromDefaultName: config.email.fromDefaultName,
+          inboundWebhookSecret: config.email.inboundWebhookSecret,
+        },
+        containerAuth: emailContainerAuth,
+        requireEmailEntitlement: makeEmailEntitlementMiddleware(entitlementsDao),
+      }));
+      console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
+    }
 
     app.use(buildAuthRefreshRouter({
       secret: config.auth.gatewaySecret,

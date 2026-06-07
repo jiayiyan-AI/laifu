@@ -71,6 +71,19 @@ export const config = {
     // 读 SAS TTL（每次 download 签一个）
     readSasTtlSeconds: parseInt(process.env['AZURE_STORAGE_READ_SAS_TTL_SECONDS'] ?? '300', 10),     // 5min
   },
+
+  email: {
+    // 'fake' (dev, 不真收发) | 'postmark' (prod)。业务码不分支, 全靠 provider adapter。
+    provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'postmark',
+    // 助手邮箱地址的域名, 如 'mail.lingxi.xxx'。dev fake 下随便填。
+    domain: process.env['EMAIL_DOMAIN'] ?? 'mail.localhost',
+    // 发信 From 缺省显示名
+    fromDefaultName: process.env['EMAIL_FROM_DEFAULT_NAME'] ?? '灵犀助理',
+    // 入站 webhook 的 Basic-Auth 共享密钥 (Postmark inbound URL 内嵌 user:pass 里的 pass)
+    inboundWebhookSecret: process.env['POSTMARK_INBOUND_WEBHOOK_SECRET'] ?? 'dev-inbound-secret',
+    // Postmark 发信 server token (仅 provider=postmark 用)
+    postmarkServerToken: process.env['POSTMARK_SERVER_TOKEN'] ?? '',
+  },
 };
 
 // 仅在实际启动 server 时校验，单元测试可跳过

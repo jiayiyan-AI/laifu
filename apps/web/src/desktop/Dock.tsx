@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { IconSpark, IconGrid, IconFolder } from '../lib/icons.js';
+import { CAPABILITIES } from '../lib/capabilities.js';
 
 export type DockAppId = 'chat' | 'manage' | 'files';
 
@@ -10,8 +11,9 @@ const baseApps: AppDef[] = [
   { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,  c1: '#3b82f6', c2: '#1d4ed8' },
 ];
 
-const conditionalApps: Record<string, AppDef> = {
-  cloud: { id: 'files', name: '文件', icon: <IconFolder size={24} />, c1: '#22c55e', c2: '#15803d' },
+/** 桌面 app 的视觉(颜色/Dock 尺寸图标),按 desktopApp id 索引。catalog 决定"是否出现", 这里决定"长什么样"。 */
+const dockVisuals: Record<string, { name: string; icon: ReactNode; c1: string; c2: string }> = {
+  files: { name: '文件', icon: <IconFolder size={24} />, c1: '#22c55e', c2: '#15803d' },
 };
 
 interface DockProps {
@@ -21,12 +23,11 @@ interface DockProps {
 }
 
 export const Dock = ({ onOpen, openApps, entitlements }: DockProps) => {
-  const apps: AppDef[] = [
-    ...baseApps,
-    ...entitlements
-      .filter((feature) => conditionalApps[feature])
-      .map((feature) => conditionalApps[feature]!),
-  ];
+  const conditional: AppDef[] = CAPABILITIES
+    .filter((c) => c.desktopApp && entitlements.includes(c.id) && dockVisuals[c.desktopApp])
+    .map((c) => ({ id: c.desktopApp as DockAppId, ...dockVisuals[c.desktopApp!]! }));
+
+  const apps: AppDef[] = [...baseApps, ...conditional];
 
   return (
     <div style={{
