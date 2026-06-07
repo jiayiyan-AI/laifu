@@ -55,4 +55,4 @@ stdout 一行 JSON。成功时:
 
 失败时:`{"ok":false,"error":"<message>"}`
 
-退出码:0=成功,1=参数错误(如 send 缺 --to),2=鉴权失败,3=网络/gateway 非 2xx(含 read 找不到该邮件),4=其他。
+退出码:0=成功,1=参数错误(如 send 缺 --to),2=鉴权失败,3=网络/gateway 非 2xx(含 read 找不到该邮件、reply 的 in_reply_to_id 不存在、send 缺收件人被网关拒),4=其他。
