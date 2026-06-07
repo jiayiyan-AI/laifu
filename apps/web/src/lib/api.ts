@@ -95,13 +95,7 @@ export const unbindWechat = (): Promise<WechatUnbindResponse> =>
 
 // === Cloud Drive (P4+P5) ===
 
-export const enableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/enable', { method: 'POST' });
-
-export const disableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/disable', { method: 'POST' });
-
-// 通用能力开关（供后续通用组件使用，Task 7 删旧按钮后 enableCloud/disableCloud 可一并清理）
+// 通用能力开关
 export const enableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
   json(`/api/entitlements/${encodeURIComponent(feature)}/enable`, { method: 'POST' });
 
