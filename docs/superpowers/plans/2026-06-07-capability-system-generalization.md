@@ -194,19 +194,9 @@ EOF
 Run: `grep -rn "enableCloud\|disableCloud" apps/web/src`
 Expected: 仅出现在 `apps/web/src/apps/manage/BuyCloudButton.tsx`(enableCloud)与 `DisableCloudButton.tsx`(disableCloud)——这两个文件 Task 7 删除。若出现别处,需在对应任务一并改。
 
-- [ ] **Step 2: 替换实现**
+- [ ] **Step 2: 新增通用函数(保留旧的 enableCloud/disableCloud,Task 7 再删)**
 
-把 `apps/web/src/lib/api.ts` 中:
-
-```typescript
-export const enableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/enable', { method: 'POST' });
-
-export const disableCloud = (): Promise<EntitlementChangeResponse> =>
-  json('/api/entitlements/cloud/disable', { method: 'POST' });
-```
-
-替换为:
+在 `apps/web/src/lib/api.ts` 的 `disableCloud` 定义**之后**追加(不要删 enableCloud/disableCloud —— 旧按钮还在用,删了会编译失败;它们在 Task 7 连同旧按钮一起删):
 
 ```typescript
 export const enableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
@@ -216,14 +206,31 @@ export const disableFeature = (feature: string): Promise<EntitlementChangeRespon
   json(`/api/entitlements/${encodeURIComponent(feature)}/disable`, { method: 'POST' });
 ```
 
-(其余 cloudList / cloudDownloadUrl / cloudUpload 保持不变。)
+(其余 enableCloud / disableCloud / cloudList / cloudDownloadUrl / cloudUpload 全部保持不变。)
 
-- [ ] **Step 3: 类型检查(此时 Buy/DisableCloudButton 仍引用旧名,预期报错——可接受,Task 4/7 修复)**
+- [ ] **Step 3: 类型检查(应干净 —— 只是新增,无删除)**
 
 Run: `pnpm --filter @lingxi/web lint`
-Expected: 仅 `BuyCloudButton.tsx` / `DisableCloudButton.tsx` 报 `enableCloud`/`disableCloud` 未导出。**不要**为此回退;它们将在 Task 7 删除,在 Task 4 由新组件取代。先不 commit,继续 Task 3。
+Expected: 无错误。
 
-> 说明:本任务不单独 commit,与 Task 3、Task 4 同批推进以保持仓库可编译。若用 subagent 逐任务执行,在 Task 4 结束时一并 commit(见 Task 4 Step 8)。
+- [ ] **Step 4: 跑全 web 测试(回归,确认新增不破坏现有)**
+
+Run: `pnpm --filter @lingxi/web test`
+Expected: 全绿(含现有 BuyCloudButton/DisableCloudButton 测试)。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/web/src/lib/api.ts
+git commit -m "$(cat <<'EOF'
+feat(web): api 新增通用 enableFeature/disableFeature
+
+打 /api/entitlements/:feature/(enable|disable)。enableCloud/disableCloud 暂留(Task 7 随旧按钮一并删)。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
 
 ---
 
@@ -366,7 +373,26 @@ export const isEquipped = (cap: Capability, observed: string[]): boolean =>
 Run: `pnpm --filter @lingxi/web exec vitest run test/capabilities.test.tsx`
 Expected: PASS(5 个用例)。
 
-- [ ] **Step 5: (不单独 commit,见 Task 4 Step 8)**
+- [ ] **Step 5: 类型检查 + 删除多余的 accentIcon**
+
+确认 `apps/web/src/lib/capabilities.tsx` 中**没有**未使用的 `accentIcon` 常量(Step 3 提醒)。然后:
+
+Run: `pnpm --filter @lingxi/web lint`
+Expected: 无错误(catalog 是纯新增,未被引用也不报错)。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/web/src/lib/capabilities.tsx apps/web/test/capabilities.test.tsx
+git commit -m "$(cat <<'EOF'
+feat(web): 能力目录 capabilities.tsx 单一数据源
+
+web/file/wechat 默认基线(不可移除/不进市场) + cloud 可装备(desktopApp=files)。导出 MARKET_CAPABILITIES/getCapability/isEquipped。email 留给子项 B 追加。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
 
 ---
 
@@ -721,26 +747,19 @@ Expected: PASS(CapabilityEquip 4 + CapabilityRemove 1)。
 Run: `pnpm --filter @lingxi/web exec vitest run test/capabilities.test.tsx`
 Expected: PASS。
 
-- [ ] **Step 6: 类型检查(此时 ManageApp 仍引用旧按钮 + 旧 api,预期仍有报错)**
+- [ ] **Step 6: 类型检查(应干净 —— 旧按钮+旧 api 都还在,新组件用已存在的 enableFeature)**
 
 Run: `pnpm --filter @lingxi/web lint`
-Expected: 仅 `ManageApp.tsx` / `BuyCloudButton.tsx` / `DisableCloudButton.tsx` 相关报错(它们 Task 7 处理)。capabilities.tsx / CapabilityAction.tsx 自身**无**报错。
+Expected: 无错误。CapabilityAction 是纯新增,暂未被 ManageApp 引用也不报错。
 
-- [ ] **Step 7: 删除多余的 accentIcon(若实现时误加)**
-
-确认 `apps/web/src/lib/capabilities.tsx` 中**没有**未使用的 `accentIcon` 常量(Task 3 Step 3 提醒)。
-
-- [ ] **Step 8: Commit(Task 2 + 3 + 4 一并提交,仓库到此前不可单独编译,故合并提交前端基建)**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/lib/api.ts apps/web/src/lib/capabilities.tsx apps/web/src/apps/manage/CapabilityAction.tsx apps/web/test/capabilities.test.tsx apps/web/test/CapabilityAction.test.tsx
+git add apps/web/src/apps/manage/CapabilityAction.tsx apps/web/test/CapabilityAction.test.tsx
 git commit -m "$(cat <<'EOF'
-feat(web): 能力目录 catalog + 通用装备/移除组件 + api 通用化
+feat(web): 通用 CapabilityEquip/CapabilityRemove 组件
 
-新增 lib/capabilities.tsx 单一数据源(web/file/wechat 默认 + cloud 可装备)。
-新增 CapabilityEquip/CapabilityRemove 取代 Buy/DisableCloudButton 的状态机, 参数化到任意能力。
-api enableCloud/disableCloud → enableFeature/disableFeature。
-注: ManageApp 尚未切换, 全量编译在 Task 7 后恢复。
+把 Buy/DisableCloudButton 的 desired/observed 轮询状态机抽成参数化组件, 文案/feature 来自 catalog, 可用于任意能力。共用 Modal 外壳。ManageApp 切换在 Task 7。
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -1144,6 +1163,20 @@ git rm apps/web/src/apps/manage/BuyCloudButton.tsx \
        apps/web/test/DisableCloudButton.test.tsx
 ```
 
+- [ ] **Step 4b: 删除 api.ts 里已无人引用的 enableCloud/disableCloud**
+
+从 `apps/web/src/lib/api.ts` 删除这两个函数(旧按钮已删,现在无引用;通用 enableFeature/disableFeature 取而代之):
+
+```typescript
+export const enableCloud = (): Promise<EntitlementChangeResponse> =>
+  json('/api/entitlements/cloud/enable', { method: 'POST' });
+
+export const disableCloud = (): Promise<EntitlementChangeResponse> =>
+  json('/api/entitlements/cloud/disable', { method: 'POST' });
+```
+
+删后用 `grep -rn "enableCloud\|disableCloud" apps/web/src` 确认仓库无残留引用(应无输出)。
+
 - [ ] **Step 5: 跑 ManageApp 测试看通过**
 
 Run: `pnpm --filter @lingxi/web exec vitest run test/ManageApp.test.tsx`
@@ -1157,7 +1190,7 @@ Expected: 无错误(旧按钮已删,ManageApp 改用新组件 + 新 api)。
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/apps/manage/ManageApp.tsx apps/web/test/ManageApp.test.tsx
+git add apps/web/src/apps/manage/ManageApp.tsx apps/web/test/ManageApp.test.tsx apps/web/src/lib/api.ts
 git commit -m "$(cat <<'EOF'
 feat(web): ManageApp 重写为装备/市场两 tab, 删云盘专属按钮
 
@@ -1211,8 +1244,5 @@ Expected: 均无错误。
 - **Spec 覆盖**:装备/市场两 tab(Task 7)、数据驱动 catalog(Task 3)、通用装备/移除(Task 4)、云盘收编(Task 4+7)、路由 `:feature`+白名单(Task 1)、Dock/Desktop catalog 驱动(Task 5/6)、只放已实现能力无灰卡无专家(catalog 仅含 web/file/wechat/cloud)。spec §一~§七 均有对应任务。
 - **email 边界**:本计划**不含** email 条目与白名单 `email`(spec B 负责),Task 1 白名单注释 + Task 7 测试已显式断言 A 阶段 email 仍 404,防止提前泄漏半成品。
 - **类型一致**:`enableFeature`/`disableFeature`(api)、`CapabilityEquip`/`CapabilityRemove`(组件)、`CAPABILITIES`/`MARKET_CAPABILITIES`/`getCapability`/`isEquipped`(catalog)、`Capability`/`CapabilityCopy`(类型)全程一致;`desktopApp` 在 catalog/Dock/Desktop 三处用法一致。
-- **编译连续性**:Task 2 起仓库短暂不可整体编译(ManageApp 仍引用旧符号),到 Task 4 Step 8 合并提交前端基建、Task 7 完成切换后恢复;每个 commit 节点本身可编译可测试(Task 1 独立绿;Task 4 提交时 capabilities/CapabilityAction 自测绿且不破坏已存在的旧按钮测试——旧按钮+旧 api 已删?**否**:Task 4 时旧按钮仍在并仍引用已删的 enableCloud → 旧按钮测试会红)。**执行要点见下方"提交顺序补充"。**
-
-### 提交顺序补充(重要)
-
-旧 `BuyCloudButton`/`DisableCloudButton` 在 Task 2 删除 `enableCloud`/`disableCloud` 后即无法编译,其测试会红。为保证"每次 commit 绿":**Task 4 Step 8 的提交应同时包含 Task 7 Step 4 的删除操作**,即把"删旧按钮+旧测试"提到与前端基建同一个 commit。执行者请按此调整:在 Task 4 Step 8 前先执行 Task 7 Step 4 的 `git rm`,使该 commit 一次性达成可编译可测试状态。Task 7 其余步骤(ManageApp 重写 + 新测试)随后单独提交。
+- **每个 commit 都绿(关键设计)**:api 改动是**纯新增**(Task 2 加 enableFeature/disableFeature,保留旧 enableCloud/disableCloud),所以 Task 2–6 期间旧按钮仍可编译可测试;直到 Task 7 才一次性"重写 ManageApp + 删旧按钮及其测试 + 删旧 api 函数",此时无任何残留引用。故每个 Task 的 commit 节点都能通过 `lint` 与 `test`,适合 subagent 逐任务独立执行与审查。
+- **执行顺序**:Task 1(后端,独立)→ 2(api 新增)→ 3(catalog)→ 4(组件)→ 5(Dock)→ 6(Desktop)→ 7(ManageApp 切换 + 清理旧物)→ 8(回归)。严格按序。
