@@ -101,6 +101,13 @@ export const enableCloud = (): Promise<EntitlementChangeResponse> =>
 export const disableCloud = (): Promise<EntitlementChangeResponse> =>
   json('/api/entitlements/cloud/disable', { method: 'POST' });
 
+// 通用能力开关（供后续通用组件使用，Task 7 删旧按钮后 enableCloud/disableCloud 可一并清理）
+export const enableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
+  json(`/api/entitlements/${encodeURIComponent(feature)}/enable`, { method: 'POST' });
+
+export const disableFeature = (feature: string): Promise<EntitlementChangeResponse> =>
+  json(`/api/entitlements/${encodeURIComponent(feature)}/disable`, { method: 'POST' });
+
 export const cloudList = (prefix = ''): Promise<CloudListResponse> => {
   const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
   return json(`/api/cloud/list${q}`);
