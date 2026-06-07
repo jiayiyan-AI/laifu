@@ -38,11 +38,13 @@ describe('ManageApp', () => {
     expect(screen.getByText(/已装备能力 · 3/)).toBeInTheDocument();
   });
 
-  it('切到市场 tab,云盘显示"购买并装备"', async () => {
+  it('切到市场 tab,云盘 + 邮件显示"购买并装备"', async () => {
     renderApp();
     await waitFor(() => expect(screen.getByText('联网搜索')).toBeInTheDocument());
     fireEvent.click(screen.getByText('市场'));
-    await waitFor(() => expect(screen.getByText(/购买并装备/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/购买并装备/).length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText('云盘')).toBeInTheDocument();
+    expect(screen.getByText('邮件')).toBeInTheDocument();
   });
 
   it('observed 含 cloud:装备 tab 计 4 且有云盘卡', async () => {
@@ -56,6 +58,6 @@ describe('ManageApp', () => {
     renderApp();
     await waitFor(() => expect(screen.getByText('联网搜索')).toBeInTheDocument());
     fireEvent.click(screen.getByText(/添加能力/));
-    await waitFor(() => expect(screen.getByText(/购买并装备/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/购买并装备/).length).toBeGreaterThan(0));
   });
 });

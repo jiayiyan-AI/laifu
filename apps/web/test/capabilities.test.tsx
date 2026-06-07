@@ -20,8 +20,15 @@ describe('capabilities catalog', () => {
     expect(c.desktopApp).toBe('files');
   });
 
-  it('MARKET_CAPABILITIES 只含 inMarket 的能力(本期 = cloud)', () => {
-    expect(MARKET_CAPABILITIES.map((c) => c.id)).toEqual(['cloud']);
+  it('email 可移除、进市场、无桌面 app', () => {
+    const c = getCapability('email')!;
+    expect(c.removable).toBe(true);
+    expect(c.inMarket).toBe(true);
+    expect(c.desktopApp).toBeUndefined();
+  });
+
+  it('MARKET_CAPABILITIES 只含 inMarket 的能力(本期 = cloud + email)', () => {
+    expect(MARKET_CAPABILITIES.map((c) => c.id)).toEqual(['cloud', 'email']);
   });
 
   it('isEquipped: 默认能力恒真;可装备能力看 observed', () => {
