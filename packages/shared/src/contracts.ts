@@ -232,3 +232,64 @@ export interface CloudUploadResponse {
   size: number;               // bytes written
   last_modified: string;      // ISO-8601
 }
+
+// === 邮件能力 (B1) ===
+
+/** provider 把入站邮件解析成的中立结构 */
+export interface ParsedInboundEmail {
+  to_localpart: string;        // 收件人 @ 前那段, 路由键
+  from_addr: string;
+  to_addrs: string[];
+  cc_addrs: string[];
+  subject: string;
+  message_id: string | null;
+  in_reply_to: string | null;
+  reference_ids: string[];
+  body_text: string;           // 去引用后的纯文本
+  has_attachments: boolean;
+}
+
+export type EmailDirection = 'inbound' | 'outbound';
+
+/** 列表项 (不含正文, 列表轻量) */
+export interface EmailListItem {
+  id: string;
+  direction: EmailDirection;
+  from_addr: string;
+  to_addrs: string[];
+  subject: string;
+  has_attachments: boolean;
+  received_at: string;
+}
+
+export interface EmailListResponse {
+  emails: EmailListItem[];
+}
+
+/** 单封详情 (含正文 + 线程头) */
+export interface EmailDetail extends EmailListItem {
+  cc_addrs: string[];
+  message_id: string | null;
+  in_reply_to: string | null;
+  reference_ids: string[];
+  body_text: string;
+}
+
+export interface EmailDetailResponse {
+  email: EmailDetail;
+}
+
+/** 容器 CLI 发信请求 */
+export interface EmailSendRequest {
+  to: string[];
+  cc?: string[];
+  subject: string;
+  body_text: string;
+  in_reply_to_id?: string;     // 给定则按该邮件接线程 + 收件人默认=原发件人
+}
+
+export interface EmailSendResponse {
+  ok: true;
+  id: string;                  // 落库的 outbound 邮件 id
+  message_id: string;          // provider 返回的 Message-ID
+}
