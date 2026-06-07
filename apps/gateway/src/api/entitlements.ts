@@ -16,6 +16,8 @@ export interface EntitlementsRouterDeps {
    * to the container's env / secret store so the next start picks it up.
    */
   signTokenAndInject: (userId: string, tokenVersion: number) => Promise<void>;
+  /** enable 成功后的可选副作用钩子(如 email 自动分配 handle)。失败不阻断装备。 */
+  onEnable?: (userId: string, feature: string) => Promise<void>;
   sessionMw: RequestHandler;
 }
 
@@ -46,6 +48,13 @@ export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterTyp
         tokenVersion = current ?? 0;
       }
       await deps.signTokenAndInject(userId, tokenVersion);
+      if (kind === 'enable' && deps.onEnable) {
+        try {
+          await deps.onEnable(userId, feature);
+        } catch (err) {
+          console.error(`[entitlements] onEnable hook failed for ${userId}/${feature}:`, err);
+        }
+      }
       // Fire-and-forget restart 让 API 快速返回;前端轮询 /api/status 知道容器何时回来。
       deps.restartContainer(userId).catch((err) => {
         console.error(`[entitlements] restart failed for ${userId}:`, err);

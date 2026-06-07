@@ -19,6 +19,7 @@ function makeApp(deps: {
   restartContainer: ReturnType<typeof vi.fn>;
   signTokenAndInject: ReturnType<typeof vi.fn>;
   getTokenVersion?: ReturnType<typeof vi.fn>;
+  onEnable?: ReturnType<typeof vi.fn>;
 }) {
   const app = express();
   app.use(express.json());
@@ -31,6 +32,7 @@ function makeApp(deps: {
     } as any,
     restartContainer: deps.restartContainer,
     signTokenAndInject: deps.signTokenAndInject,
+    onEnable: deps.onEnable,
     sessionMw: mockSession(),
   }));
   return app;
@@ -127,5 +129,52 @@ describe('feature allowlist', () => {
     const res = await request(app).post('/api/entitlements/email/enable');
     expect(res.status).toBe(200);
     expect(enable).toHaveBeenCalledWith(USER_ID, 'email');
+  });
+});
+
+describe('onEnable hook', () => {
+  it('enable 成功后调用 onEnable(userId, feature)', async () => {
+    const onEnable = vi.fn().mockResolvedValue(undefined);
+    const app = makeApp({
+      enable: vi.fn().mockResolvedValue({ changed: true }),
+      disable: vi.fn(),
+      listActive: vi.fn().mockResolvedValue(['email']),
+      bumpTokenVersion: vi.fn().mockResolvedValue(1),
+      restartContainer: vi.fn().mockResolvedValue(undefined),
+      signTokenAndInject: vi.fn().mockResolvedValue(undefined),
+      onEnable,
+    });
+    const res = await request(app).post('/api/entitlements/email/enable');
+    expect(res.status).toBe(200);
+    expect(onEnable).toHaveBeenCalledWith(USER_ID, 'email');
+  });
+
+  it('disable 不调用 onEnable', async () => {
+    const onEnable = vi.fn();
+    const app = makeApp({
+      enable: vi.fn(), disable: vi.fn().mockResolvedValue({ changed: true }),
+      listActive: vi.fn().mockResolvedValue([]),
+      bumpTokenVersion: vi.fn().mockResolvedValue(2),
+      restartContainer: vi.fn().mockResolvedValue(undefined),
+      signTokenAndInject: vi.fn().mockResolvedValue(undefined),
+      onEnable,
+    });
+    await request(app).post('/api/entitlements/cloud/disable');
+    expect(onEnable).not.toHaveBeenCalled();
+  });
+
+  it('onEnable 抛错不影响 200(钩子失败仅记日志)', async () => {
+    const onEnable = vi.fn().mockRejectedValue(new Error('boom'));
+    const app = makeApp({
+      enable: vi.fn().mockResolvedValue({ changed: true }),
+      disable: vi.fn(),
+      listActive: vi.fn().mockResolvedValue(['email']),
+      bumpTokenVersion: vi.fn().mockResolvedValue(1),
+      restartContainer: vi.fn().mockResolvedValue(undefined),
+      signTokenAndInject: vi.fn().mockResolvedValue(undefined),
+      onEnable,
+    });
+    const res = await request(app).post('/api/entitlements/email/enable');
+    expect(res.status).toBe(200);
   });
 });
