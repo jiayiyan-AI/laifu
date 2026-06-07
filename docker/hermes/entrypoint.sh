@@ -183,6 +183,11 @@ for feature in $DESIRED; do
   fi
 done
 
+# skill 软链刚变过(装/卸能力), 作废 Hermes 缓存的 skill 索引快照, 强制下次重扫。
+# 否则 agent 会读持久卷里的旧快照, 看不到新装的 skill(如 email)。
+find "$HOME_DIR/.hermes" -name '.skills_prompt_snapshot.json' -delete 2>/dev/null || true
+echo "[entrypoint] invalidated skills prompt snapshot (force rescan)"
+
 # ============ Step 7: 上报 observed ============
 # Build JSON array of observed features for the request body
 OBSERVED_JSON=$(echo "$OBSERVED_LIST" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s . || echo "[]")
