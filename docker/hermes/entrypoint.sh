@@ -158,24 +158,25 @@ echo "[entrypoint] desired entitlements: $(echo "$DESIRED" | tr '\n' ' ')"
 
 mkdir -p "$SKILLS_DIR"
 
-# 先清掉已有的可能的 stale symlinks (避免 disable 后没清干净)
+# 清掉所有我们 (laifu) 之前建的 skill 软链, 下面按当前 desired 重建。
+# 识别方式: 软链 target 指向 $SKILLS_SOURCE (即 /opt/hermes-skills) 的就是我们建的。
+# 这样 disable 的会自然消失, 也顺带迁移旧的无前缀命名; 绝不碰 Hermes 自带 skill 目录/软链。
 for link in "$SKILLS_DIR"/*; do
   [ -L "$link" ] || continue
-  link_name=$(basename "$link")
-  if ! echo "$DESIRED" | grep -qx "$link_name"; then
-    echo "[entrypoint] removing stale skill: $link_name"
-    rm -f "$link"
-  fi
+  case "$(readlink "$link")" in
+    "$SKILLS_SOURCE"/*) echo "[entrypoint] removing previous skill link: $(basename "$link")"; rm -f "$link" ;;
+  esac
 done
 
-# 软链 desired 的 skill
+# 软链 desired 的 skill。统一加 laifu- 前缀: Hermes 自带同名 skill (如 email/github) 时,
+# 不加前缀会让 ln 把软链塞进对方真实目录 (email/email), 我们的 SKILL.md 被埋、agent 看不到。
 OBSERVED_LIST=""
 for feature in $DESIRED; do
   TARGET="$SKILLS_SOURCE/$feature"
-  LINK="$SKILLS_DIR/$feature"
+  LINK="$SKILLS_DIR/laifu-$feature"
   if [ -d "$TARGET" ]; then
     ln -snf "$TARGET" "$LINK"
-    echo "[entrypoint] linked skill: $feature"
+    echo "[entrypoint] linked skill: laifu-$feature -> $TARGET"
     OBSERVED_LIST="$OBSERVED_LIST $feature"
   else
     echo "[entrypoint] WARN: skill $feature requested but not installed in image" >&2
