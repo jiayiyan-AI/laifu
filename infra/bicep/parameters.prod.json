@@ -7,6 +7,8 @@
     "location": { "value": "southeastasia" },
     "appServiceSku": { "value": "B1" },
     "hermesImageTag": { "value": "hermes:latest" },
-    "hermesModel": { "value": "qwen-plus" }
+    "hermesProvider": { "value": "custom" },
+    "hermesModel": { "value": "qwen3-coder-plus" },
+    "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" }
   }
 }

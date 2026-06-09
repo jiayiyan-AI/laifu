@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import * as api from '../../lib/api.js';
-import { useEntitlements } from '../../lib/entitlements-context.js';
+import { entitlementsAtom } from '../../states/entitlements.atom.js';
 import type { Capability } from '../../lib/capabilities.js';
 
 const POLL_INTERVAL_MS = 2000;
@@ -20,7 +20,7 @@ const Modal = ({ children }: { children: ReactNode }) => (
 type EquipPhase = 'idle' | 'confirm' | 'posting' | 'polling' | 'ready' | 'failed' | 'timeout';
 
 export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: () => void }) => {
-  const ent = useEntitlements();
+  const [ent, { refetch }] = entitlementsAtom.use();
   const [phase, setPhase] = useState<EquipPhase>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const timeoutRef = useRef<number | null>(null);
@@ -48,9 +48,9 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
     try {
       await api.enableFeature(cap.id);
       setPhase('polling');
-      intervalRef.current = window.setInterval(() => { void ent.refetch(); }, POLL_INTERVAL_MS);
+      intervalRef.current = window.setInterval(() => { void refetch(); }, POLL_INTERVAL_MS);
       timeoutRef.current = window.setTimeout(() => { cleanup(); setPhase('timeout'); }, POLL_TIMEOUT_MS);
-      void ent.refetch();
+      void refetch();
     } catch (err) {
       setPhase('failed');
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -127,7 +127,7 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
 type RemovePhase = 'idle' | 'confirm' | 'posting' | 'polling' | 'done' | 'failed' | 'timeout';
 
 export const CapabilityRemove = ({ cap, trigger }: { cap: Capability; trigger: (open: () => void) => ReactNode }) => {
-  const ent = useEntitlements();
+  const [ent, { refetch }] = entitlementsAtom.use();
   const [phase, setPhase] = useState<RemovePhase>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const timeoutRef = useRef<number | null>(null);
@@ -155,9 +155,9 @@ export const CapabilityRemove = ({ cap, trigger }: { cap: Capability; trigger: (
     try {
       await api.disableFeature(cap.id);
       setPhase('polling');
-      intervalRef.current = window.setInterval(() => { void ent.refetch(); }, POLL_INTERVAL_MS);
+      intervalRef.current = window.setInterval(() => { void refetch(); }, POLL_INTERVAL_MS);
       timeoutRef.current = window.setTimeout(() => { cleanup(); setPhase('timeout'); }, POLL_TIMEOUT_MS);
-      void ent.refetch();
+      void refetch();
     } catch (err) {
       setPhase('failed');
       setErrorMsg(err instanceof Error ? err.message : String(err));

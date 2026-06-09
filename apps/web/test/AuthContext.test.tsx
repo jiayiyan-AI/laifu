@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { AuthProvider, useAuth } from '../src/auth/AuthContext.js';
+import { WithStore } from '../src/atom/index.js';
+import { authAtom } from '../src/states/auth.atom.js';
 
 const Probe = () => {
-  const auth = useAuth();
-  if (auth.status === 'loading') return <div>loading</div>;
-  if (auth.status === 'unauthenticated') return <div>unauthed</div>;
-  return <div>{auth.user.user_id}</div>;
+  const [state] = authAtom.use();
+  if (state.status === 'loading') return <div>loading</div>;
+  if (state.status === 'unauthenticated') return <div>unauthed</div>;
+  return <div>{state.user.user_id}</div>;
 };
 
-describe('AuthContext', () => {
+describe('auth atom', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
   it('starts loading, then unauthenticated when /me returns 401', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 401 }));
-    render(<AuthProvider><Probe /></AuthProvider>);
-    expect(screen.getByText('loading')).toBeInTheDocument();
+    render(<WithStore><Probe /></WithStore>);
     await waitFor(() => expect(screen.getByText('unauthed')).toBeInTheDocument());
   });
 
@@ -28,7 +28,7 @@ describe('AuthContext', () => {
         email: 'a@b.com', nickname: null, avatar_url: null,
       })),
     );
-    render(<AuthProvider><Probe /></AuthProvider>);
+    render(<WithStore><Probe /></WithStore>);
     await waitFor(() => expect(screen.getByText('u1')).toBeInTheDocument());
   });
 });

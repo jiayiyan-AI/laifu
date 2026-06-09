@@ -28,10 +28,13 @@ export interface LocalProvisionArgs {
   cache: ContainerMappingCache;
   localContainerUrl: string;
   stepDelayMs?: number;
+  /** 跟 manager.ts 同名 hook 语义一致: mark ready 前签 LAIFU_USER_TOKEN + restart hermes
+   *  容器。不传则跳。 */
+  signTokenAndRestart?: (userId: string, tokenVersion: number) => Promise<void>;
 }
 
 export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise<void> => {
-  const { userId, sb, cache, localContainerUrl, stepDelayMs = 800 } = args;
+  const { userId, sb, cache, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
   try {
     for (let i = 0; i < STEPS.length - 1; i++) {
       const s = STEPS[i]!;
@@ -46,6 +49,20 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
     }
 
     const ready = STEPS[5]!;
+
+    // mark ready 前签 LAIFU_USER_TOKEN 到 volume + restart hermes 容器, 让 entrypoint
+    // 拉 /api/me/runtime-config 渲染 config.yaml。以前只在 entitlement enable/disable 才签,
+    // 导致普通 purchase 后 hermes 报 "No inference provider configured"。
+    if (signTokenAndRestart) {
+      const { data: u } = await sb.from('users').select('token_version').eq('id', userId).single();
+      const tokenVersion = (u as { token_version: number } | null)?.token_version ?? 0;
+      try {
+        await signTokenAndRestart(userId, tokenVersion);
+      } catch (err) {
+        console.warn(`[local-provisioning] signTokenAndRestart failed for ${userId}:`, err);
+      }
+    }
+
     await sb.from('container_mapping')
       .update({
         status: 'ready',

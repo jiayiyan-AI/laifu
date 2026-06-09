@@ -22,13 +22,44 @@
 
 ### #2 ACA Ingress 4 分钟超时
 
-- **现象**：单个 HTTP 请求超过 240s 会被 ACA Ingress 强切。
-- **当前架构**：Gateway → Container 用同步 `POST /chat` 调用 (`apps/gateway/src/api/chat.ts:45`),理论上仍受这个上限制约。
-- **为什么暂时没事**：当前 LLM 是 DashScope qwen-plus, 普通对话回复都在秒级,远低于 240s。
-- **何时会爆**:
-  - hermes 跑复杂 shell 工具链 (`npm install -g`、长时间 build)
-  - 切换到更慢的模型或在响应里嵌入大量工具调用
-- **应对预案**:真要碰到再切异步 (gateway 立刻返回 ack, container 跑完通过 SSE 或 webhook 回推)。改动面不小, 当前不做。
+- **现象**：单个 HTTP 请求超过 240s 会被 ACA Ingress 强切, 返回 504。
+- **本质**：Consumption-only 环境的 ingress idle timeout **固定 240s 且不可配** (envoy 写死)。"idle" 指的是这条 TCP 连接 4 分钟内没有任何字节流动 — **不是绝对耗时**, 这是后续绕开方案的关键。
+- **当前架构**：Gateway → Container 用同步 `POST /chat` 调用 (`apps/gateway/src/lib/aca-call.ts`), 受这个上限制约。
+- **实测**：2026-06-05 wechat 链路一次 240015ms (≈240s 整) → `http_504`, 来源是平台返回不是 hermes。同一链路下一条 chat 38s 成功。指标埋在 `event=aca.chat.call`, KQL 见 `docs/observability.md`。
+
+#### 绕开方案 (按性价比排序)
+
+##### 方案 1：gateway↔ACA 这段改流式 / 心跳保活 (推荐, 0 成本)
+
+利用 "idle timeout 只看字节流动" 的特性, 保证 `gateway → ACA /chat` 这段连接每 < 240s 内必有字节流动, ingress 就不会砍。
+
+改动只在 **`docker/hermes/server.py` + `apps/gateway/src/lib/aca-call.ts`**, 对外接口 (`POST /api/chat` / 微信 inbound) 形状不变, 前端 / 微信侧零改动。
+
+落地清单：
+
+- server.py `/chat` 改 SSE 输出：`Content-Type: text/event-stream`, 立即 flush headers
+- 另起 heartbeat 线程, 每 30s 写一帧 `: heartbeat\n\n` (SSE 注释帧, 不算 data)
+- hermes 跑完后写 `data: {"done":true,"reply":"..."}\n\n`
+- 待验证：Hermes CLI `-Q -q` 模式 stdout 是不是增量打印 token。如果是, 顺手把每段 token 作为 `data: {"delta":"..."}` 推出去, 给将来做前端流式打字效果留接口
+- gateway `aca-call.ts` 不再 `await resp.json()`, 改读 `resp.body.getReader()` + SSE 解析, 收到 `done` 帧才 resolve, 对外仍返回 `{ ok, reply }` 不变
+- gateway `fetch` AbortSignal timeout 设大 (如 30 分钟)
+- 微信入站 `apps/gateway/src/wechat-ilink/poll-loop.ts` 的 timeout 同步调高
+- hermes 自身 `HERMES_TIMEOUT=300s` (`server.py:38`) 同步调高, 否则它就是新的天花板
+
+效果：240s → 实际可达数十分钟到小时级。
+
+##### 方案 2：切异步 Job 队列 (架构变更, 见 `architecture.md` 方案 B)
+
+gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通过 SSE / 微信 sendText 推给用户。彻底无超时, 但改动面大 (DB 队列表 / worker / 回调端点 / 前端等待 UI)。真长任务才值得做。
+
+##### 方案 3：升级 ACA Premium Ingress
+
+`requestIdleTimeout` 可调到 30 分钟。但 CAE 必须切 workload profile 模式, 至少 2 节点 (D4 起) 24/7 常驻 → **+$280-350/月**。当前 dev 盘子 ~$50/月, **跳过**。
+
+#### 不要做的
+
+- 在 `aca-call.ts` 里调 `/chat` 前先打 `/health` probe 预热 — 让所有请求多一次 RTT, 得不偿失。之前试过又回滚, 冷启动判断改成 join `ContainerAppSystemLogs_CL` 的 scaler 事件, 见 `docs/observability.md`。
+
 
 ---
 
@@ -127,6 +158,66 @@
   ```
 - **后人警告**: 任何"在 ACA 容器内提权"的方案 (sudo / setuid 二进制 / 改文件 mode 0777 然后 chown) 都因为 `no_new_privs` 失效。**唯一通用解就是 initContainer 用 root image**, 别再试别的方向。
 
+
+---
+
+### #11 微信 `/new` 指令不会真正切换 session — server.py session map 不更新
+
+- **现象**：微信用户发 `/new`，Hermes CLI 内部新建了 session 并回复「已新建会话」，但后续消息仍然 `--resume` 旧 session。导致 model 不更新、上下文不重置。
+- **根因**：涉及三层问题：
+  1. **Gateway 层**：微信 binding 绑定 1 个 thread_id 后永不更新（`resolveThread` 中 `if (binding.thread_id) return`），所以 session_name = `wechat:<threadId>` 永远不变。
+  2. **server.py 层**：`call_hermes` 中只有 `not existing` 时才走 detect + put 更新 `_gateway_session_map.json`（第 296-299 行）。当 existing 有值时，即使 Hermes 内部切了 session，map 也不会更新。
+  3. **结果**：后续请求还是 `--resume <旧hermes_uuid>` → 旧 session → 旧 model。
+- **影响**：微信用户无法通过 `/new` 切换到新模型配置；usage_events 中 model 字段停留在旧值。
+- **临时绕过**：手动清掉 binding 的 thread_id：`UPDATE wechat_bindings SET thread_id = NULL WHERE user_id = '...'`，下次发消息会新建 thread → 新 session。
+- **修复方向**：
+  - 方案 A：server.py 在 `existing` 有值时也检测 Hermes stdout 中的 session 切换信号，更新 map。
+  - 方案 B：Gateway 层识别 `/new` 指令，主动新建 thread + 清 binding 的 thread_id，让 session_name 变化。
+  - 方案 C：两层都改 — Gateway 感知指令 + server.py 容错检测。
+
+---
+
+## 🧹 周期性手动维护清单
+
+Azure 这套资源里, 大多数老资源会自动 GC, 但有几样**只有手动才会消失**, 不维护就累积。
+
+### M1 ACR 老镜像 tag — 手动删
+
+ACR Basic SKU 没有 retention policy, 每次 `build-and-push.sh` 推新 tag 老 tag 原地不动。
+
+**何时清**: tag 数 > 5, 或接近 ACR 10 GB 存储上限 (`az acr show-usage -n acrlingxidev`)。
+**保留**: 永远留 active 那一版 + 至少 1 个回滚保险版。
+
+```bash
+# 看现状
+az acr manifest list-metadata -r acrlingxidev -n hermes \
+  --query "[].{tags:tags, digest:digest, created:createdTime}" -o table
+
+# 删指定 tag
+az acr repository delete -n acrlingxidev --image hermes:v3 --yes
+```
+
+### M2 存量用户 ACA env / image 升级 — 手动批量推
+
+改了 `apps/gateway/src/provisioning/azure.ts` 里给 ACA 注入的 env / image / secret 后, **存量用户不会自动跟着切**, 只有新注册用户用新模板。`ContainerMappingCache` 也是进程内 Map 无 TTL (CLAUDE.md 提到)。
+
+**何时做**: 每次切 LLM provider / 升级 hermes 镜像 / 加新 env。
+**怎么做**: 遍历 supabase `container_mapping` 表 → 对每个 ACA `az containerapp update --image ... --replace-env-vars ...`。当前用户少 (1 个) 手动改, 多了写脚本。
+
+### M3 NFS share quota — 按需扩容
+
+`hermes-shared` (Premium FileStorage) 当前 100 GB quota, 按 quota 计费 (~$16/月) 不按使用量, **超 quota 写入会失败**。
+
+**何时扩**: 用户数增长导致总占用接近 quota 时。
+**怎么扩**: `az storage share update --name hermes-shared --account-name stnfslingxidev --quota <new GB>` (秒级生效, 不重启)。
+**注意**: 实际使用量 Premium FileStorage 不暴露在 mgmt API, 要登容器 `df -h /home/hermes` 查。
+
+### M4 自动 GC 的, 不用管
+
+- **KV 软删 secret**: 7 天后自动 purge
+- **ACA revisions**: 默认最多 100 个, 到上限自动清最老
+- **App Service Kudu deployments**: 自动滚动覆盖
+- **Log Analytics**: retention 30 天自动删
 
 ---
 

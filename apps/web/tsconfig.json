@@ -8,6 +8,7 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
+    "declaration": false,
     "noEmit": true,
     "jsx": "react-jsx",
     "skipLibCheck": true,

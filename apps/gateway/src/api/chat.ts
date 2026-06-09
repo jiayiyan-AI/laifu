@@ -2,12 +2,14 @@ import { Router, type Request, type Response, type Router as RouterType, type Re
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
 import type { ThreadStreamHub } from '../lib/thread-stream.js';
+import type { UsageDao } from '../db/usage-dao.js';
 import type {
-  ContainerChatResponse,
   ContainerHistoryResponse,
   WebChatResponse,
   WebThreadMessagesResponse,
 } from '@lingxi/shared';
+import { callHermesChat } from '../lib/aca-call.js';
+import { log } from '../lib/logger.js';
 
 const SSE_HEARTBEAT_MS = 30_000;
 
@@ -16,6 +18,7 @@ export const buildChatRouter = (
   cache: ContainerMappingCache,
   sessionMw: RequestHandler,
   hub?: ThreadStreamHub,             // 可选: 没传就不挂 SSE 端点 (测试方便)
+  usageDao?: UsageDao,               // 可选: 没传就跳过计量 (测试方便)
 ): RouterType => {
   const r = Router();
 
@@ -37,28 +40,68 @@ export const buildChatRouter = (
       return res.status(503).json({ error: 'assistant not ready' });
     }
 
-    // 3. 调容器同步 /chat,等结果
+    // 2.5 软配额检查: 本月已用金额超免费额度 且 余额 ≤ 0 → 402
+    //     免费额度 = 0 + balance ≤ 0 (默认新用户) 会直接拦截, 需要先走充值脚本
+    //     数据库空/查询失败 不阻断 chat (免得计量表损坏连带业务挂), 只 log.warn
+    if (usageDao) {
+      try {
+        const b = await usageDao.getBalance(userId);
+        if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
+          return res.status(402).json({
+            error: 'quota exhausted',
+            used_cny_month: b.used_cny_month,
+            free_quota_cny_month: b.free_quota_cny_month,
+            balance_cny: b.balance_cny,
+          });
+        }
+      } catch (err) {
+        log.warn({
+          event: 'usage.balance.check.failed',
+          user_id: userId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 3. 调容器同步 /chat,等结果 (callHermesChat 内部已经打 aca.chat.call 指标)
     //    session_id 用 thread.source 拼前缀 (web:/wechat:),跟入站方 (inbound-handler)
     //    保持一致,否则 web 与 wechat 同 thread 在 hermes 里是两条独立对话。
     const threadSource = (thread as { source: string }).source;
     const sessionId = `${threadSource}:${thread_id}`;
-    const cResp = await fetch(`${mapping.container_url}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId, source: threadSource }),
+    const result = await callHermesChat({
+      containerUrl: mapping.container_url,
+      userId,
+      threadId: thread_id,
+      source: threadSource,
+      sessionId,
+      message,
     });
-    if (!cResp.ok) {
-      return res.status(502).json({ error: `container returned ${cResp.status}` });
+    if (!result.ok || !result.reply) {
+      return res.status(502).json({ error: result.error ?? `container returned ${result.status}` });
     }
-    const cBody = await cResp.json() as ContainerChatResponse;
-    if (typeof cBody.reply !== 'string') {
-      return res.status(502).json({ error: 'container missing reply' });
+
+    // 计量: 不阻断 chat, 失败只 log.warn (用户体验 > 单条计量准确性)
+    // 旧镜像没 usage 字段 → result.usage undefined → 跳过
+    if (usageDao && result.usage) {
+      usageDao.recordUsage({
+        userId,
+        threadId: thread_id,
+        source: threadSource as 'web' | 'wechat',
+        usage: result.usage,
+      }).catch((err) => {
+        log.warn({
+          event: 'usage.record.failed',
+          user_id: userId,
+          thread_id: thread_id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     // 通知其它订阅同 thread 的 SSE 客户端 (例如另一个标签页) 该 thread 有更新
     hub?.emit(thread_id, 'thread-updated', { thread_id });
 
-    const body: WebChatResponse = { reply: cBody.reply };
+    const body: WebChatResponse = { reply: result.reply };
     res.json(body);
   });
 

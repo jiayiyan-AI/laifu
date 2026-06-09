@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Capability } from '../../lib/capabilities.js';
-import { useAuth } from '../../auth/AuthContext.js';
+import { authAtom } from '../../states/auth.atom.js';
 import { IconSpark, IconMessage, IconPlus } from '../../lib/icons.js';
-import { useEntitlements } from '../../lib/entitlements-context.js';
+import { entitlementsAtom } from '../../states/entitlements.atom.js';
 import { getMyWechatBind } from '../../lib/api.js';
 import { CAPABILITIES, MARKET_CAPABILITIES, isEquipped } from '../../lib/capabilities.js';
 import { CapabilityEquip, CapabilityRemove } from './CapabilityAction.js';
@@ -64,9 +64,9 @@ const MarketTab = ({ observed }: { observed: string[] }) => (
 );
 
 export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
-  const auth = useAuth();
-  const nick = auth.status === 'authenticated' ? auth.user.nickname ?? '未命名' : '';
-  const ent = useEntitlements();
+  const [authState] = authAtom.use();
+  const nick = authState.status === 'authenticated' ? authState.user.nickname ?? '未命名' : '';
+  const [ent] = entitlementsAtom.use();
   const [tab, setTab] = useState<Tab>('equip');
 
   // 拉微信绑定状态决定按钮文案 (绑定 / 解绑)。null = 还没拿到 → 不显示文案避免闪烁。

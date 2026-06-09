@@ -3,10 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { LoginPage } from '../src/auth/LoginPage.js';
-import { AuthProvider } from '../src/auth/AuthContext.js';
+import { WithStore } from '../src/atom/index.js';
 
 const wrap = (ui: ReactNode) => (
-  <MemoryRouter><AuthProvider>{ui}</AuthProvider></MemoryRouter>
+  <MemoryRouter><WithStore>{ui}</WithStore></MemoryRouter>
 );
 
 describe('LoginPage', () => {

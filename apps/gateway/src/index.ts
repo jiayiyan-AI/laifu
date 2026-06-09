@@ -12,8 +12,10 @@ import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
 import { buildThreadsRouter } from './api/threads.js';
 import { buildChatRouter } from './api/chat.js';
+import { buildMeUsageRouter } from './api/me-usage.js';
 import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
+import { buildMeRuntimeConfigRouter } from './api/me-runtime-config.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildCloudRouter } from './api/cloud.js';
 import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
@@ -24,6 +26,8 @@ import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { ContainerMappingCache } from './db/cache.js';
 import { makeEntitlementsDao } from './db/entitlements-dao.js';
+import { makeUsageDao } from './db/usage-dao.js';
+import { loadPricing } from './lib/pricing.js';
 import { makeObservedStateDao } from './db/observed-state-dao.js';
 import { config, validateConfig } from './config.js';
 import { getSupabase } from './db/supabase.js';
@@ -44,6 +48,7 @@ import { PollManager } from './wechat-ilink/poll-manager.js';
 import { makeHandleInbound } from './wechat-ilink/inbound-handler.js';
 import { makeWechatBindingDao } from './db/wechat-binding-dao.js';
 import { ThreadStreamHub } from './lib/thread-stream.js';
+import { loadPromptStore } from './lib/prompt-store.js';
 
 export interface CreateAppOptions {
   cache?: ContainerMappingCache;
@@ -83,12 +88,25 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   };
 
   const defaultProvisioner: ProvisionerFn = async (args) => {
+    // signTokenAndRestart: 传给 provisioner 的最后一步 hook, 负责签 LAIFU_USER_TOKEN +
+    // restart 容器让 entrypoint 拉 runtime-config。详见 manager.ts SignTokenAndRestart 注释。
+    const signTokenAndRestart = async (userId: string, tokenVersion: number) => {
+      if (config.provisioner === 'azure') {
+        await azureModule.signTokenAndInjectAzure(userId, tokenVersion);
+        await azureModule.restartContainerAppAzure(userId);
+      } else {
+        await signTokenAndInjectLocal(userId, tokenVersion);
+        await restartContainerAppLocal(userId);
+      }
+    };
+
     if (config.provisioner === 'local') {
       await provisionContainerLocal({
         userId: args.userId,
         sb: getSb(),
         cache: getCache(),
         localContainerUrl: config.localContainerUrl,
+        signTokenAndRestart,
       });
     } else {
       await provisionContainer({
@@ -96,6 +114,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         sb: getSb(),
         cache: getCache(),
         azure: azureModule,
+        signTokenAndRestart,
       });
     }
   };
@@ -116,9 +135,21 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   }
 
   if (sbResolved) {
+    // 加载 pricing 表到内存 cache (不阻塞 app 创建, 但在第一次请求前完成)
+    void loadPricing(sbResolved);
+
     // P1 DAOs (instantiated once per app)
     const entitlementsDao = makeEntitlementsDao(sbResolved);
+    const usageDao = makeUsageDao(sbResolved);
     const observedStateDao = makeObservedStateDao(sbResolved);
+
+    // 动态 prompt 仓库 (启动时扫盘一次, 不做 hot-reload):
+    //   - dev: apps/gateway/prompts/ (源码目录)
+    //   - prod: build-deploy 会把这个目录复制到 deploy 包根, 通过 PROMPTS_DIR env 指向
+    // 路径解析: 先看 PROMPTS_DIR env, 再 fallback 到 cwd/prompts。
+    const promptsDir = process.env['PROMPTS_DIR']
+      ?? path.resolve(process.cwd(), 'prompts');
+    const promptStore = loadPromptStore(promptsDir);
 
     // P1 provisioner-aware helpers (real Azure or local mock)
     const signAndInject = config.provisioner === 'azure'
@@ -147,7 +178,8 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     }));
     app.use(buildPurchaseRouter(sbResolved, getCache(), provisioner, sessionMw));
     app.use(buildThreadsRouter(sbResolved, sessionMw));
-    app.use(buildChatRouter(sbResolved, getCache(), sessionMw, opts.hub));
+    app.use(buildChatRouter(sbResolved, getCache(), sessionMw, opts.hub, usageDao));
+    app.use(buildMeUsageRouter(usageDao, sessionMw));
     // 微信 iLink 扫码绑定路由 — 仅启动时挂 (测试可省 pollMgr 跳过)
     if (opts.pollMgr) {
       app.use(buildWechatBindRouter({
@@ -202,6 +234,12 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       }));
       console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
     }
+
+    app.use(buildMeRuntimeConfigRouter({
+      secret: config.auth.gatewaySecret,
+      entitlements: entitlementsDao,
+      prompts: promptStore,
+    }));
 
     app.use(buildAuthRefreshRouter({
       secret: config.auth.gatewaySecret,
@@ -276,14 +314,18 @@ export const start = async (): Promise<void> => {
   console.log('[gateway] loading cache...');
   await cache.loadAll();
 
+  // 加载 pricing 表到内存 cache
+  await loadPricing(sb);
+
   // SSE 通知 hub 在 PollManager 之前构造 (handleInbound 工厂要它)
   const hub = new ThreadStreamHub();
 
   // 微信 iLink: PollManager 在 listen 前 startAll,扫 DB 拉所有 is_active=true 绑定起循环
   const wechatDao = makeWechatBindingDao(sb);
+  const usageDao = makeUsageDao(sb);
   const pollMgr = new PollManager({
     dao: wechatDao,
-    onMessageFor: makeHandleInbound({ dao: wechatDao, sb, cache, hub }),
+    onMessageFor: makeHandleInbound({ dao: wechatDao, sb, cache, hub, usageDao }),
   });
   await pollMgr.startAll();
 

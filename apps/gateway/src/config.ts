@@ -49,12 +49,24 @@ export const config = {
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
     acrName: process.env['AZURE_ACR_NAME'] ?? '',           // 用来拿 listCredentials
     hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes:v1',
-    // LLM 多 provider 并存,Container 内 hermes-config.yaml 根据 HERMES_MODEL 自动选。
-    // Gateway 把所有 LLM env 透传作 secret,容器各取所需。
-    hermesModel: process.env['HERMES_MODEL'] ?? 'anthropic/claude-sonnet-4-6',
-    anthropicApiKey: process.env['ANTHROPIC_API_KEY'] ?? '',
-    dashscopeApiKey: process.env['DASHSCOPE_API_KEY'] ?? '',
-    dashscopeBaseUrl: process.env['DASHSCOPE_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
+    // 改 provider/model 不需要重 build 镜像。
+    //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
+    //   HERMES_MODEL     具体模型名
+    //   HERMES_API_KEY   对应 provider 的 key (走 secret)
+    //   HERMES_BASE_URL  alibaba 填 DashScope 国内 endpoint; anthropic/openai 留空; custom 必填
+    hermesProvider: process.env['HERMES_PROVIDER'] ?? 'alibaba',
+    hermesModel: process.env['HERMES_MODEL'] ?? 'qwen3-coder-plus',
+    hermesApiKey: process.env['HERMES_API_KEY'] ?? '',
+    hermesBaseUrl: process.env['HERMES_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    // User-assigned identity bicep 提前建好, ACA 绑它来读 KV hermes-api-key。
+    //   resourceId: /subscriptions/.../userAssignedIdentities/id-hermes-<env>, 用于绑 identity
+    //   clientId:   identity 的 client GUID, 用于 secrets[].identity 字段
+    //   kvUri:      https://<kv-name>.vault.azure.net, 拼 keyVaultUrl
+    // 三者都从 bicep appSettings 注入, dev local 模式留空 (走 inline secret 兜底)。
+    hermesAcaIdentityResourceId: process.env['HERMES_ACA_IDENTITY_RESOURCE_ID'] ?? '',
+    hermesAcaIdentityClientId: process.env['HERMES_ACA_IDENTITY_CLIENT_ID'] ?? '',
+    hermesKvUri: process.env['HERMES_KV_URI'] ?? '',
   },
 
   cloud: {
@@ -103,13 +115,12 @@ export const validateConfig = () => {
         `AZURE_STORAGE_UDK_LIFETIME_SECONDS=${config.cloud.udkLifetimeSeconds} exceeds Azure 7-day UDK max (604800)`,
       );
     }
-    // HERMES_MODEL 决定哪个 key 必填
-    const model = config.azure.hermesModel;
-    if (model.startsWith('anthropic/') && !config.azure.anthropicApiKey) {
-      throw new Error(`HERMES_MODEL=${model} 但 ANTHROPIC_API_KEY 未设`);
+    // 任何 provider 都必须有 key
+    if (!config.azure.hermesApiKey) {
+      throw new Error(`HERMES_API_KEY 未设 (provider=${config.azure.hermesProvider} model=${config.azure.hermesModel})`);
     }
-    if ((model.startsWith('qwen-') || model.startsWith('qwen3-')) && !config.azure.dashscopeApiKey) {
-      throw new Error(`HERMES_MODEL=${model} 但 DASHSCOPE_API_KEY 未设`);
+    if (config.azure.hermesProvider === 'custom' && !config.azure.hermesBaseUrl) {
+      throw new Error(`HERMES_PROVIDER=custom 必须设 HERMES_BASE_URL`);
     }
   }
   // 至少要有一个 OAuth provider 启用,否则没人能登录

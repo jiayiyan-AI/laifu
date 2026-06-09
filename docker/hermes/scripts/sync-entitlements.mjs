@@ -1,0 +1,105 @@
+// 拉 desired entitlements → 软链 /opt/hermes-skills/<feature> → ~/.hermes/skills/<feature>
+// → 上报 observed。
+import { readdirSync, lstatSync, unlinkSync, symlinkSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { log, warn, readToken, httpJson, HOME_DIR } from './lib.mjs';
+
+const SKILLS_DIR = `${HOME_DIR}/.hermes/skills`;
+const SKILLS_SOURCE = '/opt/hermes-skills';
+
+async function fetchEntitlements(gateway, token) {
+  for (let i = 1; i <= 7; i++) {
+    try {
+      const { status, body } = await httpJson({
+        method: 'GET',
+        url: `${gateway}/api/me/entitlements`,
+        headers: { Authorization: `Bearer ${token}` },
+        timeoutMs: 5_000,
+      });
+      if (status >= 200 && status < 300) {
+        log(`entitlements fetched on attempt ${i}`);
+        return JSON.parse(body);
+      }
+      warn(`entitlements HTTP ${status} (attempt ${i}/7)`);
+    } catch (e) {
+      warn(`entitlements attempt ${i}/7 failed: ${e.message}`);
+    }
+    if (i < 7) await new Promise((r) => setTimeout(r, 3_000));
+  }
+  return null;
+}
+
+export async function runSyncEntitlements() {
+  const GATEWAY = process.env['GATEWAY_BASE_URL'];
+  const token = readToken();
+  if (!token) {
+    warn('no token — skip entitlement sync');
+    return;
+  }
+
+  const ent = await fetchEntitlements(GATEWAY, token);
+  if (!ent) {
+    warn('failed to fetch entitlements — skill sync skipped');
+    return;
+  }
+
+  const desired = Array.isArray(ent.entitlements) ? ent.entitlements : [];
+  const tokenVersion = typeof ent.token_version === 'number' ? ent.token_version : 0;
+  log(`desired entitlements: ${desired.join(' ') || '(none)'}`);
+
+  mkdirSync(SKILLS_DIR, { recursive: true });
+
+  // 清掉不在 desired 里的 stale symlink
+  for (const name of readdirSync(SKILLS_DIR)) {
+    const p = `${SKILLS_DIR}/${name}`;
+    try {
+      if (!lstatSync(p).isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    if (!desired.includes(name)) {
+      log(`removing stale skill: ${name}`);
+      try { unlinkSync(p); } catch (e) { warn(`unlink ${name} failed: ${e.message}`); }
+    }
+  }
+
+  // 软链 desired (已存在的 symlink 先删再建, 保证 target 是最新的)
+  const observed = [];
+  for (const feature of desired) {
+    const target = `${SKILLS_SOURCE}/${feature}`;
+    const link = `${SKILLS_DIR}/${feature}`;
+    if (!existsSync(target) || !statSync(target).isDirectory()) {
+      warn(`skill ${feature} requested but not installed in image`);
+      continue;
+    }
+    try {
+      if (existsSync(link) || lstatSync(link).isSymbolicLink()) {
+        try { unlinkSync(link); } catch {}
+      }
+    } catch {}
+    try {
+      symlinkSync(target, link);
+      log(`linked skill: ${feature}`);
+      observed.push(feature);
+    } catch (e) {
+      warn(`symlink ${feature} failed: ${e.message}`);
+    }
+  }
+
+  // 上报 observed
+  const reportBody = { observed, token_version: tokenVersion };
+  log(`reporting observed: ${JSON.stringify(reportBody)}`);
+  try {
+    const { status, body } = await httpJson({
+      method: 'POST',
+      url: `${GATEWAY}/api/me/observed-entitlements`,
+      headers: { Authorization: `Bearer ${token}` },
+      body: reportBody,
+      timeoutMs: 10_000,
+    });
+    if (status < 200 || status >= 300) {
+      warn(`observed-entitlements HTTP ${status}: ${body.slice(0, 200)}`);
+    }
+  } catch (e) {
+    warn(`observed-entitlements report failed: ${e.message}`);
+  }
+}

@@ -36,12 +36,43 @@ from urllib.parse import urlparse, parse_qs
 
 HERMES_BIN = os.environ.get("HERMES_BIN", "hermes")
 HERMES_TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "300"))  # 秒
+HERMES_PROVIDER = os.environ.get("HERMES_PROVIDER", "unknown")  # dashscope / anthropic / ...
 DEFAULT_SESSION = os.environ.get("HERMES_DEFAULT_SESSION", "main")
 DEFAULT_SOURCE = os.environ.get("HERMES_DEFAULT_SOURCE", "web")
 
 # 持久化在用户 home 下,跟用户数据一起活
 SESSION_MAP_FILE = os.path.expanduser("~/.hermes/_gateway_session_map.json")
 _map_lock = Lock()
+
+# 动态 system prompt: gateway 通过 /api/me/prompts/system-prompt.md 下发,
+# bootstrap.mjs (sync-prompts) 写到这里, 每次 chat 由本进程现读现注入 hermes 子进程
+# 的 HERMES_EPHEMERAL_SYSTEM_PROMPT。改 prompt 后 → gateway redeploy → 用户下次
+# chat 自动拿到新版本 (前提是容器已经在线; 离线用户冷启动时由 sync-prompts 拉)。
+DYN_SYSTEM_PROMPT_FILE = os.path.expanduser("~/dynamic_prompts/system-prompt.md")
+
+
+def _build_subprocess_env() -> dict:
+    """每次 chat 前现读 dynamic system prompt 文件, 注入 hermes 子进程的 env。
+
+    - 文件存在且非空 → 设 HERMES_EPHEMERAL_SYSTEM_PROMPT, hermes 拼到 cached
+      system prompt 之后 (cache 友好, 内容稳定就 byte-stable)。
+    - 文件不存在或空 → 显式 unset, 避免吃到 server.py 启动时继承的旧值。
+    - 文件读失败 → 当成不存在处理, 打日志, 不阻塞 chat。
+    """
+    env = os.environ.copy()
+    try:
+        with open(DYN_SYSTEM_PROMPT_FILE, encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            env["HERMES_EPHEMERAL_SYSTEM_PROMPT"] = content
+        else:
+            env.pop("HERMES_EPHEMERAL_SYSTEM_PROMPT", None)
+    except FileNotFoundError:
+        env.pop("HERMES_EPHEMERAL_SYSTEM_PROMPT", None)
+    except OSError as e:
+        print(f"[server] read {DYN_SYSTEM_PROMPT_FILE} failed: {e}", flush=True)
+        env.pop("HERMES_EPHEMERAL_SYSTEM_PROMPT", None)
+    return env
 
 
 def _load_map() -> dict:
@@ -201,9 +232,55 @@ def load_history(session_name: str) -> list[dict]:
     return out
 
 
-def call_hermes(message: str, session_name: str, source: str) -> tuple[str, str, int, str | None]:
-    """返回 (stdout, stderr, returncode, resolved_hermes_id)。"""
+# sessions 表里需要 snapshot 的 token 计数列 (累计值)。delta = after - before 即本轮 usage,
+# 自动包含 tool loop 多轮 LLM 调用。列名跟 hermes_state.py 里 CREATE TABLE sessions 一致。
+_TOKEN_COLS = ("input_tokens", "output_tokens", "cache_read_tokens",
+               "cache_write_tokens", "reasoning_tokens")
+
+
+def _snapshot_session(hermes_uuid: str | None) -> dict:
+    """读一次 sessions 表的累计 token 计数 + model。不存在 / 读失败 → 全 0。
+
+    失败不报错, 需要保证 chat 成功不会被计量逻辑拖死。"""
+    base = {c: 0 for c in _TOKEN_COLS}
+    base["model"] = None
+    if not hermes_uuid:
+        return base
+    try:
+        from hermes_state import SessionDB  # 延迟 import: 跟 load_history 一致
+        db = SessionDB()
+        try:
+            row = db.get_session(hermes_uuid)
+        finally:
+            db.close()
+        if not row:
+            return base
+        out = {c: int(row.get(c) or 0) for c in _TOKEN_COLS}
+        out["model"] = row.get("model")
+        return out
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] snapshot_session({hermes_uuid}) failed: {e}", flush=True)
+        return base
+
+
+def _usage_delta(before: dict, after: dict) -> dict:
+    """算 delta。model 优先取 after (中途 /model 切换以最后为准, 跟 dashboard 一致)。"""
+    delta = {c: max(0, int(after.get(c) or 0) - int(before.get(c) or 0))
+             for c in _TOKEN_COLS}
+    delta["model"] = after.get("model") or before.get("model")
+    return delta
+
+
+def call_hermes(message: str, session_name: str, source: str) -> tuple[str, str, int, str | None, dict]:
+    """返回 (stdout, stderr, returncode, resolved_hermes_id, usage_delta)。
+
+    usage_delta 形状:
+      {model, input_tokens, output_tokens, cache_read_tokens,
+       cache_write_tokens, reasoning_tokens}
+    首轮新 session 时 before 里拿不到行, 以零为 baseline; 后续轮以上轮累计为 baseline。
+    这样 delta 就是本次 /chat 的真实消耗 (含多轮 tool loop)。"""
     existing = _get_hermes_id(session_name)
+    before = _snapshot_session(existing)
 
     args = [HERMES_BIN, "chat", "-Q"]
     if existing:
@@ -212,6 +289,7 @@ def call_hermes(message: str, session_name: str, source: str) -> tuple[str, str,
 
     proc = subprocess.run(
         args, capture_output=True, text=True, timeout=HERMES_TIMEOUT,
+        env=_build_subprocess_env(),
     )
 
     resolved = existing
@@ -225,7 +303,10 @@ def call_hermes(message: str, session_name: str, source: str) -> tuple[str, str,
             print(f"[server] could NOT find hermes_session_id for {session_name}",
                   flush=True)
 
-    return proc.stdout, proc.stderr, proc.returncode, resolved
+    after = _snapshot_session(resolved)
+    usage = _usage_delta(before, after)
+
+    return proc.stdout, proc.stderr, proc.returncode, resolved, usage
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -279,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
         source = (body.get("source") or DEFAULT_SOURCE).strip()
 
         try:
-            stdout, stderr, code, resolved = call_hermes(message, session_id, source)
+            stdout, stderr, code, resolved, usage = call_hermes(message, session_id, source)
         except subprocess.TimeoutExpired:
             self._json(504, {"error": "hermes timeout"})
             return
@@ -288,11 +369,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         reply = _clean_reply(stdout) or stderr.strip()
+        # usage dict 加上 provider (从环境变量, 容器级别固定)
+        if usage is not None:
+            usage["provider"] = HERMES_PROVIDER
         self._json(200, {
             "reply": reply,
             "session_id": session_id,           # gateway 视角的 name
             "hermes_session_id": resolved,      # hermes UUID,可能 None (第一次没解析到)
             "exit_code": code,
+            "usage": usage,                     # 本次 chat 的 token delta (包含 tool loop)
         })
 
     def log_message(self, format, *args):  # noqa: A002
