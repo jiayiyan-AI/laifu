@@ -11,7 +11,7 @@ import { ChatApp } from '../apps/chat/ChatApp.js';
 import { ManageApp } from '../apps/manage/ManageApp.js';
 import { WechatApp } from '../apps/wechat/WechatApp.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
-import { useEntitlements } from '../lib/entitlements-context.js';
+import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
 
 type AppId = DockAppId | 'wechat';
@@ -32,7 +32,7 @@ const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: numb
 };
 
 export const Desktop = () => {
-  const { observed } = useEntitlements();
+  const [{ observed }] = entitlementsAtom.use();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
 

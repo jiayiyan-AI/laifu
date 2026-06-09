@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useAuth } from '../auth/AuthContext.js';
+import { authAtom } from '../states/auth.atom.js';
 import { IconChevDown, IconUser, IconPower } from '../lib/icons.js';
+import { UsageWidget } from '../components/UsageWidget.js';
 
 const fmtClock = () => {
   const d = new Date();
@@ -10,7 +11,7 @@ const fmtClock = () => {
 };
 
 export const Menubar = () => {
-  const auth = useAuth();
+  const [authState, { logout }] = authAtom.use();
   const [clock, setClock] = useState(fmtClock());
   const [accountOpen, setAccountOpen] = useState(false);
 
@@ -19,7 +20,8 @@ export const Menubar = () => {
     return () => clearInterval(t);
   }, []);
 
-  if (auth.status !== 'authenticated') return null;
+  if (authState.status !== 'authenticated') return null;
+  const user = authState.user;
 
   return (
     <div style={{
@@ -36,9 +38,10 @@ export const Menubar = () => {
       <span style={{ color: '#2c2d33' }}>帮助</span>
       <span style={{ flex: 1 }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, color: '#2c2d33', position: 'relative' }}>
+        <UsageWidget />
         <span>{clock}</span>
         <button onClick={() => setAccountOpen((v) => !v)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {auth.user.nickname ?? '未命名'} <IconChevDown size={13} />
+          {user.nickname ?? '未命名'} <IconChevDown size={13} />
         </button>
         {accountOpen && (
           <div style={{
@@ -51,15 +54,15 @@ export const Menubar = () => {
                 <IconUser size={18} />
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{auth.user.nickname ?? '未命名'}</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{user.nickname ?? '未命名'}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                  {auth.user.email ?? `${auth.user.provider}: ${auth.user.external_id}`}
+                  {user.email ?? `${user.provider}: ${user.external_id}`}
                 </div>
               </div>
             </div>
             <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
             <button
-              onClick={() => { setAccountOpen(false); void auth.logout(); }}
+              onClick={() => { setAccountOpen(false); void logout(); }}
               style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9, fontSize: 13.5, color: 'var(--bad)' }}
             >
               <IconPower size={16} /> 退出登录

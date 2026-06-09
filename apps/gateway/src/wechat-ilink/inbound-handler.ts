@@ -12,15 +12,18 @@
  *   4. client.sendText 把回复发回原对话; sendText 报错只 log 不抛
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { ContainerChatResponse } from '@lingxi/shared';
 import { parseInbound } from './inbound.js';
 import type { OnMessageFactory } from './poll-manager.js';
 import type { WechatBindingDao } from '../db/wechat-binding-dao.js';
 import type { ContainerMappingCache } from '../db/cache.js';
 import type { ThreadStreamHub } from '../lib/thread-stream.js';
+import type { UsageDao } from '../db/usage-dao.js';
+import { callHermesChat } from '../lib/aca-call.js';
+import { log } from '../lib/logger.js';
 
-const FALLBACK_TEXT = '处理失败,请稍后再试。';
-const CONTAINER_NOT_READY_TEXT = '助理还在初始化,请稍后再试。';
+const FALLBACK_TEXT = '处理失败，请稍后再试。';
+const CONTAINER_NOT_READY_TEXT = '助理还在初始化，请稍后再试。';
+const QUOTA_EXHAUSTED_TEXT = '你的额度已用完，请联系管理员充值后继续使用。';
 
 const newThreadId = (): string =>
   `thr_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -33,6 +36,8 @@ interface HandleInboundDeps {
   hub?: ThreadStreamHub;
   /** 注入用,测试里替成 vi.fn 控制 hermes 行为。 */
   fetchImpl?: typeof fetch;
+  /** 可选: 没传就跳过计量 (测试/未启用) */
+  usageDao?: UsageDao;
 }
 
 const resolveThread = async (
@@ -65,20 +70,33 @@ const callHermes = async (
     return null;                                // 让上游用 CONTAINER_NOT_READY_TEXT
   }
   const sessionId = `wechat:${threadId}`;
-  const fetcher = deps.fetchImpl ?? fetch;
-  const resp = await fetcher(`${mapping.container_url}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: userText,
-      session_id: sessionId,
-      source: 'wechat',
-    }),
+  const result = await callHermesChat({
+    containerUrl: mapping.container_url,
+    userId,
+    threadId,
+    source: 'wechat',
+    sessionId,
+    message: userText,
+    fetchImpl: deps.fetchImpl,
   });
-  if (!resp.ok) throw new Error(`hermes /chat returned ${resp.status}`);
-  const body = await resp.json() as ContainerChatResponse;
-  if (typeof body.reply !== 'string') throw new Error('hermes missing reply');
-  return body.reply;
+  if (result.ok && result.usage && deps.usageDao) {
+    deps.usageDao.recordUsage({
+      userId,
+      threadId,
+      source: 'wechat',
+      usage: result.usage,
+    }).catch((err) => {
+      log.warn({
+        event: 'usage.record.failed',
+        user_id: userId,
+        thread_id: threadId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+  if (!result.ok) throw new Error(result.error ?? `hermes /chat returned ${result.status}`);
+  if (!result.reply) throw new Error('hermes missing reply');
+  return result.reply;
 };
 
 export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => {
@@ -97,7 +115,21 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
       return;
     }
 
-    // 2. 跑 hermes
+    // 2. 配额检查
+    if (deps.usageDao) {
+      try {
+        const b = await deps.usageDao.getBalance(binding.user_id);
+        if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
+          await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
+          return;
+        }
+      } catch (e) {
+        // 查询失败不阻断，只 log
+        log.warn({ event: 'wechat.quota.check.failed', user_id: binding.user_id, err: String(e) });
+      }
+    }
+
+    // 3. 跑 hermes
     let replyText: string;
     try {
       const r = await callHermes(deps, binding.user_id, threadId, msg.text);
@@ -107,11 +139,11 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
       replyText = FALLBACK_TEXT;
     }
 
-    // 3. 回复
+    // 4. 回复
     await safeSendText(client, msg, replyText);
 
-    // 4. 通知 web UI 该 thread 有更新 (hermes SQLite 此时已落 user+assistant 两条)
-    //    push notification only — 不带正文,前端收到 event 后调一次 /messages 拉历史
+    // 5. 通知 web UI 该 thread 有更新 (hermes SQLite 此时已落 user+assistant 两条)
+    //    push notification only - 不带正文,前端收到 event 后调一次 /messages 拉历史
     deps.hub?.emit(threadId, 'thread-updated', { thread_id: threadId });
   };
 };

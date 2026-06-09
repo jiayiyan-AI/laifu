@@ -1,17 +1,17 @@
 import { useNavigate } from 'react-router-dom';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
-import { useAuth } from './AuthContext.js';
+import { authAtom } from '../states/auth.atom.js';
 
 /**
  * 登录页:目前只接 Google OAuth。
  * 加新 provider 在这里加一个 <a href="/api/auth/<provider>/start"> 按钮即可。
  */
 export const LoginPage = () => {
-  const auth = useAuth();
+  const [state] = authAtom.use();
   const nav = useNavigate();
 
-  if (auth.status === 'authenticated') {
+  if (state.status === 'authenticated') {
     nav('/desktop', { replace: true });
     return null;
   }

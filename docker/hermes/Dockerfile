@@ -79,10 +79,9 @@ ENV PYTHONUSERBASE=/home/hermes/.local
 ENV NPM_CONFIG_PREFIX=/home/hermes/.npm-global
 ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/opt/hermes-agent/venv/bin:$PATH"
 
-# ============ 覆盖默认 config.yaml，接 DashScope ============
-# config.yaml 里 api_key 字段写 ${OPENAI_API_KEY}，Hermes 启动时自动从环境变量插值。
-# entrypoint 不再做 sed 注入，key 永远不会写入 volume。
-COPY --chown=hermes:hermes hermes-config.yaml /home/hermes/.hermes/config.yaml
+# ============ config.yaml 由 entrypoint 每次启动按 env 渲染 ============
+# 不再 COPY 静态文件,改 provider/model 只需改 env, 无需重 build 镜像。
+# 详见 entrypoint.sh Step 2。
 
 # ============ Seed 目录 ============
 # 构建时 home 里只有 .hermes/ 骨架，seed 体积很小（< 10MB）
@@ -90,11 +89,25 @@ USER root
 RUN cp -a /home/hermes /home/hermes-seed \
     && chown -R hermes:hermes /home/hermes-seed
 
-# ============ entrypoint + HTTP 服务 ============
+# ============ entrypoint + HTTP 服务 + bootstrap scripts ============
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 COPY --chown=hermes:hermes server.py /app/server.py
+
+# Bootstrap Node 脚本 (放只读层, volume 覆盖不到)。
+# 优先用 Node 标准库; 真需要三方包再 RUN npm install --prefix /opt/lingxi-scripts <pkg>。
+USER root
+RUN mkdir -p /opt/lingxi-scripts
+COPY scripts/ /opt/lingxi-scripts/
+RUN chmod -R a+rX /opt/lingxi-scripts
+# yaml: pull-runtime-config 需要解析 + 改写 ~/.hermes/config.yaml (partial merge,
+# 保留 hermes seed 已有字段, 只覆盖我们关心的 model.* 等)。标准库做不到, 必须装包。
+# 装到只读层, 运行时 import 'yaml' 沿 import.meta.url 向上找 node_modules。
+RUN cd /opt/lingxi-scripts && npm init -y >/dev/null && npm install yaml@2 --no-audit --no-fund --loglevel=warn \
+    && chmod -R a+rX /opt/lingxi-scripts
+# 不切回 hermes — 后续 mkdir /opt/hermes-skills + pip install -e 都需要 root,
+# 最末尾 line ~130 才统一切回 hermes。
 
 # ============ Hermes skills 占位目录 ============
 # P1 阶段为 cloud_file 留一个能软链的目标 (SKILL.md 占位)。

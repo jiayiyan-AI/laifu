@@ -240,6 +240,20 @@ flowchart TB
 >
 > **为什么需要 initContainer**: ACA 主容器开了 `no_new_privs`, 容器内 hermes 用户 (UID 1000) 没法 sudo chown 自己挂载点。ACA 自动 mkdir 出来的 subPath 子目录 owner 是 root, 只能让一个独立的 root 容器 (busybox) 在主容器启动前先 `chown 1000:1000`。详见 [known-issues.md](./known-issues.md) #10。
 
+#### 🟠 Azure 自动管理的隐藏资源 (`ME_*` RG, 我们看不到也改不了)
+
+CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoint 里), Azure 就自动在订阅下额外建一个 RG `ME_cae-lingxi-{env}_rg-lingxi-{env}_southeastasia`, 里面放 ACA 入口流量需要的网络资源。**Bicep 摸不到, Portal 也只能查看不能改**, 但**账单照收**。
+
+| 资源 | 命名 | 角色 | 月成本 (实测 SEA 区) |
+|---|---|---|---|
+| **Standard Load Balancer** | `capp-svc-lb` | 所有用户 ACA Ingress 的统一入口, 2 条规则 (HTTP/HTTPS), 后端转 envoy 31080/31443 | ~$18 (LB 基础 $0.025/h) + ~$0.12 (2 条规则 $0.005/h) |
+| **Standard Public IP** | `capp-svc-lb-ip` | Static, 绑在 LB 前端, 暴露给公网 | ~$3.6 ($0.005/h) |
+| **合计** | — | — | **~$22/月固定** |
+
+> **关键性质**: 这个 LB 是 **CAE 级别**, 不是 per-ACA, 也不是 per-user。100 个用户 ACA 共用同一个 LB, 仍只收一份。**$22/月是 ACA + VNet 模式无法绕过的硬地板** — 哪怕 CAE 里 0 个 ACA 也照样收。
+>
+> **成本影响**: 见 [architecture.md §7](./architecture.md#七成本结构azure-基础设施)。早期 (10 用户) Azure 月底价从 ~$30 修正为 ~$52, 主要差额就来自这里。
+
 #### 🟡 Azure 外的依赖
 
 | 资源 | 角色 | 凭据存放 |

@@ -14,8 +14,14 @@ param appServiceSku string = 'B1'
 @description('Hermes 镜像 tag, gateway 创建用户 Container App 时引用. 必须包含仓库名, 形如 hermes:v1 或 hermes:latest')
 param hermesImageTag string = 'hermes:latest'
 
-@description('LLM 默认模型. anthropic/* 走 ANTHROPIC_API_KEY, qwen-* 走 DASHSCOPE_API_KEY. 当前 hermes-config.yaml 锁定 DashScope, 默认用 qwen-plus.')
-param hermesModel string = 'qwen-plus'
+@description('LLM provider 名. Hermes 一等公民: alibaba / anthropic / openai / deepseek / xai; 自建端点用 custom')
+param hermesProvider string = 'alibaba'
+
+@description('LLM 默认模型名. provider=alibaba 时如 qwen3-coder-plus; provider=anthropic 时如 claude-sonnet-4-5-20250929.')
+param hermesModel string = 'qwen3-coder-plus'
+
+@description('LLM endpoint base URL. alibaba 填 https://dashscope.aliyuncs.com/compatible-mode/v1; anthropic/openai 留空; custom 必填。')
+param hermesBaseUrl string = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 @description('部署执行者的 AAD Object ID (az ad signed-in-user show --query id -o tsv). 留空则跳过, 部署完得手动给自己授 Key Vault Secrets Officer.')
 param deployerObjectId string = ''
@@ -32,6 +38,7 @@ var appServicePlanName = 'asp-${rgSuffix}'
 var appServiceName = 'app-${rgSuffix}-gateway'
 var laName = 'la-${rgSuffix}'
 var kvName = toLower('kv-${rgSuffix}')
+var hermesIdentityName = 'id-hermes-${env}'
 
 // ─────────── 基础设施 ───────────
 resource la 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -170,6 +177,31 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
+// ─────────── User-assigned managed identity for hermes ACA ───────────
+// 每个用户 ACA 在创建时绑这个 identity (gateway 通过 IDs 引用)。
+// 用 user-assigned 而不是 system-assigned 的原因: ACA 的 secrets[].keyVaultUrl
+// 需要在创建时指定 identity, 而 system-assigned 的 principalId 要等 ACA 创建完才出来,
+// 形成"identity 还没有 → 没法在创建时引用 → 没法授 KV RBAC"的死锁。
+// 用 user-assigned 提前在 bicep 里建好 + 授好 RBAC, ACA 创建时直接绑现成 identity。
+resource hermesIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: hermesIdentityName
+  location: location
+}
+
+// 让 hermes identity 能读 KV 里的 secret (主要是 hermes-api-key, ACA 通过
+// secrets[].keyVaultUrl 自动拉)。
+resource kvHermesRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kv
+  name: guid(kv.id, hermesIdentity.id, 'kv-secrets-user')
+  properties: {
+    principalId: hermesIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    // Key Vault Secrets User
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  }
+}
+
+
 // ─────────── App Service (Gateway + Web 同进程) ───────────
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
@@ -195,6 +227,26 @@ resource appService 'Microsoft.Web/sites@2023-12-01' = {
       minTlsVersion: '1.2'
       appCommandLine: 'node index.mjs'
     }
+  }
+}
+
+// App Service 日志 → Log Analytics (与 ACA 共用同一 workspace `la`)
+// 这样 gateway 的 stdout / HTTP 访问日志 / 平台事件都能在 Portal Logs 用 KQL 查;
+// gateway 内只要 console.log JSON 单行, KQL 解析 ResultDescription 即可。
+resource appServiceDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: appService
+  name: 'to-la'
+  properties: {
+    workspaceId: la.id
+    logs: [
+      { category: 'AppServiceConsoleLogs', enabled: true }
+      { category: 'AppServiceAppLogs', enabled: true }
+      { category: 'AppServiceHTTPLogs', enabled: true }
+      { category: 'AppServicePlatformLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 
@@ -307,6 +359,7 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
 
     PORT: '8080'
     WEB_DIST_PATH: '/home/site/wwwroot/web-dist'
+    PROMPTS_DIR: '/home/site/wwwroot/prompts'
     PUBLIC_BASE_URL: 'https://${appService.properties.defaultHostName}'
     FRONTEND_BASE_URL: 'https://${appService.properties.defaultHostName}'
 
@@ -322,7 +375,17 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     AZURE_ACR_LOGIN_SERVER: acr.properties.loginServer
     AZURE_ACR_NAME: acr.name
     HERMES_IMAGE_TAG: hermesImageTag
+    HERMES_PROVIDER: hermesProvider
     HERMES_MODEL: hermesModel
+    HERMES_BASE_URL: hermesBaseUrl
+
+    // 用户 ACA 绑这个 user-assigned identity, 让 ACA secrets[].keyVaultUrl 能去 KV 取值。
+    // azure.ts createContainerApp 需要这两个值: resourceId 绑 identity, clientId 用于
+    // secrets[].identity 字段引用。
+    HERMES_ACA_IDENTITY_RESOURCE_ID: hermesIdentity.id
+    HERMES_ACA_IDENTITY_CLIENT_ID: hermesIdentity.properties.clientId
+    // KV vault URI (https://<name>.vault.azure.net), 用于拼 secrets[].keyVaultUrl
+    HERMES_KV_URI: kv.properties.vaultUri
 
     SESSION_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=session-secret)'
     GATEWAY_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=gateway-secret)'
@@ -330,10 +393,11 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     SUPABASE_SERVICE_ROLE_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=supabase-service-role-key)'
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
+    HERMES_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=hermes-api-key)'
     ANTHROPIC_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=anthropic-api-key)'
     DASHSCOPE_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=dashscope-api-key)'
 
-    // 邮件能力 (子项 B)。prod 暂留 fake (Postmark 域名/DNS 验证完成前不真收发, 见 spec §八);
+    // 邮件能力 (子项 B)。prod 暂留 fake;
     // 域名+DKIM+入站 webhook 就绪后把 EMAIL_PROVIDER 改 'postmark' + 填两个 KV secret 即可。
     EMAIL_PROVIDER: 'fake'
     EMAIL_DOMAIN: 'mail.localhost'

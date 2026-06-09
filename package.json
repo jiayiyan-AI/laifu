@@ -15,7 +15,7 @@
     "dev:web": "pnpm --filter @lingxi/web dev",
     "dev:check": "scripts/dev-check.sh"
   },
-  "packageManager": "pnpm@9.0.0",
+  "packageManager": "pnpm@11.5.2",
   "engines": {
     "node": ">=22"
   },

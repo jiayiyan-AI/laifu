@@ -40,21 +40,18 @@ echo ""
 echo "[配置文件]"
 if [ -f apps/gateway/.env.local ]; then ok "apps/gateway/.env.local"; else fail "apps/gateway/.env.local 缺失"; fi
 if [ -f docker/hermes/.env ]; then
+  provider=$(grep -E '^HERMES_PROVIDER=' docker/hermes/.env | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
   model=$(grep -E '^HERMES_MODEL=' docker/hermes/.env | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-  if [ -z "$model" ]; then
-    warn "docker/hermes/.env: HERMES_MODEL 未设"
+  key=$(grep -E '^HERMES_API_KEY=' docker/hermes/.env | head -1 | cut -d= -f2-)
+  base_url=$(grep -E '^HERMES_BASE_URL=' docker/hermes/.env | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+  if [ -z "$provider" ] || [ -z "$model" ]; then
+    warn "docker/hermes/.env: HERMES_PROVIDER 或 HERMES_MODEL 未设"
+  elif [ -z "$key" ]; then
+    warn "HERMES_PROVIDER=$provider HERMES_MODEL=$model 但 HERMES_API_KEY 空"
+  elif [ "$provider" = "custom" ] && [ -z "$base_url" ]; then
+    warn "HERMES_PROVIDER=custom 但 HERMES_BASE_URL 空"
   else
-    case "$model" in
-      anthropic/*)
-        key=$(grep -E '^ANTHROPIC_API_KEY=' docker/hermes/.env | head -1 | cut -d= -f2-)
-        if [ -n "$key" ]; then ok "HERMES_MODEL=$model + ANTHROPIC_API_KEY 已填"
-        else warn "HERMES_MODEL=$model 但 ANTHROPIC_API_KEY 空"; fi ;;
-      qwen-*|qwen3-*)
-        key=$(grep -E '^DASHSCOPE_API_KEY=' docker/hermes/.env | head -1 | cut -d= -f2-)
-        if [ -n "$key" ]; then ok "HERMES_MODEL=$model + DASHSCOPE_API_KEY 已填"
-        else warn "HERMES_MODEL=$model 但 DASHSCOPE_API_KEY 空"; fi ;;
-      *) warn "HERMES_MODEL=$model (自定义模型,key 校验跳过)" ;;
-    esac
+    ok "hermes: provider=$provider model=$model"
   fi
 else
   warn "docker/hermes/.env 缺失 → cp docker/hermes/.env.example docker/hermes/.env 填 key"

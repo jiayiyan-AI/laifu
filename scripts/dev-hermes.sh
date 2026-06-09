@@ -12,43 +12,37 @@ HOME_VOL="${HOME}/.hermes-dev"
 if [ ! -f "$ENV_FILE" ]; then
   echo "⚠️  $ENV_FILE 不存在"
   echo "   先复制模板:  cp docker/hermes/.env.example $ENV_FILE"
-  echo "   然后填 ANTHROPIC_API_KEY 或 DASHSCOPE_API_KEY (按 HERMES_MODEL 决定哪个)"
+  echo "   然后填 HERMES_API_KEY (按 HERMES_PROVIDER 选对应 provider 的 key)"
   exit 1
 fi
 
-# 读 .env 看选了哪个模型,自动验对应 key
-HERMES_MODEL_VALUE=$(grep -E '^HERMES_MODEL=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-if [ -z "$HERMES_MODEL_VALUE" ]; then
-  echo "⚠️  $ENV_FILE 里没设 HERMES_MODEL"
-  echo "   建议: HERMES_MODEL=anthropic/claude-sonnet-4-6"
-  exit 1
-fi
-
-key_ok() {
-  local var=$1
-  local val=$(grep -E "^${var}=" "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-  [ -n "$val" ]
+read_env() {
+  grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true
 }
 
-case "$HERMES_MODEL_VALUE" in
-  anthropic/*)
-    if ! key_ok ANTHROPIC_API_KEY; then
-      echo "⚠️  HERMES_MODEL=$HERMES_MODEL_VALUE 需要 ANTHROPIC_API_KEY"
-      echo "   申请: https://console.anthropic.com/settings/keys"
-      exit 1
-    fi
-    ;;
-  qwen-*|qwen3-*)
-    if ! key_ok DASHSCOPE_API_KEY; then
-      echo "⚠️  HERMES_MODEL=$HERMES_MODEL_VALUE 需要 DASHSCOPE_API_KEY"
-      echo "   申请: https://dashscope.console.aliyun.com/"
-      exit 1
-    fi
-    ;;
-  *)
-    echo "ℹ️  HERMES_MODEL=$HERMES_MODEL_VALUE  (自定义模型,假设 key 已配)"
-    ;;
-esac
+HERMES_PROVIDER_VALUE=$(read_env HERMES_PROVIDER)
+HERMES_MODEL_VALUE=$(read_env HERMES_MODEL)
+HERMES_API_KEY_VALUE=$(read_env HERMES_API_KEY)
+HERMES_BASE_URL_VALUE=$(read_env HERMES_BASE_URL)
+
+if [ -z "$HERMES_PROVIDER_VALUE" ] || [ -z "$HERMES_MODEL_VALUE" ]; then
+  echo "⚠️  $ENV_FILE 缺 HERMES_PROVIDER 或 HERMES_MODEL"
+  exit 1
+fi
+if [ -z "$HERMES_API_KEY_VALUE" ]; then
+  echo "⚠️  HERMES_API_KEY 未设 (provider=$HERMES_PROVIDER_VALUE)"
+  case "$HERMES_PROVIDER_VALUE" in
+    anthropic) echo "   申请: https://console.anthropic.com/settings/keys" ;;
+    alibaba)   echo "   申请: https://dashscope.console.aliyun.com/" ;;
+    custom)    echo "   custom provider 需要对应端点的 API key" ;;
+  esac
+  exit 1
+fi
+if [ "$HERMES_PROVIDER_VALUE" = "custom" ] && [ -z "$HERMES_BASE_URL_VALUE" ]; then
+  echo "⚠️  HERMES_PROVIDER=custom 必须设 HERMES_BASE_URL"
+  exit 1
+fi
+echo "ℹ️  hermes provider=$HERMES_PROVIDER_VALUE model=$HERMES_MODEL_VALUE"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "⚠️  image '$IMAGE' 不存在,需要先 build:"

@@ -7,10 +7,22 @@ export interface ContainerChatRequest {
   source: 'web' | 'wechat';
 }
 
+export interface ContainerChatUsage {
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+}
+
 export interface ContainerChatResponse {
   reply: string;
   session_id: string;
   exit_code: number;
+  hermes_session_id?: string | null;
+  usage?: ContainerChatUsage;       // server.py PR1 后稳定返回; ? 兑兼旧镜像
 }
 
 export interface ContainerHistoryMessage {
@@ -181,6 +193,45 @@ export interface ObservedEntitlementsReport {
 export interface RefreshTokenResponse {
   token: string;             // 新签 JWT (90d exp)
   expires_at: string;        // ISO-8601, exp 字段的人可读形式
+}
+
+/**
+ * 容器启动时拉运行期配置 (GET /api/me/runtime-config)。
+ * 由 docker/hermes/scripts/pull-runtime-config.mjs 调用,渲染 ~/.hermes/config.yaml。
+ *
+ * 设计动机: 之前 provider/model/base_url 是 createContainerApp 时一次性写进 ACA env 的快照,
+ * 之后永远锁死。改成每次容器启动 pull 后, gateway 改这几个值 + ACA restart 即生效,
+ * 无需 recreate ACA。详见 task.md。
+ *
+ * 鉴权: Authorization: Bearer <LAIFU_USER_TOKEN> (复用 container-token middleware)。
+ */
+/**
+ * 动态 prompt 文件清单。容器侧拿到后跟 ~/dynamic_prompts/manifest.json 比对,
+ * 只下载变化的文件。详见 docs/managed-prompts.md §五 manifest 协商机制。
+ *
+ * version: 协议版本号。容器侧脚本看到不识别的 version → 跳过同步,
+ *          保留本地老文件 (避免不兼容的解析方式破坏 home volume)。
+ *          目前 1; 字段语义不兼容变更时 bump。
+ * files:   name → sha256[:16]
+ *
+ * 已知文件名:
+ *   - SOUL.md         下载后镜像写到 ~/.hermes/SOUL.md (Hermes 默认读那个位置);
+ *                     远端删除时不动 ~/.hermes/SOUL.md (避免破坏 hermes 默认行为)
+ *   - system-prompt.md  目前只镜像到 ~/.hermes/system-prompt.md, 是否被 hermes
+ *                       注入待进一步验证
+ */
+export interface PromptsManifest {
+  version: number;
+  files: Record<string, string>;
+}
+
+export interface RuntimeConfig {
+  provider: string;                  // anthropic / openai / custom
+  model: string;
+  base_url: string | null;           // null 表示用 provider 默认 endpoint
+  request_timeout_seconds: number;
+  stale_timeout_seconds: number;
+  prompts_manifest: PromptsManifest;
 }
 
 /**

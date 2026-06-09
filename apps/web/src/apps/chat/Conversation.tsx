@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
+import { usageAtom } from '../../states/usage.atom.js';
 
 export interface Message {
   who: 'user' | 'assistant';
@@ -17,6 +18,8 @@ export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  const [quotaError, setQuotaError] = useState(false);
+  const refreshUsage = usageAtom.useChange().refresh;
 
   // busyRef 让 polling tick 读最新 busy 值,避免依赖变化时重启 interval
   const busyRef = useRef(false);
@@ -85,9 +88,16 @@ export const Conversation = ({ threadId }: Props) => {
     try {
       const { reply } = await api.sendChat({ thread_id: threadId, message: text });
       setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: reply, pending: false } : x));
+      refreshUsage();
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : '请求失败';
-      setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: `[错误] ${errMsg}`, pending: false } : x));
+      if (err instanceof api.QuotaError) {
+        setQuotaError(true);
+        setMsgs((m) => m.slice(0, -2)); // 撤回乐观 append
+        refreshUsage();
+      } else {
+        const errMsg = err instanceof Error ? err.message : '请求失败';
+        setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: `[错误] ${errMsg}`, pending: false } : x));
+      }
     } finally {
       setBusy(false);
     }
@@ -118,7 +128,20 @@ export const Conversation = ({ threadId }: Props) => {
           </div>
         ))}
       </div>
-      <Composer disabled={busy} onSend={onSend} />
+      {quotaError && (
+        <div style={{
+          padding: '12px 18px', background: 'var(--bad-w)', borderTop: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+        }}>
+          <span style={{ color: 'var(--bad)', fontWeight: 600 }}>额度已用完</span>
+          <span style={{ color: 'var(--text2)' }}>本月免费额度已耗尽且余额为零，请联系管理员充值后继续使用。</span>
+          <button
+            onClick={() => setQuotaError(false)}
+            style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)', textDecoration: 'underline' }}
+          >关闭</button>
+        </div>
+      )}
+      <Composer disabled={busy || quotaError} onSend={onSend} />
     </div>
   );
 };

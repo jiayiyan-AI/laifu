@@ -37,8 +37,9 @@ echo "[build-deploy] 3/5 vite build web"
 pnpm --filter @lingxi/web build >/dev/null
 
 echo "[build-deploy] 4/5 拼装产物"
-cp apps/gateway/dist/index.mjs "$OUT/"
-cp apps/gateway/dist/index.mjs.map "$OUT/" 2>/dev/null || true
+# gateway dist/ 已经含全部需要的产物 (index.mjs + index.mjs.map + prompts/),
+# 整目录平铺进 $OUT。其中 prompts/ 由 vite copyPromptsPlugin 复制进 dist。
+cp -R apps/gateway/dist/. "$OUT/"
 cp -R apps/web/dist "$OUT/web-dist"
 
 # 生成 deploy package.json: 只留运行时 deps, 用 pnpm-lock 的精确版本

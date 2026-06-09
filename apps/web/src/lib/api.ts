@@ -26,6 +26,19 @@ export class AuthError extends Error {
   }
 }
 
+export class QuotaError extends Error {
+  used_cny_month: number;
+  free_quota_cny_month: number;
+  balance_cny: number;
+  constructor(body: { used_cny_month?: number; free_quota_cny_month?: number; balance_cny?: number }) {
+    super('quota exhausted');
+    this.name = 'QuotaError';
+    this.used_cny_month = body.used_cny_month ?? 0;
+    this.free_quota_cny_month = body.free_quota_cny_month ?? 0;
+    this.balance_cny = body.balance_cny ?? 0;
+  }
+}
+
 const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
   const resp = await fetch(path, {
     credentials: 'include',
@@ -33,6 +46,10 @@ const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
     ...opts,
   });
   if (resp.status === 401) throw new AuthError();
+  if (resp.status === 402) {
+    const body = await resp.json().catch(() => ({}));
+    throw new QuotaError(body);
+  }
   if (!resp.ok) throw new Error(`${path} → ${resp.status}`);
   return resp.json() as Promise<T>;
 };

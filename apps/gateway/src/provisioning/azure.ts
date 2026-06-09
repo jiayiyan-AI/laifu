@@ -138,12 +138,40 @@ export const createContainerApp = async (params: {
   const { username: acrUser, password: acrPwd } = await getAcrCredentials();
   const envFqdn = `/subscriptions/${config.azure.subscriptionId}/resourceGroups/${config.azure.resourceGroup}/providers/Microsoft.App/managedEnvironments/${config.azure.containerAppsEnv}`;
 
+  // hermes-api-key 走 KV reference: ACA 绑 user-assigned identity, secrets[].keyVaultUrl
+  // 让 ACA 控制面自动从 KV 拉, 不再由 gateway 把明文写进 ACA secret。
+  // 三个 env 必须齐: identity resourceId / clientId / kvUri。dev local 模式
+  // 这些为空, 兜底走 inline secret (保留 hermesApiKey 那一支)。
+  const useKvRef = !!(
+    config.azure.hermesAcaIdentityResourceId &&
+    config.azure.hermesAcaIdentityClientId &&
+    config.azure.hermesKvUri
+  );
+  const hermesApiKeySecret = useKvRef
+    ? {
+        name: 'hermes-api-key',
+        // KV vaultUri 末尾带 '/'; 直接拼 secrets/<name> 即可
+        keyVaultUrl: `${config.azure.hermesKvUri.replace(/\/$/, '')}/secrets/hermes-api-key`,
+        identity: config.azure.hermesAcaIdentityResourceId,
+      }
+    : { name: 'hermes-api-key', value: config.azure.hermesApiKey };
+
   const poller = await getContainerApps().containerApps.beginCreateOrUpdate(
     config.azure.resourceGroup,
     params.containerName,
     {
       location: config.azure.location,
       managedEnvironmentId: envFqdn,
+      ...(useKvRef
+        ? {
+            identity: {
+              type: 'UserAssigned',
+              userAssignedIdentities: {
+                [config.azure.hermesAcaIdentityResourceId]: {},
+              },
+            },
+          }
+        : {}),
       configuration: {
         ingress: {
           external: true,                    // Phase 1.2/1.3 用外部 ingress
@@ -156,8 +184,7 @@ export const createContainerApp = async (params: {
         ],
         secrets: [
           { name: 'acr-password', value: acrPwd },
-          { name: 'anthropic-api-key', value: config.azure.anthropicApiKey },
-          { name: 'dashscope-api-key', value: config.azure.dashscopeApiKey },
+          hermesApiKeySecret,
         ],
       },
       template: {
@@ -188,13 +215,11 @@ export const createContainerApp = async (params: {
             image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
             resources: { cpu: 1, memory: '2Gi' },
             env: [
-              // LLM 多 provider 并存,容器内 hermes-config.yaml 根据 HERMES_MODEL 自动选
-              { name: 'HERMES_MODEL', value: config.azure.hermesModel },
-              { name: 'ANTHROPIC_API_KEY', secretRef: 'anthropic-api-key' },
-              { name: 'DASHSCOPE_API_KEY', secretRef: 'dashscope-api-key' },
-              { name: 'DASHSCOPE_BASE_URL', value: config.azure.dashscopeBaseUrl },
-              // entrypoint.sh step 5 用来调 /api/auth/refresh-token + /api/me/entitlements。
-              // 没设这个 env, entrypoint 直接 skip entitlement sync, 云盘 skill 永远软链不上。
+              // 创建时一次性快照的 env 只留 2 项 (其余动态配置走 /api/me/runtime-config pull):
+              //   - HERMES_API_KEY: ACA secret (KV reference 或 inline value), 容器内做 LLM 鉴权
+              //   - GATEWAY_BASE_URL: 容器 entrypoint 拉 runtime-config / entitlements / 续 token 的入口
+              // LAIFU_USER_TOKEN 由 signTokenAndInjectAzure 在容器创建后单独写入。
+              { name: 'HERMES_API_KEY', secretRef: 'hermes-api-key' },
               { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
             ],
             // subPath: 该用户在共享 share 内的子目录, 容器看不到兄弟用户的目录。
