@@ -210,7 +210,10 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
       contentDisposition,
     });
 
-    const url = `${deps.config.blobEndpoint}/${deps.config.container}/${fullPath}?${sas.sasToken}`;
+    // 逐段编码: blob 名可能含空格 / 括号等 (如 "record (1).mp4"), 原样拼进 URL 非法。
+    // SAS sig 由 SDK 用原始 blobName 签, Azure 收到后会先解码再验, 故编码不破坏 sig。
+    const encodedPath = fullPath.split('/').map(encodeURIComponent).join('/');
+    const url = `${deps.config.blobEndpoint}/${deps.config.container}/${encodedPath}?${sas.sasToken}`;
     res.redirect(302, url);
   });
 
