@@ -8,6 +8,8 @@ interface WindowProps {
   offsetX?: number;
   offsetY?: number;
   onClose: () => void;
+  onFocus?: () => void;
+  zIndex?: number;
   children: ReactNode;
 }
 
@@ -31,7 +33,7 @@ const EDGE_CURSOR: Record<ResizeEdge, string> = {
   ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize',
 };
 
-export const Window = ({ title, icon, width = 760, height = 540, offsetX = 0, offsetY = 0, onClose, children }: WindowProps) => {
+export const Window = ({ title, icon, width = 760, height = 540, offsetX = 0, offsetY = 0, onClose, onFocus, zIndex, children }: WindowProps) => {
   // 关键:initial 只在 mount 时算一次,后续 props 变更不重置位置/尺寸
   const [rect, setRect] = useState<Rect>(() => initialRect(width, height, offsetX, offsetY));
 
@@ -96,8 +98,9 @@ export const Window = ({ title, icon, width = 760, height = 540, offsetX = 0, of
   });
 
   return (
-    <div className="fade" style={{
+    <div className="fade" onMouseDownCapture={onFocus} style={{
       position: 'absolute',
+      zIndex,
       left: rect.x, top: rect.y, width: rect.w, height: rect.h,
       display: 'flex', flexDirection: 'column',
       background: 'rgba(255,255,255,0.95)',

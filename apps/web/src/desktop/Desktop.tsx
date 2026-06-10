@@ -38,6 +38,9 @@ export const Desktop = () => {
 
   const openApp = (id: AppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
   const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
+  // 置顶: 把窗口移到数组末尾(末尾 = 最大 index = 最大 zIndex)。React 按 key 复用实例,
+  // 重排不重挂载, 窗口内部状态与位置(initialRect 仅 mount 算一次)都保留。
+  const focusApp = (id: AppId) => setOpenApps((s) => (s[s.length - 1] === id ? s : [...s.filter((x) => x !== id), id]));
 
   useEffect(() => {
     void (async () => {
@@ -89,7 +92,7 @@ export const Desktop = () => {
         {openApps.map((id, i) => {
           const meta = titles[id];
           return (
-            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} onClose={() => closeApp(id)}>
+            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={i + 1} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
               {renderApp(id, openApp)}
             </Window>
           );
