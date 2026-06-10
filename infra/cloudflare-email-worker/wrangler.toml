@@ -1,0 +1,12 @@
+name = "lingxi-email-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# gateway 公网地址 (prod: https://app-lingxi-prod-gateway.azurewebsites.net; dev: ngrok 隧道)
+# 用 `wrangler deploy --var GATEWAY_URL:https://...` 或在此覆盖
+[vars]
+GATEWAY_URL = "https://app-lingxi-prod-gateway.azurewebsites.net"
+
+# INBOUND_WEBHOOK_SECRET 是机密, 不写这里:
+#   wrangler secret put INBOUND_WEBHOOK_SECRET
+# 值 = gateway 的 POSTMARK_INBOUND_WEBHOOK_SECRET (Basic-Auth pass)
