@@ -71,11 +71,13 @@ export const config = {
 
   cloud: {
     container: process.env['AZURE_STORAGE_CONTAINER'] ?? 'laifu-cloud',
-    blobEndpoint:
+    // 末尾斜杠归一化: env 若误填 ".../" 会拼出 host//container 触发 Azure InvalidUri。
+    blobEndpoint: (
       process.env['AZURE_STORAGE_BLOB_ENDPOINT'] ??
       (process.env['AZURE_STORAGE_ACCOUNT']
         ? `https://${process.env['AZURE_STORAGE_ACCOUNT']}.blob.core.windows.net`
-        : ''),
+        : '')
+    ).replace(/\/+$/, ''),
     // User Delegation Key 自身的 TTL（Azure 上限 7d）；缓存使用方在剩余 < 1h 时刷新。
     udkLifetimeSeconds: parseInt(process.env['AZURE_STORAGE_UDK_LIFETIME_SECONDS'] ?? `${7 * 24 * 3600}`, 10),
     // 写 SAS TTL（每个容器拿一次 SAS 用多久）
