@@ -1,0 +1,16 @@
+name = "lingxi-email-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# GATEWAY_URL = 入站回调的 URL 前缀。Worker 会 POST 到 `${GATEWAY_URL}/api/email/inbound`。
+# 三种配置方式(按场景挑):
+#   1. 本地全量测(wrangler dev,Worker 跑本机):放 .dev.vars → GATEWAY_URL=http://localhost:9000
+#   2. 部署后指向 ngrok(真入站测,Worker 在 CF):wrangler deploy --var GATEWAY_URL:https://xxx.ngrok-free.app
+#   3. 固定环境:直接改下面这行
+[vars]
+GATEWAY_URL = "https://REPLACE-ME.example.com"
+
+# INBOUND_WEBHOOK_SECRET 是机密,不写这里:
+#   - 部署:wrangler secret put INBOUND_WEBHOOK_SECRET
+#   - 本地 wrangler dev:写进 .dev.vars(见 .dev.vars.example)
+# 值 = gateway 的 POSTMARK_INBOUND_WEBHOOK_SECRET(Basic-Auth 的 pass)

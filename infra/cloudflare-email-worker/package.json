@@ -1,0 +1,19 @@
+{
+  "name": "lingxi-email-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Email Worker: 解析入站邮件 → POST 到 gateway /api/email/inbound (MVP 入站, 见 docs/email)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0",
+    "@cloudflare/workers-types": "^4.20250101.0"
+  }
+}

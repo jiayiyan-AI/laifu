@@ -87,8 +87,8 @@ export const config = {
   },
 
   email: {
-    // 'fake' (dev, 不真收发) | 'postmark' (prod)。业务码不分支, 全靠 provider adapter。
-    provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'postmark',
+    // 'fake' (dev) | 'postmark' | 'resend' (MVP: 入站 CF Email Routing, 出站 Resend)。业务码不分支, 全靠 provider adapter。
+    provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'postmark' | 'resend',
     // 助手邮箱地址的域名, 如 'mail.lingxi.xxx'。dev fake 下随便填。
     domain: process.env['EMAIL_DOMAIN'] ?? 'mail.localhost',
     // 发信 From 缺省显示名
@@ -97,6 +97,8 @@ export const config = {
     inboundWebhookSecret: process.env['POSTMARK_INBOUND_WEBHOOK_SECRET'] ?? 'dev-inbound-secret',
     // Postmark 发信 server token (仅 provider=postmark 用)
     postmarkServerToken: process.env['POSTMARK_SERVER_TOKEN'] ?? '',
+    // Resend 发信 API key (仅 provider=resend 用)
+    resendApiKey: process.env['RESEND_API_KEY'] ?? '',
   },
 };
 
