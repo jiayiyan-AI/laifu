@@ -21,12 +21,12 @@ const userRow = (id: string, overrides: Partial<Record<string, unknown>> = {}) =
   ...overrides,
 });
 
-const makeApp = (sb: any) => {
+const makeApp = (usersDao: any) => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
   app.use(buildSessionRoutes({
-    sb,
+    usersDao,
     sessionSecret: SECRET,
     cookieName: COOKIE_NAME,
     ttlHours: 24,
@@ -35,24 +35,21 @@ const makeApp = (sb: any) => {
 };
 
 describe('session-routes', () => {
-  let sb: any;
+  let usersDao: any;
   beforeEach(() => {
-    sb = {
-      from: vi.fn(() => sb),
-      select: vi.fn(() => sb),
-      upsert: vi.fn(() => sb),
-      eq: vi.fn(() => sb),
-      single: vi.fn(),
+    usersDao = {
+      getById: vi.fn(async () => null),
+      getTokenVersion: vi.fn(async () => 0),
+      upsertByProvider: vi.fn(async () => null),
     };
   });
 
   describe('GET /api/auth/me', () => {
     it('returns provider/external_id/email/nickname/avatar_url shape', async () => {
-      sb.single = vi.fn(() => Promise.resolve({
-        data: userRow('u1', { provider: 'google', external_id: '12345', email: 'a@b.com', nickname: 'Alice' }),
-        error: null,
-      }));
-      const res = await request(makeApp(sb))
+      usersDao.getById.mockResolvedValue(
+        userRow('u1', { provider: 'google', external_id: '12345', email: 'a@b.com', nickname: 'Alice' }),
+      );
+      const res = await request(makeApp(usersDao))
         .get('/api/auth/me')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);
@@ -67,13 +64,13 @@ describe('session-routes', () => {
     });
 
     it('401 without cookie', async () => {
-      const res = await request(makeApp(sb)).get('/api/auth/me');
+      const res = await request(makeApp(usersDao)).get('/api/auth/me');
       expect(res.status).toBe(401);
     });
 
     it('401 when user row missing (deleted user with stale cookie)', async () => {
-      sb.single = vi.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }));
-      const res = await request(makeApp(sb))
+      usersDao.getById.mockResolvedValue(null);
+      const res = await request(makeApp(usersDao))
         .get('/api/auth/me')
         .set('Cookie', validCookie('uX'));
       expect(res.status).toBe(401);
@@ -82,10 +79,9 @@ describe('session-routes', () => {
 
   describe('POST /api/auth/logout', () => {
     it('clears cookie + returns {ok:true}', async () => {
-      const res = await request(makeApp(sb)).post('/api/auth/logout');
+      const res = await request(makeApp(usersDao)).post('/api/auth/logout');
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
-      // express sets a clearing cookie header
       expect(res.headers['set-cookie']?.[0]).toMatch(/lingxi_sid=;/);
     });
   });

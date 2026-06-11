@@ -11,10 +11,10 @@ apps/
   gateway/   Express，唯一后端进程。/api/* + OAuth + iLink polling + 每用户 ACA 调度
   web/       Vite + React 前端，prod 由 gateway 同进程 express.static 托管
 packages/
+  db/        @lingxi/db — 共享数据库层 (Drizzle schema + client + 迁移)
   shared/    跨端类型 / 契约 / 工具，gateway+web 共用
 docker/hermes/  Hermes 容器镜像 (Python server.py 包 Hermes CLI，挂 /home/hermes)
 infra/bicep/    Azure 长期资源声明（RG/ACR/Storage/CAE/KV/ASP/AppService + 6 role）
-infra/supabase/migrations/  业务表 schema
 scripts/build-deploy.sh     vite lib mode 把 gateway 打成单文件 + 扁平 node_modules
 ```
 
@@ -43,13 +43,13 @@ scripts/build-deploy.sh     vite lib mode 把 gateway 打成单文件 + 扁平 n
 1. **不写 `NODE_ENV === 'production'` 分支**。差异性行为靠 env 值切，不靠代码分支。
 2. 新 env **同步出现在三处**：`apps/gateway/.env.example` + `apps/gateway/src/config.ts` + `infra/bicep/main.bicep` appSettings（敏感值走 `@Microsoft.KeyVault(...)`）。漏一处必漂移。
 3. `PROVISIONER=local` 走 `provisioning/local.ts` 假进度 + 共享本地 docker `:8080`；`PROVISIONER=azure` 走 `azure.ts` 真建 ACA + File share + binding (~22s)。业务代码不分支。
-4. dev 的 Supabase / Google OAuth / LLM 都用真 cloud dev 项目，**唯独 Hermes 必须本地 docker**（ACA 太贵太慢）。
+4. dev 的 Google OAuth / LLM 都用真 cloud dev 项目，**唯独 Hermes 必须本地 docker**（ACA 太贵太慢）。本地 PG 用 `./scripts/dev-db.sh`（轻量单容器）。
 
 ## 常用命令
 
 ```bash
 pnpm dev              # 同时起 hermes (docker) + gateway :9000 + web :3000
-pnpm dev:check        # 自检 prereq (docker / supabase / .env.local)
+pnpm dev:check        # 自检 prereq (docker / pg / .env.local)
 pnpm build            # 全工程 build
 pnpm --filter @lingxi/shared build   # 可选；build-deploy.sh 现在会自动先 build shared
 ./scripts/build-deploy.sh            # 产出 app-service-deploy/（gateway 单文件 + web-dist + 扁平 node_modules）

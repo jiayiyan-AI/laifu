@@ -103,3 +103,59 @@ export const callHermesChat = async (args: CallArgs): Promise<CallResult> => {
     return { ok: false, status: 0, error: err };
   }
 };
+
+// === Async dispatch (fire-and-forget, 只等 202 ack) ===
+
+interface DispatchArgs {
+  containerUrl: string;
+  userId: string;
+  threadId: string;
+  source: string;
+  sessionId: string;
+  message: string;
+  loopId: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface DispatchResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+}
+
+export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchResult> => {
+  const { containerUrl, userId, threadId, source, sessionId, message, loopId } = args;
+  const fetcher = args.fetchImpl ?? fetch;
+  try {
+    const resp = await fetcher(`${containerUrl}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        session_id: sessionId,
+        source,
+        callback: { loop_id: loopId },
+      }),
+    });
+    log.info({
+      event: 'aca.chat.dispatch',
+      user_id: userId,
+      thread_id: threadId,
+      source,
+      status: resp.status,
+    });
+    if (resp.status === 202) return { ok: true, status: 202 };
+    return { ok: false, status: resp.status, error: `expected 202, got ${resp.status}` };
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    log.error({
+      event: 'aca.chat.dispatch',
+      user_id: userId,
+      thread_id: threadId,
+      source,
+      status: 0,
+      err,
+    });
+    return { ok: false, status: 0, error: err };
+  }
+};

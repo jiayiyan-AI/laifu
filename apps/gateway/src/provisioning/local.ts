@@ -1,6 +1,6 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
-import type { ContainerMapping } from '@lingxi/shared';
+import type { ContainerMappingDao } from '../db/container-mapping-dao.js';
+import type { UsersDao } from '../db/users-dao.js';
 import { signLaifuUserToken } from '../lib/gateway-token.js';
 import { config } from '../config.js';
 import { promises as fs } from 'node:fs';
@@ -24,38 +24,29 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 export interface LocalProvisionArgs {
   userId: string;
-  sb: SupabaseClient;
+  mappingDao: ContainerMappingDao;
+  usersDao: UsersDao;
   cache: ContainerMappingCache;
   localContainerUrl: string;
   stepDelayMs?: number;
-  /** 跟 manager.ts 同名 hook 语义一致: mark ready 前签 LAIFU_USER_TOKEN + restart hermes
-   *  容器。不传则跳。 */
   signTokenAndRestart?: (userId: string, tokenVersion: number) => Promise<void>;
 }
 
 export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise<void> => {
-  const { userId, sb, cache, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
+  const { userId, mappingDao, usersDao, cache, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
   try {
     for (let i = 0; i < STEPS.length - 1; i++) {
       const s = STEPS[i]!;
-      await sb.from('container_mapping')
-        .update({ provisioning_step: s.step, progress_pct: s.pct })
-        .eq('user_id', userId);
-      // 同步刷 cache 让 /api/status 看到中间进度（否则 cache 卡在 0% 直到 ready）
-      const { data: stepRow } = await sb.from('container_mapping')
-        .select('*').eq('user_id', userId).single();
-      if (stepRow) cache.set(stepRow as ContainerMapping);
+      await mappingDao.updateStep(userId, s.step, s.pct);
+      const data = await mappingDao.getByUserId(userId);
+      if (data) cache.set(data);
       if (stepDelayMs > 0) await sleep(stepDelayMs);
     }
 
     const ready = STEPS[5]!;
 
-    // mark ready 前签 LAIFU_USER_TOKEN 到 volume + restart hermes 容器, 让 entrypoint
-    // 拉 /api/me/runtime-config 渲染 config.yaml。以前只在 entitlement enable/disable 才签,
-    // 导致普通 purchase 后 hermes 报 "No inference provider configured"。
     if (signTokenAndRestart) {
-      const { data: u } = await sb.from('users').select('token_version').eq('id', userId).single();
-      const tokenVersion = (u as { token_version: number } | null)?.token_version ?? 0;
+      const tokenVersion = await usersDao.getTokenVersion(userId) ?? 0;
       try {
         await signTokenAndRestart(userId, tokenVersion);
       } catch (err) {
@@ -63,42 +54,22 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
       }
     }
 
-    await sb.from('container_mapping')
-      .update({
-        status: 'ready',
-        container_url: localContainerUrl,
-        provisioning_step: ready.step,
-        progress_pct: ready.pct,
-        ready_at: new Date().toISOString(),
-      })
-      .eq('user_id', userId);
-
-    const { data } = await sb.from('container_mapping').select('*').eq('user_id', userId).single();
-    if (data) cache.set(data as ContainerMapping);
+    await mappingDao.markReady(userId, localContainerUrl, ready.step, ready.pct);
+    const data = await mappingDao.getByUserId(userId);
+    if (data) cache.set(data);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await sb.from('container_mapping')
-      .update({ status: 'failed', error_message: msg })
-      .eq('user_id', userId);
+    await mappingDao.markFailed(userId, msg);
     cache.delete(userId);
     console.error(`[local-provisioning] failed for ${userId}:`, msg);
   }
 };
 
 // Dev mode constants — matching scripts/dev-hermes.sh
-// HOST_VOL is the bind-mount source on the dev box: ${HOME}/.hermes-dev → /home/hermes
 const DEV_HOST_VOL = path.join(homedir(), '.hermes-dev');
 const DEV_TOKEN_PATH = path.join(DEV_HOST_VOL, '.hermes', '.laifu_user_token');
 const DEV_CONTAINER_NAME = 'lingxi-hermes-dev';
 
-/**
- * Write the new LAIFU_USER_TOKEN to the host volume file. The entrypoint reads
- * this file as a fallback when env doesn't have a token (which happens on
- * `docker restart` since restart reuses the original `docker run` env).
- *
- * In production (Azure), provisioning/azure.ts updates the Container App env
- * directly. This local path is dev-only.
- */
 export const signTokenAndInjectLocal = async (
   userId: string,
   tokenVersion: number,
@@ -111,14 +82,6 @@ export const signTokenAndInjectLocal = async (
   console.log(`[provisioning/local] wrote LAIFU_USER_TOKEN to ${DEV_TOKEN_PATH} (version=${tokenVersion})`);
 };
 
-/**
- * Restart the dev hermes container. Reuses the original `docker run` env from
- * dev-hermes.sh (which is fine; the entrypoint will pick up the new token from
- * the host volume file written by signTokenAndInjectLocal).
- *
- * No-op if the container isn't running (warns but doesn't throw — dev may be
- * working on something else and not have hermes up).
- */
 export const restartContainerAppLocal = async (_userId: string): Promise<void> => {
   try {
     const { stdout } = await exec(`docker inspect -f "{{.State.Running}}" ${DEV_CONTAINER_NAME}`);

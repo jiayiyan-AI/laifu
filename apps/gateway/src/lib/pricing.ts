@@ -7,7 +7,8 @@
  * 未知 provider+model → 返回 { in: 0, out: 0, cached: 0 }，仅记 token 不计费，
  * 避免一个没登记的 model 把 chat 链路阻断。log.warn 报警，补登记后新 chat 自动起算。
  */
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Db } from '@lingxi/db';
+import { schema } from '@lingxi/db';
 import { log } from './logger.js';
 
 export interface ModelPrice {
@@ -32,28 +33,33 @@ const key = (provider: string, model: string) => `${provider}:${model}`;
  * 从 pricing_current view 加载全部当前价格到内存。
  * 启动时调一次；admin 调价后可手动调 refresh。
  */
-export const loadPricing = async (sb: SupabaseClient): Promise<void> => {
-  const { data, error } = await sb
-    .from('pricing_current')
-    .select('provider, model, price_in, price_out, price_cached');
+export const loadPricing = async (db: Db): Promise<void> => {
+  try {
+    const rows = await db.select({
+      provider: schema.pricingCurrent.provider,
+      model: schema.pricingCurrent.model,
+      price_in: schema.pricingCurrent.price_in,
+      price_out: schema.pricingCurrent.price_out,
+      price_cached: schema.pricingCurrent.price_cached,
+    }).from(schema.pricingCurrent);
 
-  if (error) {
-    log.warn({ event: 'pricing.load.failed', err: error.message });
-    return; // 保留旧 cache，不清空
+    const next = new Map<string, ModelPrice>();
+    for (const row of rows) {
+      if (!row.provider || !row.model) continue;
+      next.set(key(row.provider, row.model), {
+        provider: row.provider,
+        model: row.model,
+        in: Number(row.price_in),
+        out: Number(row.price_out),
+        cached: Number(row.price_cached),
+      });
+    }
+    cache = next;
+    log.info({ event: 'pricing.loaded', count: cache.size });
+  } catch (err) {
+    log.warn({ event: 'pricing.load.failed', err: err instanceof Error ? err.message : String(err) });
+    // 保留旧 cache，不清空
   }
-
-  const next = new Map<string, ModelPrice>();
-  for (const row of data ?? []) {
-    next.set(key(row.provider, row.model), {
-      provider: row.provider,
-      model: row.model,
-      in: Number(row.price_in),
-      out: Number(row.price_out),
-      cached: Number(row.price_cached),
-    });
-  }
-  cache = next;
-  log.info({ event: 'pricing.loaded', count: cache.size });
 };
 
 /**

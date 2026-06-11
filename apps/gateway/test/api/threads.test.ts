@@ -15,28 +15,17 @@ const validCookie = (userId: string): string => {
 };
 
 describe('threads CRUD', () => {
-  let mockSb: any;
-  let insertedThread: any;
-  let listData: any[];
-  let singleData: any;
-  let updatedRow: any;
-  let thenResult: any;
+  let mockDao: any;
 
   beforeEach(() => {
-    insertedThread = null;
-    listData = [];
-    singleData = null;
-    updatedRow = null;
-    thenResult = { data: null, error: null };
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      insert: vi.fn((row: any) => { insertedThread = row; return mockSb; }),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      order: vi.fn(() => mockSb),
-      update: vi.fn((u: any) => { updatedRow = u; return mockSb; }),
-      single: vi.fn(() => Promise.resolve({ data: singleData ?? insertedThread, error: null })),
-      then: (resolve: any) => resolve(listData.length ? { data: listData, error: null } : thenResult),
+    mockDao = {
+      create: vi.fn(async (row: any) => ({
+        id: row.id, user_id: row.user_id, source: row.source, title: row.title,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived: false,
+      })),
+      listByUser: vi.fn(async () => []),
+      getByIdAndUser: vi.fn(async () => null),
+      archive: vi.fn(async () => {}),
     };
   });
 
@@ -45,7 +34,7 @@ describe('threads CRUD', () => {
     app.use(cookieParser());
     app.use(express.json());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildThreadsRouter(mockSb, mw));
+    app.use(buildThreadsRouter(mockDao, mw));
     return app;
   };
 
@@ -59,7 +48,9 @@ describe('threads CRUD', () => {
     expect(res.body.id).toMatch(/^thr_/);
     expect(res.body.user_id).toBe('u1');
     expect(res.body.source).toBe('web');
-    expect(insertedThread).toMatchObject({ user_id: 'u1', source: 'web', title: 'first chat' });
+    expect(mockDao.create).toHaveBeenCalledWith(expect.objectContaining({
+      user_id: 'u1', source: 'web', title: 'first chat',
+    }));
   });
 
   it('POST /api/threads 401 without session', async () => {
@@ -68,10 +59,10 @@ describe('threads CRUD', () => {
   });
 
   it('GET /api/threads returns list for current user', async () => {
-    listData = [
+    mockDao.listByUser.mockResolvedValue([
       { id: 'thr_1', title: 'A', updated_at: '2026-05-30T10:00:00Z', archived: false },
       { id: 'thr_2', title: 'B', updated_at: '2026-05-30T09:00:00Z', archived: false },
-    ];
+    ]);
     const res = await request(makeApp())
       .get('/api/threads')
       .set('Cookie', validCookie('u1'));
@@ -81,8 +72,7 @@ describe('threads CRUD', () => {
   });
 
   it('GET /api/threads/:id 404 when not owned by current user', async () => {
-    singleData = null;
-    mockSb.single = vi.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }));
+    mockDao.getByIdAndUser.mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/threads/thr_99')
       .set('Cookie', validCookie('u1'));
@@ -90,7 +80,10 @@ describe('threads CRUD', () => {
   });
 
   it('GET /api/threads/:id returns the thread when owned', async () => {
-    singleData = { id: 'thr_1', user_id: 'u1', title: 'A', source: 'web', archived: false, created_at: 'x', updated_at: 'x' };
+    mockDao.getByIdAndUser.mockResolvedValue({
+      id: 'thr_1', user_id: 'u1', title: 'A', source: 'web', archived: false,
+      created_at: 'x', updated_at: 'x',
+    });
     const res = await request(makeApp())
       .get('/api/threads/thr_1')
       .set('Cookie', validCookie('u1'));
@@ -103,6 +96,6 @@ describe('threads CRUD', () => {
       .delete('/api/threads/thr_1')
       .set('Cookie', validCookie('u1'));
     expect(res.status).toBe(200);
-    expect(updatedRow).toMatchObject({ archived: true });
+    expect(mockDao.archive).toHaveBeenCalledWith('thr_1', 'u1');
   });
 });

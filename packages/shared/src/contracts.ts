@@ -5,6 +5,27 @@ export interface ContainerChatRequest {
   message: string;
   session_id: string;          // e.g. "web:thr_abc123" / "wechat:main"
   source: 'web' | 'wechat';
+  /** 带此字段 → 容器走异步 202 模式；不带 → 保留同步模式（向后兼容 + 测试） */
+  callback?: { loop_id: string };
+}
+
+/** 容器异步回调 gateway 的 body — discriminated union */
+export type HermesCallbackPayload =
+  | HermesCallbackHeartbeat
+  | HermesCallbackResult;
+
+export interface HermesCallbackHeartbeat {
+  type: 'heartbeat';
+  loop_id: string;
+}
+
+export interface HermesCallbackResult {
+  type: 'result';
+  loop_id: string;
+  reply: string;
+  exit_code: number;
+  hermes_session_id?: string | null;
+  usage?: ContainerChatUsage;
 }
 
 export interface ContainerChatUsage {
@@ -99,15 +120,37 @@ export interface WebChatRequest {
 }
 
 export interface WebChatResponse {
-  reply: string;
+  user_msg_id: string;
+  loop_id: string;
 }
 
 // 历史消息(浏览器从 gateway 拉);形状跟 ContainerHistoryMessage 一致,
 // 单独起名是为了 Web 端可以单方向加字段(比如本地的 pending 标记)
 export type ThreadMessage = ContainerHistoryMessage;
 
+// === Messages 表 Web 视图 ===
+
+export interface MessageRow {
+  id: string;
+  thread_id: string;
+  role: 'user' | 'assistant';
+  content_type: 'text' | 'json';
+  content: unknown;
+  source: 'web' | 'wechat';
+  created_at: string;
+}
+
+export interface AgentLoopRow {
+  id: string;
+  thread_id: string;
+  message_id: string | null;
+  completion: 'success' | 'fail' | 'limit' | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
 export interface WebThreadMessagesResponse {
-  messages: ThreadMessage[];
+  messages: MessageRow[];
 }
 
 // === 微信 iLink 扫码绑定契约 ===

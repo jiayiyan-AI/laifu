@@ -33,9 +33,15 @@ export const config = {
     // dev 默认是占位值；生产必须显式设。
     gatewaySecret: process.env['GATEWAY_SECRET'] ?? 'dev-only-gateway-secret',
   },
-  supabase: {
-    url: process.env['SUPABASE_URL'] ?? '',
-    serviceRoleKey: process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
+
+  // 数据库直连 (Drizzle + node-postgres)。库切换全靠这里的值，不靠代码分支。见 docs/drizzle.md。
+  //   本地:   postgres://postgres:postgres@localhost:54422/postgres (直连 supabase CLI 的 PG 容器, 绕 Kong)
+  //   云 dev/prod: Supabase 真实库直连串 (direct :5432 / session pooler, 不用 transaction pooler :6543)
+  //   (长期可能迁 Azure DB for PostgreSQL, 届时只改这个 URL, 代码不动)
+  db: {
+    url: process.env['DATABASE_URL'] ?? '',
+    ssl: process.env['DATABASE_SSL'] === 'true',        // Azure PG 强制 TLS; 本地 false
+    poolMax: parseInt(process.env['DATABASE_POOL_MAX'] ?? '10', 10),
   },
   azure: {
     subscriptionId: process.env['AZURE_SUBSCRIPTION_ID'] ?? '',
@@ -104,8 +110,7 @@ export const config = {
 
 // 仅在实际启动 server 时校验，单元测试可跳过
 export const validateConfig = () => {
-  required('SUPABASE_URL');
-  required('SUPABASE_SERVICE_ROLE_KEY');
+  required('DATABASE_URL');
   if (config.provisioner === 'azure') {
     required('AZURE_SUBSCRIPTION_ID');
     required('AZURE_RESOURCE_GROUP');

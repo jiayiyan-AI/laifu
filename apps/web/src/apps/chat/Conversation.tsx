@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
 import { usageAtom } from '../../states/usage.atom.js';
+import type { MessageRow } from '@lingxi/shared';
 
 export interface Message {
   who: 'user' | 'assistant';
@@ -14,29 +15,74 @@ interface Props {
   threadId: string;
 }
 
+const THINKING_TEXTS = [
+  '灵犀正在思考…',
+  '让我想想…',
+  '正在整理思路…',
+  '马上就好…',
+  '还在思考中…',
+];
+
+const rowToMsg = (r: MessageRow): Message => ({
+  who: r.role,
+  text: typeof r.content === 'string' ? r.content : JSON.stringify(r.content ?? ''),
+});
+
 export const Conversation = ({ threadId }: Props) => {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [quotaError, setQuotaError] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const refreshUsage = usageAtom.useChange().refresh;
 
-  // busyRef 让 polling tick 读最新 busy 值,避免依赖变化时重启 interval
-  const busyRef = useRef(false);
-  busyRef.current = busy;
+  const thinkingIdx = useRef(0);
+  const loopCleanup = useRef<(() => void) | null>(null);
 
-  // 挂载时从 gateway 拉历史。父组件用 key={threadId} 强制重挂载,
-  // 所以每次切 thread 都会重跑这里 → Hermes SQLite 是单一真相源。
+  // 连接 loop SSE 并处理事件
+  const connectLoop = useCallback((loopId: string) => {
+    thinkingIdx.current = 0;
+    const cleanup = api.connectLoopStream(loopId, {
+      onHeartbeat: () => {
+        thinkingIdx.current = (thinkingIdx.current + 1) % THINKING_TEXTS.length;
+        const text = THINKING_TEXTS[thinkingIdx.current]!;
+        setMsgs((m) => m.map((x, i) =>
+          i === m.length - 1 && x.pending ? { ...x, text } : x,
+        ));
+      },
+      onDone: (reply) => {
+        setMsgs((m) => m.map((x, i) =>
+          i === m.length - 1 && x.pending ? { who: 'assistant', text: reply } : x,
+        ));
+        setBusy(false);
+        refreshUsage();
+        loopCleanup.current = null;
+      },
+      onFail: (error) => {
+        // 移除 pending 气泡，以横幅方式提示
+        setMsgs((m) => m.filter((x) => !x.pending));
+        setErrorBanner(error);
+        setBusy(false);
+        loopCleanup.current = null;
+      },
+    });
+    loopCleanup.current = cleanup;
+    return cleanup;
+  }, [refreshUsage]);
+
+  // 组件卸载时清理 loop SSE
+  useEffect(() => {
+    return () => { loopCleanup.current?.(); };
+  }, []);
+
+  // 挂载时从 Postgres 拉历史
   useEffect(() => {
     let cancelled = false;
     setLoadingHistory(true);
     api.fetchHistory(threadId)
-      .then((history) => {
+      .then((rows) => {
         if (cancelled) return;
-        setMsgs(history.map((m) => ({
-          who: m.role,
-          text: m.content,
-        })));
+        setMsgs(rows.map(rowToMsg));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -46,59 +92,41 @@ export const Conversation = ({ threadId }: Props) => {
       .finally(() => {
         if (!cancelled) setLoadingHistory(false);
       });
-    return () => { cancelled = true; };
-  }, [threadId]);
-
-  // SSE 通知: gateway 在新消息落 hermes 后 emit 'thread-updated' 事件,
-  // 我们收到就 refetch 一次历史。比轮询及时,省流量。
-  // 跳过 refetch 的条件: busy=true (用户正在发送,本地有乐观 append)。
-  // EventSource 自带断线重连。
-  useEffect(() => {
-    const es = new EventSource(
-      `/api/threads/${encodeURIComponent(threadId)}/stream`,
-      { withCredentials: true },
-    );
-
-    const refetch = async () => {
-      if (busyRef.current) return;
-      try {
-        const history = await api.fetchHistory(threadId);
-        if (busyRef.current) return;
-        setMsgs(history.map((m) => ({ who: m.role, text: m.content })));
-      } catch (err) {
-        console.warn('SSE refetch failed', err);
+    // 恢复状态：页面刷新时若有活跃 loop，重新连接 SSE
+    api.fetchActiveLoop(threadId).then((loop) => {
+      if (cancelled) return;
+      if (loop) {
+        setBusy(true);
+        setMsgs((m) => [...m, { who: 'assistant', text: THINKING_TEXTS[0]!, pending: true }]);
+        connectLoop(loop.id);
       }
+    }).catch(() => { /* ignore */ });
+    return () => {
+      cancelled = true;
+      loopCleanup.current?.();
+      loopCleanup.current = null;
     };
-
-    es.addEventListener('thread-updated', () => { void refetch(); });
-    es.onerror = (e) => {
-      // EventSource 会自动重连; 这里只 log 不主动 close
-      console.warn('SSE error (auto-reconnect)', e);
-    };
-
-    return () => es.close();
-  }, [threadId]);
+  }, [threadId, connectLoop]);
 
   const onSend = async (text: string) => {
-    // 乐观 append。assistant 回复落地后,Hermes 已把这两条 msg 写进 SQLite,
-    // 下次切 thread 重挂载会从 gateway 重拉,数据自洽
-    setMsgs((m) => [...m, { who: 'user', text }, { who: 'assistant', text: '', pending: true }]);
+    setErrorBanner(null);
+    setMsgs((m) => [...m, { who: 'user', text }, { who: 'assistant', text: THINKING_TEXTS[0]!, pending: true }]);
     setBusy(true);
 
     try {
-      const { reply } = await api.sendChat({ thread_id: threadId, message: text });
-      setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: reply, pending: false } : x));
-      refreshUsage();
+      const { loop_id } = await api.sendChat({ thread_id: threadId, message: text });
+      // 连接 per-loop SSE
+      connectLoop(loop_id);
     } catch (err) {
       if (err instanceof api.QuotaError) {
         setQuotaError(true);
-        setMsgs((m) => m.slice(0, -2)); // 撤回乐观 append
+        setMsgs((m) => m.slice(0, -2));
         refreshUsage();
       } else {
         const errMsg = err instanceof Error ? err.message : '请求失败';
-        setMsgs((m) => m.map((x, i) => i === m.length - 1 ? { ...x, text: `[错误] ${errMsg}`, pending: false } : x));
+        setMsgs((m) => m.filter((x) => !x.pending));
+        setErrorBanner(errMsg);
       }
-    } finally {
       setBusy(false);
     }
   };
@@ -123,11 +151,25 @@ export const Conversation = ({ threadId }: Props) => {
               borderTopLeftRadius: m.who === 'user' ? 14 : 4,
               borderTopRightRadius: m.who === 'user' ? 4 : 14,
             }}>
-              {m.text || (m.pending ? <span className="pulse">灵犀正在思考…</span> : '')}
+              {m.text || (m.pending ? <span className="pulse">{THINKING_TEXTS[0]}</span> : '')}
+              {m.pending && m.text && <span className="pulse"> </span>}
             </div>
           </div>
         ))}
       </div>
+      {errorBanner && (
+        <div style={{
+          padding: '12px 18px', background: 'var(--bad-w)', borderTop: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+        }}>
+          <span style={{ color: 'var(--bad)', fontWeight: 600 }}>出错了</span>
+          <span style={{ color: 'var(--text2)' }}>{errorBanner}</span>
+          <button
+            onClick={() => setErrorBanner(null)}
+            style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)', textDecoration: 'underline' }}
+          >关闭</button>
+        </div>
+      )}
       {quotaError && (
         <div style={{
           padding: '12px 18px', background: 'var(--bad-w)', borderTop: '1px solid var(--border)',

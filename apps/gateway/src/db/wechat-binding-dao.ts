@@ -1,10 +1,12 @@
 /**
- * wechat_bindings 表的类型化 DAO。
+ * wechat_bindings 表的类型化 DAO (Drizzle 直连版)。
  *
  * 集中所有 SQL 在这,PollManager / 路由 / handleInbound 都用这个 interface,
- * 不直接拼 supabase 查询 — 便于以后换 ORM/拆 schema/加缓存。
+ * 不直接拼查询 — 便于以后换 ORM/拆 schema/加缓存。
  */
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Db } from '@lingxi/db';
+import { schema } from '@lingxi/db';
+import { eq } from 'drizzle-orm';
 
 export interface WechatBinding {
   id: string;
@@ -50,61 +52,64 @@ interface UpsertArgs {
   base_url: string;
 }
 
-export const makeWechatBindingDao = (sb: SupabaseClient): WechatBindingDao => ({
-  async listActive() {
-    const { data, error } = await sb
-      .from('wechat_bindings')
-      .select('*')
-      .eq('is_active', true);
-    if (error) throw new Error(`listActive failed: ${error.message}`);
-    return (data ?? []) as WechatBinding[];
-  },
-
-  async getByUserId(userId) {
-    const { data, error } = await sb
-      .from('wechat_bindings')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (error) throw new Error(`getByUserId failed: ${error.message}`);
-    return (data as WechatBinding) ?? null;
-  },
-
-  async upsertByUserId(args: UpsertArgs) {
-    // ON CONFLICT(user_id) UPDATE: 同号续期 / 换号都行,is_active 强制设回 true
-    const { data, error } = await sb
-      .from('wechat_bindings')
-      .upsert(
-        { ...args, is_active: true, updates_cursor: null },
-        { onConflict: 'user_id' },
-      )
-      .select('*')
-      .single();
-    if (error || !data) throw new Error(`upsertByUserId failed: ${error?.message}`);
-    return data as WechatBinding;
-  },
-
-  async updateCursor(id, cursor) {
-    const { error } = await sb
-      .from('wechat_bindings')
-      .update({ updates_cursor: cursor })
-      .eq('id', id);
-    if (error) throw new Error(`updateCursor failed: ${error.message}`);
-  },
-
-  async bindThread(id, threadId) {
-    const { error } = await sb
-      .from('wechat_bindings')
-      .update({ thread_id: threadId })
-      .eq('id', id);
-    if (error) throw new Error(`bindThread failed: ${error.message}`);
-  },
-
-  async deactivate(id) {
-    const { error } = await sb
-      .from('wechat_bindings')
-      .update({ is_active: false })
-      .eq('id', id);
-    if (error) throw new Error(`deactivate failed: ${error.message}`);
-  },
+const toBinding = (r: typeof schema.wechatBindings.$inferSelect): WechatBinding => ({
+  id: r.id,
+  user_id: r.user_id,
+  ilink_bot_id: r.ilink_bot_id,
+  bot_token: r.bot_token,
+  base_url: r.base_url,
+  updates_cursor: r.updates_cursor,
+  is_active: r.is_active,
+  thread_id: r.thread_id,
+  bound_at: r.bound_at.toISOString(),
 });
+
+export const makeWechatBindingDao = (db: Db): WechatBindingDao => {
+  const t = schema.wechatBindings;
+  return {
+    async listActive() {
+      const rows = await db.select().from(t).where(eq(t.is_active, true));
+      return rows.map(toBinding);
+    },
+
+    async getByUserId(userId) {
+      const rows = await db.select().from(t).where(eq(t.user_id, userId)).limit(1);
+      return rows[0] ? toBinding(rows[0]) : null;
+    },
+
+    async upsertByUserId(args: UpsertArgs) {
+      const rows = await db.insert(t).values({
+        user_id: args.user_id,
+        ilink_bot_id: args.ilink_bot_id,
+        bot_token: args.bot_token,
+        base_url: args.base_url,
+        is_active: true,
+        updates_cursor: null,
+      }).onConflictDoUpdate({
+        target: t.user_id,
+        set: {
+          ilink_bot_id: args.ilink_bot_id,
+          bot_token: args.bot_token,
+          base_url: args.base_url,
+          is_active: true,
+          updates_cursor: null,
+          bound_at: new Date(),
+        },
+      }).returning();
+      if (!rows[0]) throw new Error('upsertByUserId: returning() empty');
+      return toBinding(rows[0]);
+    },
+
+    async updateCursor(id, cursor) {
+      await db.update(t).set({ updates_cursor: cursor }).where(eq(t.id, id));
+    },
+
+    async bindThread(id, threadId) {
+      await db.update(t).set({ thread_id: threadId }).where(eq(t.id, id));
+    },
+
+    async deactivate(id) {
+      await db.update(t).set({ is_active: false }).where(eq(t.id, id));
+    },
+  };
+};

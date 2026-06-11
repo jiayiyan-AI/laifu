@@ -1,24 +1,24 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerMappingCache } from '../db/cache.js';
-import type { ThreadStreamHub } from '../lib/thread-stream.js';
 import type { UsageDao } from '../db/usage-dao.js';
-import type {
-  ContainerHistoryResponse,
-  WebChatResponse,
-  WebThreadMessagesResponse,
-} from '@lingxi/shared';
-import { callHermesChat } from '../lib/aca-call.js';
+import type { ThreadsDao } from '../db/threads-dao.js';
+import type { MessageDao } from '../db/message-dao.js';
+import type { AgentLoopDao } from '../db/agent-loop-dao.js';
+import type { WebChatResponse, WebThreadMessagesResponse } from '@lingxi/shared';
+import { genId } from '@lingxi/db';
+import { dispatchHermesChat } from '../lib/aca-call.js';
+import { storePendingLoop, subscribeLoop, unsubscribeLoop } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
 
-const SSE_HEARTBEAT_MS = 30_000;
+const SSE_HEARTBEAT_MS = 10_000; // gateway→web 心跳间隔（独立于 ACA→gateway 的 2 分钟心跳）
 
 export const buildChatRouter = (
-  sb: SupabaseClient,
+  threadsDao: ThreadsDao,
   cache: ContainerMappingCache,
   sessionMw: RequestHandler,
-  hub?: ThreadStreamHub,             // 可选: 没传就不挂 SSE 端点 (测试方便)
-  usageDao?: UsageDao,               // 可选: 没传就跳过计量 (测试方便)
+  usageDao?: UsageDao,
+  messageDao?: MessageDao,
+  agentLoopDao?: AgentLoopDao,
 ): RouterType => {
   const r = Router();
 
@@ -30,9 +30,8 @@ export const buildChatRouter = (
     }
 
     // 1. 验证 thread 属于该用户
-    const { data: thread, error: thErr } = await sb
-      .from('threads').select('*').eq('id', thread_id).eq('user_id', userId).single();
-    if (thErr || !thread) return res.status(404).json({ error: 'thread not found' });
+    const thread = await threadsDao.getByIdAndUser(thread_id, userId);
+    if (!thread) return res.status(404).json({ error: 'thread not found' });
 
     // 2. 取该用户的 container url
     const mapping = cache.get(userId);
@@ -40,9 +39,7 @@ export const buildChatRouter = (
       return res.status(503).json({ error: 'assistant not ready' });
     }
 
-    // 2.5 软配额检查: 本月已用金额超免费额度 且 余额 ≤ 0 → 402
-    //     免费额度 = 0 + balance ≤ 0 (默认新用户) 会直接拦截, 需要先走充值脚本
-    //     数据库空/查询失败 不阻断 chat (免得计量表损坏连带业务挂), 只 log.warn
+    // 2.5 软配额检查
     if (usageDao) {
       try {
         const b = await usageDao.getBalance(userId);
@@ -63,110 +60,181 @@ export const buildChatRouter = (
       }
     }
 
-    // 3. 调容器同步 /chat,等结果 (callHermesChat 内部已经打 aca.chat.call 指标)
-    //    session_id 用 thread.source 拼前缀 (web:/wechat:),跟入站方 (inbound-handler)
-    //    保持一致,否则 web 与 wechat 同 thread 在 hermes 里是两条独立对话。
-    const threadSource = (thread as { source: string }).source;
-    const sessionId = `${threadSource}:${thread_id}`;
-    const result = await callHermesChat({
-      containerUrl: mapping.container_url,
-      userId,
-      threadId: thread_id,
-      source: threadSource,
-      sessionId,
-      message,
-    });
-    if (!result.ok || !result.reply) {
-      return res.status(502).json({ error: result.error ?? `container returned ${result.status}` });
-    }
+    // 3. 插入 user 消息 + 创建 agent loop
+    const userMsgId = genId.message;
+    const loopId = genId.agentLoop;
 
-    // 计量: 不阻断 chat, 失败只 log.warn (用户体验 > 单条计量准确性)
-    // 旧镜像没 usage 字段 → result.usage undefined → 跳过
-    if (usageDao && result.usage) {
-      usageDao.recordUsage({
-        userId,
-        threadId: thread_id,
-        source: threadSource as 'web' | 'wechat',
-        usage: result.usage,
-      }).catch((err) => {
-        log.warn({
-          event: 'usage.record.failed',
-          user_id: userId,
-          thread_id: thread_id,
-          err: err instanceof Error ? err.message : String(err),
-        });
+    if (messageDao) {
+      await messageDao.insert({
+        id: userMsgId,
+        thread_id,
+        role: 'user',
+        content_type: 'text',
+        content: message,
+        source: thread.source as 'web' | 'wechat',
       });
     }
 
-    // 通知其它订阅同 thread 的 SSE 客户端 (例如另一个标签页) 该 thread 有更新
-    hub?.emit(thread_id, 'thread-updated', { thread_id });
+    if (agentLoopDao) {
+      await agentLoopDao.create({ id: loopId, thread_id, message_id: userMsgId });
+    }
 
-    const body: WebChatResponse = { reply: result.reply };
+    // 4. 异步 dispatch（只等 202 ack）
+    const sessionId = `${thread.source}:${thread_id}`;
+    storePendingLoop({ loopId, threadId: thread_id, userId, source: thread.source as 'web' | 'wechat' });
+    const dispatch = await dispatchHermesChat({
+      containerUrl: mapping.container_url,
+      userId,
+      threadId: thread_id,
+      source: thread.source,
+      sessionId,
+      message,
+      loopId,
+    });
+
+    if (!dispatch.ok) {
+      if (agentLoopDao) {
+        await agentLoopDao.complete(loopId, 'fail');
+      }
+      return res.status(502).json({ error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
+    }
+
+    const body: WebChatResponse = { user_msg_id: userMsgId, loop_id: loopId };
     res.json(body);
   });
 
-  // 读取 thread 历史消息 (从 Hermes SQLite 经容器 /history 端点取)
-  // 路由放这里而非 threads.ts,因为依赖 cache + container 转发,跟 POST /api/chat 同形
+  // 读取 thread 历史消息（查 Postgres）
   r.get('/api/threads/:id/messages', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
     const threadId = req.params['id'] as string;
 
-    const { data: thread, error: thErr } = await sb
-      .from('threads').select('*').eq('id', threadId).eq('user_id', userId).single();
-    if (thErr || !thread) return res.status(404).json({ error: 'thread not found' });
+    const thread = await threadsDao.getByIdAndUser(threadId, userId);
+    if (!thread) return res.status(404).json({ error: 'thread not found' });
 
-    const mapping = cache.get(userId);
-    if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
-      return res.status(503).json({ error: 'assistant not ready' });
+    if (messageDao) {
+      const messages = await messageDao.listByThread(threadId);
+      const body: WebThreadMessagesResponse = { messages };
+      return res.json(body);
     }
 
-    // session_id 跟写入侧拼一致 (POST /api/chat 和 inbound-handler 都用 source 前缀)
-    const threadSource = (thread as { source: string }).source;
-    const sessionId = `${threadSource}:${threadId}`;
-    const url = `${mapping.container_url}/history?session_id=${encodeURIComponent(sessionId)}`;
-    const cResp = await fetch(url);
-    if (!cResp.ok) {
-      return res.status(502).json({ error: `container returned ${cResp.status}` });
-    }
-    const cBody = await cResp.json() as ContainerHistoryResponse;
-    const body: WebThreadMessagesResponse = { messages: cBody.messages ?? [] };
-    res.json(body);
+    // fallback: 无 messageDao 时返回空（不应在生产中发生）
+    res.json({ messages: [] } satisfies WebThreadMessagesResponse);
   });
 
-  // SSE 通知: 新消息到 (微信入站 / web 发送 / 其它来源) 时通知前端 refetch
-  // 帧形 event: thread-updated\ndata: {"thread_id":"..."}\n\n
-  if (hub) {
-    r.get('/api/threads/:id/stream', sessionMw, async (req: Request, res: Response) => {
-      const userId = req.session!.user_id;
-      const threadId = req.params['id'] as string;
+  // 查询 thread 的活跃 loop（前端轮询用）
+  r.get('/api/threads/:id/loop', sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+    const threadId = req.params['id'] as string;
 
-      // 权限校验
-      const { data: thread } = await sb
-        .from('threads').select('id').eq('id', threadId).eq('user_id', userId).maybeSingle();
-      if (!thread) return res.status(404).end();
+    const thread = await threadsDao.getByIdAndUser(threadId, userId);
+    if (!thread) return res.status(404).json({ error: 'thread not found' });
 
+    if (agentLoopDao) {
+      const loop = await agentLoopDao.getActive(threadId);
+      return res.json({ loop });
+    }
+
+    res.json({ loop: null });
+  });
+
+  // Per-loop SSE: 前端发消息后订阅，接收心跳和最终结果
+  r.get('/api/loops/:loopId/stream', sessionMw, async (req: Request, res: Response) => {
+    const userId = req.session!.user_id;
+    const loopId = req.params['loopId'] as string;
+
+    if (!agentLoopDao) return res.status(500).end();
+
+    // 校验 loop 归属
+    const loop = await agentLoopDao.getById(loopId);
+    if (!loop) return res.status(404).end();
+    const thread = await threadsDao.getByIdAndUser(loop.thread_id, userId);
+    if (!thread) return res.status(403).end();
+
+    // 若 loop 已完成，直接返回终态事件
+    if (loop.completed_at) {
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
-      // nginx/反代防缓冲
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
+      if (loop.completion === 'success' || loop.completion === 'limit') {
+        // 拉最后一条 assistant 消息作为 reply
+        const msgs = messageDao ? await messageDao.listByThread(loop.thread_id) : [];
+        const last = msgs.filter(m => m.role === 'assistant').pop();
+        const reply = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : '';
+        res.write(`event: done\ndata: ${JSON.stringify({ reply, completion: loop.completion })}\n\n`);
+      } else {
+        res.write(`event: fail\ndata: ${JSON.stringify({ error: 'agent 执行失败' })}\n\n`);
+      }
+      res.end();
+      return;
+    }
 
-      // 立即 flush 一帧让客户端确认连上
-      res.write(': connected\n\n');
+    // loop 进行中 → 设置 SSE 并订阅
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(': connected\n\n');
 
-      const unsub = hub.subscribe(threadId, res);
-      const heartbeat = setInterval(() => {
-        try { res.write(': heartbeat\n\n'); } catch { /* socket dead, close 会兜底 */ }
-      }, SSE_HEARTBEAT_MS);
+    const stream = subscribeLoop(loopId);
+    let closed = false;
 
-      req.on('close', () => {
-        clearInterval(heartbeat);
-        unsub();
-        res.end();
-      });
+    // gateway 自主向前端推心跳（10s），让前端有持续反馈
+    const heartbeatTimer = setInterval(() => {
+      if (closed) return;
+      try { res.write(`event: heartbeat\ndata: {}\n\n`); } catch { /* socket dead */ }
+    }, SSE_HEARTBEAT_MS);
+
+    req.on('close', () => {
+      closed = true;
+      clearInterval(heartbeatTimer);
+      unsubscribeLoop(loopId, stream);
+      res.end();
     });
-  }
+
+    // 消费事件流（只关注终态事件，心跳由 timer 自行推送）
+    let gotTerminal = false;
+    for await (const event of stream) {
+      if (closed) break;
+      try {
+        if (event.type === 'done') {
+          res.write(`event: done\ndata: ${JSON.stringify({ reply: event.reply, completion: event.completion })}\n\n`);
+          gotTerminal = true;
+          break;
+        } else if (event.type === 'fail') {
+          res.write(`event: fail\ndata: ${JSON.stringify({ error: event.error })}\n\n`);
+          gotTerminal = true;
+          break;
+        }
+        // heartbeat from container → 忽略，gateway 自己的 timer 已覆盖
+      } catch {
+        break;
+      }
+    }
+
+    // 竞态 fallback：for-await 立即结束（stream 订阅时 ctx 已不在），重查 DB
+    if (!gotTerminal && !closed) {
+      const freshLoop = await agentLoopDao!.getById(loopId);
+      if (freshLoop?.completed_at) {
+        if (freshLoop.completion === 'success' || freshLoop.completion === 'limit') {
+          const msgs = messageDao ? await messageDao.listByThread(freshLoop.thread_id) : [];
+          const last = msgs.filter(m => m.role === 'assistant').pop();
+          const reply = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : '';
+          res.write(`event: done\ndata: ${JSON.stringify({ reply, completion: freshLoop.completion })}\n\n`);
+        } else {
+          res.write(`event: fail\ndata: ${JSON.stringify({ error: 'agent 执行失败' })}\n\n`);
+        }
+      } else {
+        // 真正的异常：既没 ctx 也没 DB 完成，发 fail
+        res.write(`event: fail\ndata: ${JSON.stringify({ error: '连接中断，请重试' })}\n\n`);
+      }
+    }
+
+    clearInterval(heartbeatTimer);
+    if (!closed) res.end();
+  });
 
   return r;
 };

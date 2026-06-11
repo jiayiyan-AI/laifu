@@ -30,15 +30,38 @@ import json
 import os
 import re
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Lock
+from threading import Lock, Thread, Event
 from urllib.parse import urlparse, parse_qs
+import urllib.request
+import urllib.error
 
 HERMES_BIN = os.environ.get("HERMES_BIN", "hermes")
 HERMES_TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "300"))  # 秒
 HERMES_PROVIDER = os.environ.get("HERMES_PROVIDER", "unknown")  # dashscope / anthropic / ...
 DEFAULT_SESSION = os.environ.get("HERMES_DEFAULT_SESSION", "main")
 DEFAULT_SOURCE = os.environ.get("HERMES_DEFAULT_SOURCE", "web")
+
+# 异步回调配置
+GATEWAY_BASE_URL = os.environ.get("GATEWAY_BASE_URL", "")
+
+def _read_laifu_token() -> str:
+    """先读 env, 再 fallback 文件 (与 bootstrap readToken 逻辑一致)."""
+    from_env = os.environ.get("LAIFU_USER_TOKEN", "").strip()
+    if from_env:
+        return from_env
+    token_file = os.path.expanduser("~/.hermes/.laifu_user_token")
+    try:
+        with open(token_file) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+LAIFU_USER_TOKEN = _read_laifu_token()
+CALLBACK_MAX_RETRIES = 3
+CALLBACK_BACKOFF = [2, 8, 30]  # 秒
+HEARTBEAT_INTERVAL = 120  # 秒，每 2 分钟发一次心跳
 
 # 持久化在用户 home 下,跟用户数据一起活
 SESSION_MAP_FILE = os.path.expanduser("~/.hermes/_gateway_session_map.json")
@@ -358,7 +381,20 @@ class Handler(BaseHTTPRequestHandler):
 
         session_id = (body.get("session_id") or DEFAULT_SESSION).strip()
         source = (body.get("source") or DEFAULT_SOURCE).strip()
+        callback = body.get("callback")
 
+        # 异步模式: 带 callback 字段时立即 202, 后台线程跑 hermes + 回调
+        if callback and isinstance(callback, dict) and callback.get("loop_id"):
+            loop_id = callback["loop_id"]
+            self._json(202, {"accepted": True})
+            Thread(
+                target=_async_chat_and_callback,
+                args=(message, session_id, source, loop_id),
+                daemon=True,
+            ).start()
+            return
+
+        # 同步模式 (向后兼容)
         try:
             stdout, stderr, code, resolved, usage = call_hermes(message, session_id, source)
         except subprocess.TimeoutExpired:
@@ -382,6 +418,76 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):  # noqa: A002
         print(f"[server] {self.address_string()} - {format % args}", flush=True)
+
+
+def _async_chat_and_callback(message: str, session_id: str, source: str, loop_id: str) -> None:
+    """后台线程: 跑 hermes（并行发心跳）然后回调 gateway。"""
+    # 启动心跳线程
+    stop_heartbeat = Event()
+
+    def heartbeat_loop():
+        while not stop_heartbeat.wait(HEARTBEAT_INTERVAL):
+            _post_callback({"type": "heartbeat", "loop_id": loop_id})
+
+    hb_thread = Thread(target=heartbeat_loop, daemon=True)
+    hb_thread.start()
+
+    try:
+        stdout, stderr, code, resolved, usage = call_hermes(message, session_id, source)
+    except subprocess.TimeoutExpired:
+        stdout, stderr, code, resolved, usage = "", "hermes timeout", 1, None, {}
+    except FileNotFoundError:
+        stdout, stderr, code, resolved, usage = "", "hermes binary not found", 1, None, {}
+    except Exception as e:  # noqa: BLE001
+        stdout, stderr, code, resolved, usage = "", str(e), 1, None, {}
+    finally:
+        stop_heartbeat.set()
+
+    reply = _clean_reply(stdout) or stderr.strip()
+    if usage is not None:
+        usage["provider"] = HERMES_PROVIDER
+
+    payload = {
+        "type": "result",
+        "loop_id": loop_id,
+        "reply": reply,
+        "exit_code": code,
+        "hermes_session_id": resolved,
+        "usage": usage,
+    }
+
+    _post_callback(payload)
+
+
+def _post_callback(payload: dict) -> None:
+    """POST 回调到 gateway, 带重试。"""
+    if not GATEWAY_BASE_URL or not LAIFU_USER_TOKEN:
+        print("[server] callback skipped: GATEWAY_BASE_URL or LAIFU_USER_TOKEN not set", flush=True)
+        return
+
+    url = f"{GATEWAY_BASE_URL.rstrip('/')}/internal/hermes-callback"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": f"Bearer {LAIFU_USER_TOKEN}",
+    }
+
+    for attempt in range(CALLBACK_MAX_RETRIES):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status < 300:
+                    print(f"[server] callback ok (attempt {attempt+1})", flush=True)
+                    return
+                print(f"[server] callback status {resp.status} (attempt {attempt+1})", flush=True)
+        except (urllib.error.URLError, OSError) as e:
+            print(f"[server] callback failed (attempt {attempt+1}): {e}", flush=True)
+
+        if attempt < CALLBACK_MAX_RETRIES - 1:
+            backoff = CALLBACK_BACKOFF[attempt] if attempt < len(CALLBACK_BACKOFF) else 30
+            time.sleep(backoff)
+
+    print(f"[server] callback exhausted all {CALLBACK_MAX_RETRIES} retries", flush=True)
 
 
 def main():

@@ -73,7 +73,7 @@ ACR_NAME=<acr-name> IMAGE_TAG=v1.2.0 ./build-and-push.sh
 
 **工具**:`scripts/build-deploy.sh` 打包 → `az webapp deploy --type zip` (Kudu Zip Deploy) 推到 App Service。
 
-**为什么是这条路**:App Service 的 Oryx 后处理对 pnpm monorepo 不友好 (会把 `.pnpm/` 误判压缩, 导致依赖丢失)。`build-deploy.sh` 用 vite lib mode 把 gateway TS + `@lingxi/shared` 一起打包成单文件, 再就地 `npm install --omit=dev` 产出扁平 `node_modules`, 然后整目录 zip 上去——工作区协议、symlink、构建顺序问题在打包阶段就消解掉了, App Service 拿到的是普通 Node 应用结构, 不再触发 Oryx 的 monorepo 误判。
+**构建策略**:`build-deploy.sh` 用 vite lib mode 把 gateway TS + `@lingxi/*` workspace 包一起打包成单文件 `index.mjs`, 产出目录只含 `package.json` + `package-lock.json`（精确版本, 无 workspace:* 协议）+ 静态资源。zip 上传后 App Service Oryx 在 Linux 环境下自动 `npm install`——保证 native 依赖与运行平台一致, 无跨平台问题。
 
 **部署分两阶段**: build (产物) 和 deploy (推到 Azure)。两者解耦——build 是确定性的纯本地动作, 可以反复跑、本地 smoke test、对比产物; deploy 是有副作用的 Azure 操作, 需要明确意图触发。
 
@@ -90,7 +90,8 @@ ACR_NAME=<acr-name> IMAGE_TAG=v1.2.0 ./build-and-push.sh
 #        index.mjs / index.mjs.map     ← gateway 单文件 (~52KB)
 #        web-dist/                     ← 前端静态资源
 #        package.json                  ← 从 pnpm-lock 取精确版本, 无 workspace:* 协议, 无 devDeps
-#   4. cd app-service-deploy && npm install --omit=dev   ← 产扁平 node_modules
+#        package-lock.json             ← 供云端 Oryx npm install 用
+#   (不在本地装 node_modules — 云端 Oryx 自动 install, 保证 Linux 兼容)
 ```
 
 可选本地 smoke test (用真 env, 真起来):
@@ -110,7 +111,7 @@ az webapp deploy \
 curl https://app-lingxi-${ENV}-gateway.azurewebsites.net/healthz
 ```
 
-**App Service 设置**:Linux Node 22, Always On, WebSocket on, HTTPS only。全套 env 由 Bicep 声明 (敏感值走 Key Vault reference)。
+**App Service 设置**:Linux Node 22, Always On, WebSocket on, HTTPS only, `SCM_DO_BUILD_DURING_DEPLOYMENT=true` (云端 Oryx 自动 npm install)。全套 env 由 Bicep 声明 (敏感值走 Key Vault reference)。
 
 **何时改**:日常业务代码变更。
 
@@ -184,12 +185,12 @@ flowchart TB
 
     subgraph External["🟡 Azure 外的依赖"]
         direction LR
-        SUPA["🗄️ Supabase<br/>Postgres + RLS<br/><i>users / threads / container_mapping</i>"]
+        SUPA["🗄️ Supabase Postgres<br/>(Drizzle ORM 直连)<br/><i>users / threads / messages / agent_loops</i>"]
         GOOG["🔑 Google OAuth<br/><i>登录身份提供方</i>"]
         DASH["🤖 DashScope<br/><i>阿里百炼 qwen-plus</i>"]
     end
 
-    APP -.HTTPS.-> SUPA
+    APP -.Drizzle 直连.-> SUPA
     APP -.OAuth.-> GOOG
     ACA -.LLM 调用.-> DASH
 
@@ -219,7 +220,7 @@ flowchart TB
 | **Storage Account · Premium FileStorage (NFS)** | `stnfslingxidev` | 专门给 Hermes home 用。`kind=FileStorage` + `Premium_LRS`, 禁 HTTPS-only / 禁 account key, 鉴权完全靠 VNet ACL | 否 (共享, 内部一个 share + subPath 分用户) |
 | **VNet + subnet** | `vnet-lingxi-dev` / `cae-subnet` (`10.20.0.0/23`) | CAE 专用子网, delegate 给 `Microsoft.App/environments`, Service Endpoint 给 `Microsoft.Storage`。NFS account 的 networkAcls 只放行这个子网。**创建时绑定不可改** | 否 (共享) |
 | **Container Apps Environment** | `cae-lingxi-dev` | 每用户 ACA 的运行环境, `infrastructureSubnetId` 绑上面那个子网, 接 Log Analytics | 否 (共享, 内部按用户分 ACA) |
-| **Key Vault** | `kv-lingxi-dev` | 8 个 secret: session / gateway / supabase-url / supabase-service-role-key / google-id / google-secret / anthropic / dashscope。RBAC 模式, 7 天 soft delete | 否 (共享) |
+| **Key Vault** | `kv-lingxi-dev` | secret: session / gateway / database-url / google-id / google-secret / hermes-api-key / dashscope-api-key 等。RBAC 模式, 7 天 soft delete | 否 (共享) |
 | **App Service Plan** | `asp-lingxi-dev` | Linux B1, 跑 App Service 的计算资源 | 否 (共享) |
 | **App Service** | `app-lingxi-dev-gateway` | Gateway + Web 同进程跑这里, system identity 持有创资源所需的全部 role | 否 (单实例) |
 | **Role Assignments** (8) | — | 给 App Service identity 授权: ① KV Secrets User; ② Storage Account Contributor × 2 (云盘 account + NFS account 各一份, 控制面建 share); ③ **Storage Blob Data Owner (数据面签 User Delegation Key, 云盘必需)**; ④ CAE Contributor; ⑤ RG Contributor (建每用户 ACA); ⑥ ACR Pull。另有条件部署的 KV Secrets Officer 授给部署者本人 | 否 |
@@ -234,7 +235,7 @@ flowchart TB
 | **NFS File Share** | `hermes-shared` (100 GiB) | 所有用户的 Hermes home 数据 (session 历史 / config / pip / npm 包) 都放这里, 各自一个 subPath 子目录, 容器内看不到兄弟用户 | **是, 全局唯一** |
 | **CAE Storage Binding** | `hermes-shared-binding` | 把 `hermes-shared` 注册到 CAE, ACA 才能挂载。所有用户 ACA 都引用这一个 binding, 通过 `volumeMount.subPath` 区分 | **是, 全局唯一** |
 
-每用户实例的 URL: `https://hermes-{userShort}.{caeDomain}.azurecontainerapps.io`, 写在 supabase `container_mapping` 表里供 gateway 路由消息时查。
+每用户实例的 URL: `https://hermes-{userShort}.{caeDomain}.azurecontainerapps.io`, 写在 Postgres `container_mapping` 表里供 gateway 路由消息时查。
 
 > **为什么共享 share + subPath**: Premium FileStorage 每个 share 最小配额 100 GiB ≈ $16/月。per-user 一个 share 等于每个用户 $16 起跳; 共享 share + subPath 让总成本固定 ~$16/月不随用户数涨。详见 [nfs.md](./nfs.md) §十。
 >
@@ -258,7 +259,7 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 
 | 资源 | 角色 | 凭据存放 |
 |---|---|---|
-| **Supabase** | Postgres + RLS, 存 users / threads / container_mapping / wechat_binding 等业务数据 | KV: `supabase-url` + `supabase-service-role-key` |
+| **Supabase Postgres** | Drizzle ORM 直连, 存 users / threads / messages / agent_loops / container_mapping / wechat_binding 等业务数据 | KV: `database-url` |
 | **Google OAuth** | 登录身份提供方, 唯一启用的 OAuth provider | KV: `google-client-id` + `google-client-secret` |
 | **DashScope (阿里百炼)** | LLM provider, hermes 容器内通过 OpenAI 兼容端点调 qwen-plus | KV: `dashscope-api-key`, 通过 ACA env 注入 |
 
@@ -270,7 +271,7 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 | 加/改 KV secret | az CLI | `az keyvault secret set --vault-name kv-lingxi-{env} --name X --value Y` |
 | 推新 hermes 镜像 | ACR Build | `docker/hermes/build-and-push.sh` |
 | 发新 gateway+web 代码 | CI 或手动 | 推 main 或 `./scripts/build-deploy.sh` + `az webapp deploy` |
-| 清理失败用户残留 | az CLI + supabase REST | 见 `docs/deployment-azure-first-run.md` 末尾或 catchup.md |
+| 清理失败用户残留 | az CLI + psql | 见 `docs/deployment-azure-first-run.md` 末尾或 catchup.md |
 | 看 App Service 日志 | Log Analytics | Azure Portal → `la-lingxi-{env}` → Logs (KQL) |
 | 看用户实例日志 | Log Analytics | 同上, 表名 `ContainerAppConsoleLogs_CL` |
 
