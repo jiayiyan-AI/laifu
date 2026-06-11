@@ -29,8 +29,9 @@ echo "[build-deploy] 1/5 清理 $OUT/"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-echo "[build-deploy] 2/5 build shared (gateway bundle 内联依赖) + vite build gateway"
+echo "[build-deploy] 2/5 build shared + db (gateway bundle 内联依赖) + vite build gateway"
 pnpm --filter @lingxi/shared build >/dev/null
+pnpm --filter @lingxi/db build >/dev/null
 pnpm --filter @lingxi/gateway build >/dev/null
 
 echo "[build-deploy] 3/5 vite build web"
@@ -41,6 +42,7 @@ echo "[build-deploy] 4/5 拼装产物"
 # 整目录平铺进 $OUT。其中 prompts/ 由 vite copyPromptsPlugin 复制进 dist。
 cp -R apps/gateway/dist/. "$OUT/"
 cp -R apps/web/dist "$OUT/web-dist"
+
 
 # 生成 deploy package.json: 只留运行时 deps, 用 pnpm-lock 的精确版本
 node scripts/gen-deploy-pkg.mjs
@@ -54,7 +56,7 @@ cd ..
 [ -f "$OUT/index.mjs" ]              || { echo "❌ index.mjs 缺失";                exit 1; }
 [ -f "$OUT/web-dist/index.html" ]    || { echo "❌ web-dist/index.html 缺失";       exit 1; }
 [ -d "$OUT/node_modules/express" ]   || { echo "❌ express 没装";                  exit 1; }
-[ -d "$OUT/node_modules/@azure" ]    || { echo "❌ @azure SDK 没装";               exit 1; }
+[ -d "$OUT/node_modules/drizzle-orm" ] || { echo "❌ drizzle-orm 没装";            exit 1; }
 
 echo ""
 echo "[build-deploy] DONE → $OUT/"

@@ -24,33 +24,18 @@ const makeMockProvider = (): OAuthProvider => ({
   })),
 });
 
-const makeSb = (existing: any = null) => {
-  const sb: any = {
-    from: vi.fn(() => sb),
-    upsert: vi.fn(() => sb),
-    select: vi.fn(() => sb),
-    eq: vi.fn(() => sb),
-    single: vi.fn(() => Promise.resolve({
-      data: existing ?? {
-        id: 'u_alice',
-        provider: 'mock',
-        external_id: 'ext_123',
-        email: 'alice@example.com',
-        nickname: 'Alice',
-        avatar_url: 'https://x/p.png',
-      },
-      error: null,
-    })),
-  };
-  return sb;
-};
+const makeUsersDao = () => ({
+  getById: vi.fn(async () => null),
+  getTokenVersion: vi.fn(async () => 0),
+  upsertByProvider: vi.fn(async () => ({ id: 'u_alice' })),
+});
 
-const makeApp = (providers: Record<string, OAuthProvider>, sb: any = makeSb()) => {
+const makeApp = (providers: Record<string, OAuthProvider>, usersDao: any = makeUsersDao()) => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
   app.use(buildOAuthRouter({
-    sb,
+    usersDao,
     providers,
     sessionSecret: SECRET,
     cookieName: COOKIE_NAME,
@@ -58,7 +43,7 @@ const makeApp = (providers: Record<string, OAuthProvider>, sb: any = makeSb()) =
     publicBaseUrl: PUBLIC_BASE,
     frontendBaseUrl: FRONTEND_BASE,
   }));
-  return { app, sb };
+  return { app, usersDao };
 };
 
 describe('oauth-router', () => {
@@ -73,13 +58,10 @@ describe('oauth-router', () => {
 
       expect(res.status).toBe(302);
       expect(res.headers['set-cookie']?.[0]).toMatch(new RegExp(`${STATE_COOKIE}=[a-f0-9]+`));
-      // state captured into the redirect URL
       const loc = res.headers['location']!;
       expect(loc).toContain('mock.example/authorize');
       expect(loc).toContain('state=');
-      // redirect_uri must be /api/auth/<provider>/callback under publicBaseUrl
       expect(loc).toContain(encodeURIComponent(`${PUBLIC_BASE}/api/auth/mock/callback`));
-      // buildAuthUrl received both
       const call = (provider.buildAuthUrl as any).mock.calls[0];
       expect(call[1]).toBe(`${PUBLIC_BASE}/api/auth/mock/callback`);
     });
@@ -94,9 +76,8 @@ describe('oauth-router', () => {
   describe('GET /api/auth/:provider/callback', () => {
     it('happy path: exchange → fetch userinfo → upsert user → session cookie → 302 /desktop', async () => {
       const provider = makeMockProvider();
-      const { app, sb } = makeApp({ mock: provider });
+      const { app, usersDao } = makeApp({ mock: provider });
 
-      // simulate state cookie set by /start
       const state = 'STATE_ABC';
       const res = await request(app)
         .get('/api/auth/mock/callback')
@@ -107,19 +88,14 @@ describe('oauth-router', () => {
       expect(res.headers['location']).toBe(`${FRONTEND_BASE}/desktop`);
       expect(provider.exchangeCode).toHaveBeenCalledWith('the_code', `${PUBLIC_BASE}/api/auth/mock/callback`);
       expect(provider.fetchUserinfo).toHaveBeenCalledWith('mock-token');
-      // upsert call shape
-      expect(sb.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: 'mock',
-          external_id: 'ext_123',
-          email: 'alice@example.com',
-        }),
-        { onConflict: 'provider,external_id' },
-      );
+      expect(usersDao.upsertByProvider).toHaveBeenCalledWith('mock', expect.objectContaining({
+        external_id: 'ext_123',
+        email: 'alice@example.com',
+      }));
       // session cookie set
-      expect(res.headers['set-cookie']?.some((c) => c.startsWith(`${COOKIE_NAME}=`))).toBe(true);
+      expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(true);
       // state cookie cleared
-      expect(res.headers['set-cookie']?.some((c) => c.startsWith(`${STATE_COOKIE}=;`))).toBe(true);
+      expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${STATE_COOKIE}=;`))).toBe(true);
     });
 
     it('400 on state CSRF mismatch', async () => {

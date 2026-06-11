@@ -2,62 +2,48 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { recoverProvisioning } from '../../src/provisioning/recovery.js';
 
 describe('recoverProvisioning', () => {
-  let mockSb: any;
-  let updates: any[];
+  let mockMappingDao: any;
   let mockAzure: any;
-  let selectResult: any;
 
   beforeEach(() => {
-    updates = [];
-    selectResult = { data: [], error: null };
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      update: vi.fn((u: any) => { updates.push(u); return mockSb; }),
-      then: (resolve: any) => resolve(selectResult),
+    mockMappingDao = {
+      insert: vi.fn(async () => {}),
+      getByUserId: vi.fn(async () => null),
+      listByStatus: vi.fn(async () => []),
+      updateStep: vi.fn(async () => {}),
+      markReady: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
     };
     mockAzure = { getContainerAppState: vi.fn() };
   });
 
   it('Succeeded → updates status=ready with fqdn', async () => {
-    selectResult = {
-      data: [{ user_id: 'u1', container_name: 'hermes-u1' }],
-      error: null,
-    };
+    mockMappingDao.listByStatus.mockResolvedValue([{ user_id: 'u1', container_name: 'hermes-u1' }]);
     mockAzure.getContainerAppState.mockResolvedValue({
       state: 'Succeeded',
       fqdn: 'https://hermes-u1.example.com',
     });
 
-    await recoverProvisioning(mockSb, mockAzure);
+    await recoverProvisioning(mockMappingDao, mockAzure);
 
-    expect(updates.some((u) => u.status === 'ready' && u.container_url === 'https://hermes-u1.example.com')).toBe(true);
+    expect(mockMappingDao.markReady).toHaveBeenCalledWith('u1', 'https://hermes-u1.example.com', '灵犀助理上岗完成', 100);
   });
 
   it('Failed → updates status=failed', async () => {
-    selectResult = {
-      data: [{ user_id: 'u1', container_name: 'hermes-u1' }],
-      error: null,
-    };
+    mockMappingDao.listByStatus.mockResolvedValue([{ user_id: 'u1', container_name: 'hermes-u1' }]);
     mockAzure.getContainerAppState.mockResolvedValue({ state: 'Failed', fqdn: null });
 
-    await recoverProvisioning(mockSb, mockAzure);
+    await recoverProvisioning(mockMappingDao, mockAzure);
 
-    expect(updates.some((u) => u.status === 'failed')).toBe(true);
+    expect(mockMappingDao.markFailed).toHaveBeenCalledWith('u1', 'Azure state: Failed');
   });
 
   it('not found → updates status=failed with error', async () => {
-    selectResult = {
-      data: [{ user_id: 'u1', container_name: 'hermes-u1' }],
-      error: null,
-    };
+    mockMappingDao.listByStatus.mockResolvedValue([{ user_id: 'u1', container_name: 'hermes-u1' }]);
     mockAzure.getContainerAppState.mockRejectedValue(new Error('ResourceNotFound'));
 
-    await recoverProvisioning(mockSb, mockAzure);
+    await recoverProvisioning(mockMappingDao, mockAzure);
 
-    const failed = updates.find((u) => u.status === 'failed');
-    expect(failed).toBeDefined();
-    expect(failed.error_message).toContain('ResourceNotFound');
+    expect(mockMappingDao.markFailed).toHaveBeenCalledWith('u1', 'ResourceNotFound');
   });
 });

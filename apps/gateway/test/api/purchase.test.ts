@@ -11,23 +11,23 @@ const SECRET = 'test-secret-do-not-use-in-prod-123456';
 const COOKIE_NAME = 'lingxi_sid';
 
 describe('POST /api/purchase', () => {
-  let mockSb: any;
+  let mockMappingDao: any;
+  let mockDb: any;
   let cache: ContainerMappingCache;
-  let inserted: any;
-  let thenResult: any;
 
   beforeEach(() => {
-    inserted = null;
-    thenResult = { data: null, error: null };
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      insert: vi.fn((row: any) => { inserted = row; return mockSb; }),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      single: vi.fn(() => Promise.resolve({ data: inserted, error: null })),
-      then: (resolve: any) => resolve(thenResult),
+    let inserted: any = null;
+    mockMappingDao = {
+      insert: vi.fn(async (row: any) => { inserted = row; }),
+      getByUserId: vi.fn(async () => inserted ? { ...inserted, container_url: null, provisioning_step: null, error_message: null, created_at: new Date().toISOString(), ready_at: null } : null),
+      listByStatus: vi.fn(async () => []),
+      updateStep: vi.fn(async () => {}),
+      markReady: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
     };
-    cache = new ContainerMappingCache(mockSb);
+    // mock db for ContainerMappingCache
+    mockDb = { select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })) };
+    cache = new ContainerMappingCache(mockDb as any);
   });
 
   const makeApp = (provisioner: any) => {
@@ -35,7 +35,7 @@ describe('POST /api/purchase', () => {
     app.use(cookieParser());
     app.use(express.json());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildPurchaseRouter(mockSb, cache, provisioner, mw));
+    app.use(buildPurchaseRouter(mockMappingDao, cache, provisioner, mw));
     return app;
   };
 
@@ -53,7 +53,7 @@ describe('POST /api/purchase', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('provisioning');
     expect(res.body.user_id).toBe('u1');
-    expect(inserted.user_id).toBe('u1');
+    expect(mockMappingDao.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1' }));
     expect(provisioner).toHaveBeenCalledOnce();
   });
 

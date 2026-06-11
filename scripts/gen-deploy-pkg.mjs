@@ -4,7 +4,7 @@
 // 输出: app-service-deploy/package.json
 //
 // 规则:
-//   - 跳过 @lingxi/shared (已被 vite bundle inline 进 index.mjs)
+//   - 跳过 @lingxi/* workspace 包 (已被 vite bundle inline 进 index.mjs)
 //   - 跳过 devDependencies
 //   - 跳过 scripts 里 dev/test/lint, 只留 start
 //   - 加 main: index.mjs / engines.node: >=22
@@ -51,7 +51,7 @@ console.log(`[gen-deploy-pkg] 从 pnpm-lock 解析到 ${Object.keys(versions).le
 
 const deps = {};
 for (const name of Object.keys(gwPkg.dependencies ?? {})) {
-  if (name === '@lingxi/shared') continue;
+  if (name.startsWith('@lingxi/')) continue;
   const ver = versions[name];
   if (!ver) throw new Error(`pnpm-lock 缺失 dep 版本: ${name}`);
   deps[name] = ver;

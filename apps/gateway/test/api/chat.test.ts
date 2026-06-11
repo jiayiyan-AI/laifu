@@ -15,23 +15,34 @@ const validCookie = (userId: string): string => {
   return `${COOKIE_NAME}=${token}`;
 };
 
+const mockDbForCache = { select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })) };
+
 describe('POST /api/chat', () => {
-  let mockSb: any;
+  let mockThreadsDao: any;
+  let mockMessageDao: any;
+  let mockAgentLoopDao: any;
   let cache: ContainerMappingCache;
   let fetchSpy: any;
 
   beforeEach(() => {
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      single: vi.fn(() => Promise.resolve({
-        data: { id: 'thr_1', user_id: 'u1', source: 'web' },
-        error: null,
-      })),
-      then: (resolve: any) => resolve({ data: null, error: null }),
+    mockThreadsDao = {
+      create: vi.fn(),
+      listByUser: vi.fn(),
+      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
+      archive: vi.fn(),
     };
-    cache = new ContainerMappingCache(mockSb);
+    mockMessageDao = {
+      insert: vi.fn(async () => {}),
+      listByThread: vi.fn(async () => []),
+    };
+    mockAgentLoopDao = {
+      create: vi.fn(async () => {}),
+      complete: vi.fn(async () => true),
+      getById: vi.fn(async () => null),
+      getActive: vi.fn(async () => null),
+      reapStale: vi.fn(async () => 0),
+    };
+    cache = new ContainerMappingCache(mockDbForCache as any);
     cache.set({
       user_id: 'u1',
       container_name: 'hermes-u1',
@@ -44,12 +55,9 @@ describe('POST /api/chat', () => {
       created_at: new Date().toISOString(),
       ready_at: new Date().toISOString(),
     });
+    // Dispatch returns 202
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        reply: '你好,我是灵犀',
-        session_id: 'web:thr_1',
-        exit_code: 0,
-      })),
+      new Response(JSON.stringify({ accepted: true }), { status: 202 }),
     );
   });
 
@@ -58,19 +66,31 @@ describe('POST /api/chat', () => {
     app.use(express.json());
     app.use(cookieParser());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildChatRouter(mockSb, cache, mw));
+    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
     return app;
   };
 
-  it('returns reply from container with web:thread_id session_id', async () => {
+  it('returns user_msg_id and loop_id after async dispatch', async () => {
     const res = await request(makeApp())
       .post('/api/chat')
       .set('Cookie', validCookie('u1'))
       .send({ thread_id: 'thr_1', message: 'hello' });
 
     expect(res.status).toBe(200);
-    expect(res.body.reply).toBe('你好,我是灵犀');
+    expect(res.body.user_msg_id).toMatch(/^msg_/);
+    expect(res.body.loop_id).toMatch(/^lp_/);
 
+    // user message inserted
+    expect(mockMessageDao.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'user', content: 'hello', source: 'web' }),
+    );
+
+    // agent loop created
+    expect(mockAgentLoopDao.create).toHaveBeenCalledWith(
+      expect.objectContaining({ thread_id: 'thr_1' }),
+    );
+
+    // dispatch called with callback
     expect(fetchSpy).toHaveBeenCalledWith(
       'http://localhost:8080/chat',
       expect.objectContaining({ method: 'POST' }),
@@ -80,6 +100,7 @@ describe('POST /api/chat', () => {
     expect(body.session_id).toBe('web:thr_1');
     expect(body.message).toBe('hello');
     expect(body.source).toBe('web');
+    expect(body.callback.loop_id).toMatch(/^lp_/);
   });
 
   it('401 without session', async () => {
@@ -98,7 +119,7 @@ describe('POST /api/chat', () => {
   });
 
   it('404 when thread not owned by user', async () => {
-    mockSb.single = vi.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }));
+    mockThreadsDao.getByIdAndUser.mockResolvedValue(null);
     const res = await request(makeApp())
       .post('/api/chat')
       .set('Cookie', validCookie('u1'))
@@ -115,33 +136,46 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(503);
   });
 
-  it('502 when container returns non-OK', async () => {
+  it('502 when dispatch fails (non-202)', async () => {
     fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 }));
     const res = await request(makeApp())
       .post('/api/chat')
       .set('Cookie', validCookie('u1'))
       .send({ thread_id: 'thr_1', message: 'hi' });
     expect(res.status).toBe(502);
+    // loop marked as fail
+    expect(mockAgentLoopDao.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
   });
 });
 
 describe('GET /api/threads/:id/messages', () => {
-  let mockSb: any;
+  let mockThreadsDao: any;
+  let mockMessageDao: any;
+  let mockAgentLoopDao: any;
   let cache: ContainerMappingCache;
-  let fetchSpy: any;
 
   beforeEach(() => {
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      single: vi.fn(() => Promise.resolve({
-        data: { id: 'thr_1', user_id: 'u1', source: 'web' },
-        error: null,
-      })),
-      then: (resolve: any) => resolve({ data: null, error: null }),
+    mockThreadsDao = {
+      create: vi.fn(),
+      listByUser: vi.fn(),
+      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
+      archive: vi.fn(),
     };
-    cache = new ContainerMappingCache(mockSb);
+    mockMessageDao = {
+      insert: vi.fn(async () => {}),
+      listByThread: vi.fn(async () => [
+        { id: 'msg_1', thread_id: 'thr_1', role: 'user', content_type: 'text', content: 'hi', source: 'web', created_at: '2025-01-01T00:00:00Z' },
+        { id: 'msg_2', thread_id: 'thr_1', role: 'assistant', content_type: 'text', content: 'hello', source: 'web', created_at: '2025-01-01T00:00:01Z' },
+      ]),
+    };
+    mockAgentLoopDao = {
+      create: vi.fn(async () => {}),
+      complete: vi.fn(async () => true),
+      getById: vi.fn(async () => null),
+      getActive: vi.fn(async () => null),
+      reapStale: vi.fn(async () => 0),
+    };
+    cache = new ContainerMappingCache(mockDbForCache as any);
     cache.set({
       user_id: 'u1',
       container_name: 'hermes-u1',
@@ -154,14 +188,6 @@ describe('GET /api/threads/:id/messages', () => {
       created_at: new Date().toISOString(),
       ready_at: new Date().toISOString(),
     });
-    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        messages: [
-          { role: 'user', content: 'hi', ts: 1700000000 },
-          { role: 'assistant', content: 'hello', ts: 1700000001 },
-        ],
-      })),
-    );
   });
 
   const makeApp = () => {
@@ -169,22 +195,19 @@ describe('GET /api/threads/:id/messages', () => {
     app.use(express.json());
     app.use(cookieParser());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildChatRouter(mockSb, cache, mw));
+    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
     return app;
   };
 
-  it('returns messages from container with web:thread_id session_id', async () => {
+  it('returns messages from Postgres (not container)', async () => {
     const res = await request(makeApp())
       .get('/api/threads/thr_1/messages')
       .set('Cookie', validCookie('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.messages).toHaveLength(2);
-    expect(res.body.messages[0]).toEqual({ role: 'user', content: 'hi', ts: 1700000000 });
-
-    expect(fetchSpy).toHaveBeenCalledWith(
-      'http://localhost:8080/history?session_id=web%3Athr_1',
-    );
+    expect(res.body.messages[0]).toMatchObject({ id: 'msg_1', role: 'user', content: 'hi' });
+    expect(mockMessageDao.listByThread).toHaveBeenCalledWith('thr_1');
   });
 
   it('401 without session', async () => {
@@ -193,26 +216,69 @@ describe('GET /api/threads/:id/messages', () => {
   });
 
   it('404 when thread not owned by user', async () => {
-    mockSb.single = vi.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }));
+    mockThreadsDao.getByIdAndUser.mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/threads/thr_999/messages')
       .set('Cookie', validCookie('u1'));
     expect(res.status).toBe(404);
   });
+});
 
-  it('503 when user has no ready container', async () => {
-    cache.delete('u1');
-    const res = await request(makeApp())
-      .get('/api/threads/thr_1/messages')
-      .set('Cookie', validCookie('u1'));
-    expect(res.status).toBe(503);
+describe('GET /api/threads/:id/loop', () => {
+  let mockThreadsDao: any;
+  let mockMessageDao: any;
+  let mockAgentLoopDao: any;
+  let cache: ContainerMappingCache;
+
+  beforeEach(() => {
+    mockThreadsDao = {
+      create: vi.fn(),
+      listByUser: vi.fn(),
+      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
+      archive: vi.fn(),
+    };
+    mockMessageDao = {
+      insert: vi.fn(async () => {}),
+      listByThread: vi.fn(async () => []),
+    };
+    mockAgentLoopDao = {
+      create: vi.fn(async () => {}),
+      complete: vi.fn(async () => true),
+      getById: vi.fn(async () => null),
+      getActive: vi.fn(async () => ({
+        id: 'loop_1', thread_id: 'thr_1', message_id: 'msg_1',
+        completion: null, created_at: '2025-01-01T00:00:00Z', completed_at: null,
+      })),
+      reapStale: vi.fn(async () => 0),
+    };
+    cache = new ContainerMappingCache(mockDbForCache as any);
   });
 
-  it('502 when container returns non-OK', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+  const makeApp = () => {
+    const app = express();
+    app.use(express.json());
+    app.use(cookieParser());
+    const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
+    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
+    return app;
+  };
+
+  it('returns active loop', async () => {
     const res = await request(makeApp())
-      .get('/api/threads/thr_1/messages')
+      .get('/api/threads/thr_1/loop')
       .set('Cookie', validCookie('u1'));
-    expect(res.status).toBe(502);
+
+    expect(res.status).toBe(200);
+    expect(res.body.loop).toMatchObject({ id: 'loop_1', completion: null });
+  });
+
+  it('returns null when no active loop', async () => {
+    mockAgentLoopDao.getActive.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/threads/thr_1/loop')
+      .set('Cookie', validCookie('u1'));
+
+    expect(res.status).toBe(200);
+    expect(res.body.loop).toBeNull();
   });
 });

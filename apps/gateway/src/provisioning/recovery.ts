@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ContainerMappingDao } from '../db/container-mapping-dao.js';
 
 export interface AzureStateProbe {
   getContainerAppState(containerName: string): Promise<{ state: string | undefined; fqdn: string | null }>;
@@ -9,44 +9,24 @@ export interface AzureStateProbe {
  * 查 Azure 的真实状态，把卡在中间的行推进到 ready/failed。
  */
 export const recoverProvisioning = async (
-  sb: SupabaseClient,
+  mappingDao: ContainerMappingDao,
   azure: AzureStateProbe,
 ): Promise<void> => {
-  const { data, error } = await sb
-    .from('container_mapping')
-    .select('user_id, container_name')
-    .eq('status', 'provisioning');
+  const rows = await mappingDao.listByStatus('provisioning');
+  if (rows.length === 0) return;
 
-  if (error) throw new Error(error.message);
-  if (!data || data.length === 0) return;
-
-  for (const row of data) {
+  for (const row of rows) {
     try {
       const probe = await azure.getContainerAppState(row.container_name);
       if (probe.state === 'Succeeded' && probe.fqdn) {
-        await sb
-          .from('container_mapping')
-          .update({
-            status: 'ready',
-            container_url: probe.fqdn,
-            ready_at: new Date().toISOString(),
-            provisioning_step: '灵犀助理上岗完成',
-            progress_pct: 100,
-          })
-          .eq('user_id', row.user_id);
+        await mappingDao.markReady(row.user_id, probe.fqdn, '灵犀助理上岗完成', 100);
       } else if (probe.state === 'Failed' || probe.state === 'Canceled') {
-        await sb
-          .from('container_mapping')
-          .update({ status: 'failed', error_message: `Azure state: ${probe.state}` })
-          .eq('user_id', row.user_id);
+        await mappingDao.markFailed(row.user_id, `Azure state: ${probe.state}`);
       }
       // else state==='InProgress' / 'Creating' → 暂时不动，下次启动再扫
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await sb
-        .from('container_mapping')
-        .update({ status: 'failed', error_message: msg })
-        .eq('user_id', row.user_id);
+      await mappingDao.markFailed(row.user_id, msg);
     }
   }
 };

@@ -1,4 +1,6 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Db } from '@lingxi/db';
+import { schema } from '@lingxi/db';
+import { eq, and, or, ilike, desc } from 'drizzle-orm';
 import type {
   ParsedInboundEmail, EmailListItem, EmailDetail,
 } from '@lingxi/shared';
@@ -28,79 +30,123 @@ export interface EmailDao {
 const newId = (): string =>
   `eml_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-const LIST_COLS = 'id,direction,from_addr,to_addrs,subject,has_attachments,received_at';
-const DETAIL_COLS = `${LIST_COLS},cc_addrs,message_id,in_reply_to,reference_ids,body_text`;
+export const makeEmailDao = (db: Db): EmailDao => {
+  const addr = schema.emailAddresses;
+  const em = schema.emails;
 
-export const makeEmailDao = (sb: SupabaseClient): EmailDao => ({
-  async findUserByLocalpart(localpart) {
-    const { data, error } = await sb
-      .from('email_addresses').select('user_id')
-      .eq('localpart', localpart.toLowerCase()).maybeSingle();
-    if (error) throw new Error(`findUserByLocalpart: ${error.message}`);
-    return data ? (data as { user_id: string }).user_id : null;
-  },
+  return {
+    async findUserByLocalpart(localpart) {
+      const rows = await db.select({ user_id: addr.user_id })
+        .from(addr)
+        .where(eq(addr.localpart, localpart.toLowerCase()))
+        .limit(1);
+      return rows[0]?.user_id ?? null;
+    },
 
-  async getAddress(userId) {
-    const { data, error } = await sb
-      .from('email_addresses').select('localpart,display_name')
-      .eq('user_id', userId).maybeSingle();
-    if (error) throw new Error(`getAddress: ${error.message}`);
-    return data ? (data as { localpart: string; display_name: string | null }) : null;
-  },
+    async getAddress(userId) {
+      const rows = await db.select({ localpart: addr.localpart, display_name: addr.display_name })
+        .from(addr)
+        .where(eq(addr.user_id, userId))
+        .limit(1);
+      return rows[0] ?? null;
+    },
 
-  async insertAddress(userId, localpart, displayName) {
-    const { error } = await sb.from('email_addresses').insert({
-      localpart: localpart.toLowerCase(),
-      user_id: userId,
-      display_name: displayName,
-    });
-    if (error) throw new Error(`insertAddress: ${error.message}`);
-  },
+    async insertAddress(userId, localpart, displayName) {
+      await db.insert(addr).values({
+        localpart: localpart.toLowerCase(),
+        user_id: userId,
+        display_name: displayName,
+      });
+    },
 
-  async insertInbound(parsed, userId) {
-    const id = newId();
-    const { error } = await sb.from('emails').insert({
-      id, user_id: userId, direction: 'inbound',
-      from_addr: parsed.from_addr, to_addrs: parsed.to_addrs, cc_addrs: parsed.cc_addrs,
-      subject: parsed.subject, message_id: parsed.message_id,
-      in_reply_to: parsed.in_reply_to, reference_ids: parsed.reference_ids,
-      body_text: parsed.body_text, has_attachments: parsed.has_attachments,
-    });
-    if (error) throw new Error(`insertInbound: ${error.message}`);
-    return id;
-  },
+    async insertInbound(parsed, userId) {
+      const id = newId();
+      await db.insert(em).values({
+        id,
+        user_id: userId,
+        direction: 'inbound',
+        from_addr: parsed.from_addr,
+        to_addrs: parsed.to_addrs,
+        cc_addrs: parsed.cc_addrs,
+        subject: parsed.subject,
+        message_id: parsed.message_id,
+        in_reply_to: parsed.in_reply_to,
+        reference_ids: parsed.reference_ids,
+        body_text: parsed.body_text,
+        has_attachments: parsed.has_attachments,
+      });
+      return id;
+    },
 
-  async insertOutbound(row) {
-    const id = newId();
-    const { error } = await sb.from('emails').insert({
-      id, user_id: row.user_id, direction: 'outbound',
-      from_addr: row.from_addr, to_addrs: row.to_addrs, cc_addrs: row.cc_addrs,
-      subject: row.subject, message_id: row.message_id,
-      in_reply_to: row.in_reply_to, reference_ids: row.reference_ids,
-      body_text: row.body_text, has_attachments: false,
-    });
-    if (error) throw new Error(`insertOutbound: ${error.message}`);
-    return id;
-  },
+    async insertOutbound(row) {
+      const id = newId();
+      await db.insert(em).values({
+        id,
+        user_id: row.user_id,
+        direction: 'outbound',
+        from_addr: row.from_addr,
+        to_addrs: row.to_addrs,
+        cc_addrs: row.cc_addrs,
+        subject: row.subject,
+        message_id: row.message_id,
+        in_reply_to: row.in_reply_to,
+        reference_ids: row.reference_ids,
+        body_text: row.body_text,
+        has_attachments: false,
+      });
+      return id;
+    },
 
-  async list(userId, opts) {
-    let query = sb.from('emails').select(LIST_COLS).eq('user_id', userId);
-    if (opts.q) {
-      // 主题或发件人模糊匹配
-      query = query.or(`subject.ilike.%${opts.q}%,from_addr.ilike.%${opts.q}%`);
-    }
-    const { data, error } = await query
-      .order('received_at', { ascending: false })
-      .limit(opts.limit);
-    if (error) throw new Error(`list: ${error.message}`);
-    return (data ?? []) as unknown as EmailListItem[];
-  },
+    async list(userId, opts) {
+      const conditions = [eq(em.user_id, userId)];
+      if (opts.q) {
+        conditions.push(or(
+          ilike(em.subject, `%${opts.q}%`),
+          ilike(em.from_addr, `%${opts.q}%`),
+        )!);
+      }
+      const rows = await db.select({
+        id: em.id,
+        direction: em.direction,
+        from_addr: em.from_addr,
+        to_addrs: em.to_addrs,
+        subject: em.subject,
+        has_attachments: em.has_attachments,
+        received_at: em.received_at,
+      })
+        .from(em)
+        .where(and(...conditions))
+        .orderBy(desc(em.received_at))
+        .limit(opts.limit);
+      return rows.map((r) => ({
+        ...r,
+        received_at: r.received_at.toISOString(),
+      })) as unknown as EmailListItem[];
+    },
 
-  async get(userId, id) {
-    const { data, error } = await sb
-      .from('emails').select(DETAIL_COLS)
-      .eq('user_id', userId).eq('id', id).maybeSingle();
-    if (error) throw new Error(`get: ${error.message}`);
-    return data ? (data as unknown as EmailDetail) : null;
-  },
-});
+    async get(userId, id) {
+      const rows = await db.select({
+        id: em.id,
+        direction: em.direction,
+        from_addr: em.from_addr,
+        to_addrs: em.to_addrs,
+        cc_addrs: em.cc_addrs,
+        subject: em.subject,
+        message_id: em.message_id,
+        in_reply_to: em.in_reply_to,
+        reference_ids: em.reference_ids,
+        body_text: em.body_text,
+        has_attachments: em.has_attachments,
+        received_at: em.received_at,
+      })
+        .from(em)
+        .where(and(eq(em.user_id, userId), eq(em.id, id)))
+        .limit(1);
+      if (!rows[0]) return null;
+      return {
+        ...rows[0],
+        received_at: rows[0].received_at.toISOString(),
+      } as unknown as EmailDetail;
+    },
+  };
+};

@@ -15,22 +15,25 @@ if docker info >/dev/null 2>&1; then ok "Docker Desktop 跑着"; else fail "Dock
 if docker image inspect hermes-probe >/dev/null 2>&1; then ok "image hermes-probe 已 build"; else warn "image hermes-probe 未 build → docker build -t hermes-probe docker/hermes/"; fi
 
 echo ""
-echo "[Supabase 本地]"
-n=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c laifu)
-if [ "$n" -ge 8 ]; then ok "$n 个 laifu 容器跑着"; else warn "Supabase 本地未启 → cd infra && supabase start"; fi
+echo "[PostgreSQL 本地]"
+if docker ps --format '{{.Names}}' | grep -q "^lingxi-pg-dev$"; then
+  ok "lingxi-pg-dev 容器运行中 (port 54422)"
+else
+  warn "PG 未启 → ./scripts/dev-db.sh start"
+fi
 
 echo ""
 echo "[端口空闲]"
-for p in 8080 9000 3000 54421 54422; do
+for p in 8080 9000 3000 54422; do
   pid=$(lsof -ti :$p 2>/dev/null || true)
   if [ -z "$pid" ]; then
     case $p in
-      54421|54422) warn "port $p 空 (supabase 应占着)" ;;
+      54422) warn "port $p 空 (PG 应占着)" ;;
       *) ok "port $p free" ;;
     esac
   else
     case $p in
-      54421|54422) ok "port $p 被 supabase 占着 (pid $pid)" ;;
+      54422) ok "port $p 被 PG 占着 (pid $pid)" ;;
       *) warn "port $p 被 $pid 占用 → kill -9 $pid" ;;
     esac
   fi

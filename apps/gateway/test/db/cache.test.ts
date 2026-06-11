@@ -15,40 +15,49 @@ const rowReady = (userId: string, url: string): ContainerMapping => ({
   ready_at: new Date().toISOString(),
 });
 
-describe('ContainerMappingCache', () => {
-  let cache: ContainerMappingCache;
-  let mockSb: any;
-
-  beforeEach(() => {
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      then: undefined,
-    };
-    cache = new ContainerMappingCache(mockSb);
+// mock Drizzle db: db.select().from(table) returns rows
+function mockDb(rows: any[] | Error) {
+  const fromFn = vi.fn(() => {
+    if (rows instanceof Error) return Promise.reject(rows);
+    return Promise.resolve(rows);
   });
+  const selectFn = vi.fn(() => ({ from: fromFn }));
+  return { select: selectFn, from: fromFn, _selectFn: selectFn, _fromFn: fromFn };
+}
 
+describe('ContainerMappingCache', () => {
   it('returns null for unknown user', () => {
+    const db = mockDb([]);
+    const cache = new ContainerMappingCache(db as any);
     expect(cache.get('unknown-id')).toBeNull();
   });
 
   it('returns the entry after set()', () => {
+    const db = mockDb([]);
+    const cache = new ContainerMappingCache(db as any);
     const row = rowReady('u1', 'https://hermes-u1.example.com');
     cache.set(row);
     expect(cache.get('u1')).toEqual(row);
   });
 
   it('loadAll() populates cache from DB', async () => {
-    const rows = [rowReady('u1', 'url1'), rowReady('u2', 'url2')];
-    mockSb.select = vi.fn(() => Promise.resolve({ data: rows, error: null }));
+    // Drizzle select().from() returns array of rows with Date objects for timestamps
+    const dbRows = [
+      { user_id: 'u1', container_name: 'hermes-u1', container_url: 'url1', status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null, azure_files_share: 'share1', created_at: new Date('2026-01-01'), ready_at: new Date('2026-01-02') },
+      { user_id: 'u2', container_name: 'hermes-u2', container_url: 'url2', status: 'ready', provisioning_step: null, progress_pct: 100, error_message: null, azure_files_share: 'share2', created_at: new Date('2026-01-01'), ready_at: new Date('2026-01-02') },
+    ];
+    const db = mockDb(dbRows);
+    const cache = new ContainerMappingCache(db as any);
     await cache.loadAll();
-    expect(cache.get('u1')).toEqual(rows[0]);
-    expect(cache.get('u2')).toEqual(rows[1]);
+    expect(cache.get('u1')!.container_url).toBe('url1');
+    expect(cache.get('u2')!.container_url).toBe('url2');
+    // Timestamps should be converted to ISO strings
+    expect(typeof cache.get('u1')!.created_at).toBe('string');
   });
 
   it('loadAll() throws on DB error', async () => {
-    mockSb.select = vi.fn(() => Promise.resolve({ data: null, error: { message: 'boom' } }));
+    const db = mockDb(new Error('boom'));
+    const cache = new ContainerMappingCache(db as any);
     await expect(cache.loadAll()).rejects.toThrow('boom');
   });
 });

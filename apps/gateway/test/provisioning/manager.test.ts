@@ -15,25 +15,24 @@ const finalReadyRow = {
 };
 
 describe('provisionContainer', () => {
-  let mockSb: any;
+  let mockMappingDao: any;
+  let mockUsersDao: any;
   let mockCache: any;
   let mockAzure: any;
-  const updates: any[] = [];
-  let thenResult: any;
 
   beforeEach(() => {
-    updates.length = 0;
-    thenResult = { data: null, error: null };
-    // 关键模式：mockSb 自身是 thenable（让 update().eq() 可 await），
-    // 同时所有链式方法返回 mockSb，single() 返回 Promise（带最终数据）。
-    mockSb = {
-      from: vi.fn(() => mockSb),
-      update: vi.fn((u: any) => { updates.push(u); return mockSb; }),
-      insert: vi.fn(() => mockSb),
-      select: vi.fn(() => mockSb),
-      eq: vi.fn(() => mockSb),
-      single: vi.fn(() => Promise.resolve({ data: finalReadyRow, error: null })),
-      then: (resolve: any) => resolve(thenResult),  // await mockSb 时触发
+    mockMappingDao = {
+      insert: vi.fn(async () => {}),
+      getByUserId: vi.fn(async () => finalReadyRow),
+      listByStatus: vi.fn(async () => []),
+      updateStep: vi.fn(async () => {}),
+      markReady: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
+    };
+    mockUsersDao = {
+      getById: vi.fn(async () => null),
+      getTokenVersion: vi.fn(async () => 0),
+      upsertByProvider: vi.fn(async () => null),
     };
     mockCache = { set: vi.fn(), delete: vi.fn() };
     mockAzure = {
@@ -47,18 +46,18 @@ describe('provisionContainer', () => {
       userId: 'u1',
       containerName: 'hermes-u1abc',
       shareName: 'user-u1abc',
-      sb: mockSb,
+      mappingDao: mockMappingDao,
+      usersDao: mockUsersDao,
       cache: mockCache,
       azure: mockAzure,
     });
 
-    const stepUpdates = updates.filter((u) => 'provisioning_step' in u);
-    expect(stepUpdates.length).toBeGreaterThanOrEqual(5);
-
-    const readyUpdate = updates.find((u) => u.status === 'ready');
-    expect(readyUpdate).toBeDefined();
-    expect(readyUpdate.container_url).toBe('https://hermes-u1abc.example.com');
-    expect(readyUpdate.progress_pct).toBe(100);
+    // updateStep called for intermediate steps
+    expect(mockMappingDao.updateStep.mock.calls.length).toBeGreaterThanOrEqual(5);
+    // markReady called with URL
+    expect(mockMappingDao.markReady).toHaveBeenCalledWith(
+      'u1', 'https://hermes-u1abc.example.com', '灵犀助理上岗完成', 100,
+    );
 
     expect(mockAzure.createFileShare).toHaveBeenCalledWith('user-u1abc');
     expect(mockAzure.createContainerApp).toHaveBeenCalledWith({
@@ -76,13 +75,12 @@ describe('provisionContainer', () => {
       userId: 'u1',
       containerName: 'hermes-u1abc',
       shareName: 'user-u1abc',
-      sb: mockSb,
+      mappingDao: mockMappingDao,
+      usersDao: mockUsersDao,
       cache: mockCache,
       azure: mockAzure,
     });
 
-    const failedUpdate = updates.find((u) => u.status === 'failed');
-    expect(failedUpdate).toBeDefined();
-    expect(failedUpdate.error_message).toContain('Azure quota exceeded');
+    expect(mockMappingDao.markFailed).toHaveBeenCalledWith('u1', 'Azure quota exceeded');
   });
 });

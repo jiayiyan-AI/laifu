@@ -8,7 +8,8 @@ import type {
   ThreadCreateRequest,
   ThreadCreateResponse,
   ThreadListItem,
-  ThreadMessage,
+  MessageRow,
+  AgentLoopRow,
   WebChatRequest,
   WebChatResponse,
   WebThreadMessagesResponse,
@@ -88,12 +89,53 @@ export const deleteThread = (id: string): Promise<{ ok: true }> =>
 export const sendChat = (body: WebChatRequest): Promise<WebChatResponse> =>
   json('/api/chat', { method: 'POST', body: JSON.stringify(body) });
 
-export const fetchHistory = async (threadId: string): Promise<ThreadMessage[]> => {
+export const fetchHistory = async (threadId: string): Promise<MessageRow[]> => {
   const { messages } = await json<WebThreadMessagesResponse>(
     `/api/threads/${encodeURIComponent(threadId)}/messages`,
   );
   return messages;
 };
+
+export const fetchActiveLoop = async (threadId: string): Promise<AgentLoopRow | null> => {
+  const { loop } = await json<{ loop: AgentLoopRow | null }>(
+    `/api/threads/${encodeURIComponent(threadId)}/loop`,
+  );
+  return loop;
+};
+
+// === Loop SSE 订阅 ===
+
+export interface LoopStreamCallbacks {
+  onHeartbeat: () => void;
+  onDone: (reply: string) => void;
+  onFail: (error: string) => void;
+}
+
+/**
+ * 连接 per-loop SSE，接收心跳和最终结果。
+ * 返回 cleanup 函数用于关闭连接。
+ */
+export function connectLoopStream(loopId: string, callbacks: LoopStreamCallbacks): () => void {
+  const es = new EventSource(
+    `/api/loops/${encodeURIComponent(loopId)}/stream`,
+    { withCredentials: true },
+  );
+  es.addEventListener('heartbeat', () => callbacks.onHeartbeat());
+  es.addEventListener('done', (e: MessageEvent) => {
+    const d = JSON.parse(e.data);
+    callbacks.onDone(d.reply ?? '');
+    es.close();
+  });
+  es.addEventListener('fail', (e: MessageEvent) => {
+    const d = JSON.parse(e.data);
+    callbacks.onFail(d.error ?? '处理失败');
+    es.close();
+  });
+  es.onerror = () => {
+    // EventSource 自动重连; gateway 侧 loop 已完成时会立即返回终态事件
+  };
+  return () => es.close();
+}
 
 // === WeChat iLink 扫码绑定 ===
 export const startWechatBind = (): Promise<WechatQrStartResponse> =>

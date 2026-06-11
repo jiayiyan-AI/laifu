@@ -389,8 +389,13 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
 
     SESSION_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=session-secret)'
     GATEWAY_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=gateway-secret)'
-    SUPABASE_URL: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=supabase-url)'
-    SUPABASE_SERVICE_ROLE_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=supabase-service-role-key)'
+    // 数据库直连 (Drizzle + node-postgres)。连接串含密码, 走 KV secret database-url (需手工灘入 KV)。
+    // prod 现阶段是 Supabase 真实库直连 (direct/session pooler, 非 :6543 transaction pooler);
+    // 长期可能迁 Azure PG, 届时只换 KV 里的连接串, 代码不动。
+    // 改 KV reference 后 App Service 不自动重 resolve, 须重启 (known-issues #9)。
+    DATABASE_URL: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=database-url)'
+    DATABASE_SSL: 'true'
+    DATABASE_POOL_MAX: '10'
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
     HERMES_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=hermes-api-key)'
