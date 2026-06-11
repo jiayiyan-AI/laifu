@@ -1,0 +1,4 @@
+# 本地 `wrangler dev` 用的变量。复制成 .dev.vars 后填值(.dev.vars 已 gitignore)。
+# 本地全量测时 Worker 跑在本机,可直接打本机 gateway,无需 ngrok。
+GATEWAY_URL=http://localhost:9000
+INBOUND_WEBHOOK_SECRET=e00839b743422286cc0c4cdd12ae53993c85e1c0439f31fa
