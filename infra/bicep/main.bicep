@@ -398,8 +398,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     DASHSCOPE_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=dashscope-api-key)'
 
     // 邮件能力 (子项 B)。prod 暂留 fake;
-    // MVP 就绪后(uncagedai.org 切 CF Email Routing + Resend 验域)把 EMAIL_PROVIDER 改 'resend'
-    // + EMAIL_DOMAIN 改 'uncagedai.org' + 填 resend-api-key & inbound-webhook-secret 两个 KV secret。
+    // MVP 就绪后(laifu.uncagedai.org 子域挂 CF Email Routing + Resend 验子域)把 EMAIL_PROVIDER 改 'resend'
+    // + EMAIL_DOMAIN 改 'laifu.uncagedai.org' + 填 resend-api-key & inbound-webhook-secret 两个 KV secret。
     EMAIL_PROVIDER: 'fake'
     EMAIL_DOMAIN: 'mail.localhost'
     EMAIL_FROM_DEFAULT_NAME: '灵犀助理'
