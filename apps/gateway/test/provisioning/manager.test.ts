@@ -1,4 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
 import { provisionContainer } from '../../src/provisioning/manager.js';
 
 const finalReadyRow = {
@@ -15,26 +22,11 @@ const finalReadyRow = {
 };
 
 describe('provisionContainer', () => {
-  let mockMappingDao: any;
-  let mockUsersDao: any;
-  let mockCache: any;
   let mockAzure: any;
 
   beforeEach(() => {
-    mockMappingDao = {
-      insert: vi.fn(async () => {}),
-      getByUserId: vi.fn(async () => finalReadyRow),
-      listByStatus: vi.fn(async () => []),
-      updateStep: vi.fn(async () => {}),
-      markReady: vi.fn(async () => {}),
-      markFailed: vi.fn(async () => {}),
-    };
-    mockUsersDao = {
-      getById: vi.fn(async () => null),
-      getTokenVersion: vi.fn(async () => 0),
-      upsertByProvider: vi.fn(async () => null),
-    };
-    mockCache = { set: vi.fn(), delete: vi.fn() };
+    vi.mocked(dao.containerMapping.getByUserId).mockResolvedValue(finalReadyRow as any);
+    vi.mocked(dao.users.getTokenVersion).mockResolvedValue(0);
     mockAzure = {
       createFileShare: vi.fn(() => Promise.resolve()),
       createContainerApp: vi.fn(() => Promise.resolve('https://hermes-u1abc.example.com')),
@@ -46,16 +38,11 @@ describe('provisionContainer', () => {
       userId: 'u1',
       containerName: 'hermes-u1abc',
       shareName: 'user-u1abc',
-      mappingDao: mockMappingDao,
-      usersDao: mockUsersDao,
-      cache: mockCache,
       azure: mockAzure,
     });
 
-    // updateStep called for intermediate steps
-    expect(mockMappingDao.updateStep.mock.calls.length).toBeGreaterThanOrEqual(5);
-    // markReady called with URL
-    expect(mockMappingDao.markReady).toHaveBeenCalledWith(
+    expect(vi.mocked(dao.containerMapping.updateStep).mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(dao.containerMapping.markReady).toHaveBeenCalledWith(
       'u1', 'https://hermes-u1abc.example.com', '灵犀助理上岗完成', 100,
     );
 
@@ -65,7 +52,7 @@ describe('provisionContainer', () => {
       shareName: 'user-u1abc',
     });
 
-    expect(mockCache.set).toHaveBeenCalled();
+    expect(dao.cache.set).toHaveBeenCalled();
   });
 
   it('marks failed if Azure throws', async () => {
@@ -75,12 +62,9 @@ describe('provisionContainer', () => {
       userId: 'u1',
       containerName: 'hermes-u1abc',
       shareName: 'user-u1abc',
-      mappingDao: mockMappingDao,
-      usersDao: mockUsersDao,
-      cache: mockCache,
       azure: mockAzure,
     });
 
-    expect(mockMappingDao.markFailed).toHaveBeenCalledWith('u1', 'Azure quota exceeded');
+    expect(dao.containerMapping.markFailed).toHaveBeenCalledWith('u1', 'Azure quota exceeded');
   });
 });

@@ -2,8 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
 import { buildChatRouter } from '../../src/api/chat.js';
-import { ContainerMappingCache } from '../../src/db/cache.js';
 import { signSession } from '../../src/auth/session.js';
 import { requireSession } from '../../src/auth/middleware.js';
 
@@ -15,35 +21,12 @@ const validCookie = (userId: string): string => {
   return `${COOKIE_NAME}=${token}`;
 };
 
-const mockDbForCache = { select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })) };
-
 describe('POST /api/chat', () => {
-  let mockThreadsDao: any;
-  let mockMessageDao: any;
-  let mockAgentLoopDao: any;
-  let cache: ContainerMappingCache;
   let fetchSpy: any;
 
   beforeEach(() => {
-    mockThreadsDao = {
-      create: vi.fn(),
-      listByUser: vi.fn(),
-      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
-      archive: vi.fn(),
-    };
-    mockMessageDao = {
-      insert: vi.fn(async () => {}),
-      listByThread: vi.fn(async () => []),
-    };
-    mockAgentLoopDao = {
-      create: vi.fn(async () => {}),
-      complete: vi.fn(async () => true),
-      getById: vi.fn(async () => null),
-      getActive: vi.fn(async () => null),
-      reapStale: vi.fn(async () => 0),
-    };
-    cache = new ContainerMappingCache(mockDbForCache as any);
-    cache.set({
+    vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue({ id: 'thr_1', user_id: 'u1', source: 'web' } as any);
+    vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u1',
       container_name: 'hermes-u1',
       container_url: 'http://localhost:8080',
@@ -54,8 +37,10 @@ describe('POST /api/chat', () => {
       azure_files_share: 'user-u1',
       created_at: new Date().toISOString(),
       ready_at: new Date().toISOString(),
+    } as any);
+    vi.mocked(dao.usage.getBalance).mockResolvedValue({
+      balance_cny: 10, free_quota_cny_month: 5, used_cny_month: 0, period_start: '2026-01-01',
     });
-    // Dispatch returns 202
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ accepted: true }), { status: 202 }),
     );
@@ -66,7 +51,7 @@ describe('POST /api/chat', () => {
     app.use(express.json());
     app.use(cookieParser());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
+    app.use(buildChatRouter(mw));
     return app;
   };
 
@@ -80,17 +65,14 @@ describe('POST /api/chat', () => {
     expect(res.body.user_msg_id).toMatch(/^msg_/);
     expect(res.body.loop_id).toMatch(/^lp_/);
 
-    // user message inserted
-    expect(mockMessageDao.insert).toHaveBeenCalledWith(
+    expect(dao.messages.insert).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'user', content: 'hello', source: 'web' }),
     );
 
-    // agent loop created
-    expect(mockAgentLoopDao.create).toHaveBeenCalledWith(
+    expect(dao.agentLoops.create).toHaveBeenCalledWith(
       expect.objectContaining({ thread_id: 'thr_1' }),
     );
 
-    // dispatch called with callback
     expect(fetchSpy).toHaveBeenCalledWith(
       'http://localhost:8080/chat',
       expect.objectContaining({ method: 'POST' }),
@@ -119,7 +101,7 @@ describe('POST /api/chat', () => {
   });
 
   it('404 when thread not owned by user', async () => {
-    mockThreadsDao.getByIdAndUser.mockResolvedValue(null);
+    vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(null);
     const res = await request(makeApp())
       .post('/api/chat')
       .set('Cookie', validCookie('u1'))
@@ -128,7 +110,7 @@ describe('POST /api/chat', () => {
   });
 
   it('503 when user has no ready container', async () => {
-    cache.delete('u1');
+    vi.mocked(dao.cache.get).mockReturnValue(null);
     const res = await request(makeApp())
       .post('/api/chat')
       .set('Cookie', validCookie('u1'))
@@ -143,51 +125,17 @@ describe('POST /api/chat', () => {
       .set('Cookie', validCookie('u1'))
       .send({ thread_id: 'thr_1', message: 'hi' });
     expect(res.status).toBe(502);
-    // loop marked as fail
-    expect(mockAgentLoopDao.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
+    expect(dao.agentLoops.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
   });
 });
 
 describe('GET /api/threads/:id/messages', () => {
-  let mockThreadsDao: any;
-  let mockMessageDao: any;
-  let mockAgentLoopDao: any;
-  let cache: ContainerMappingCache;
-
   beforeEach(() => {
-    mockThreadsDao = {
-      create: vi.fn(),
-      listByUser: vi.fn(),
-      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
-      archive: vi.fn(),
-    };
-    mockMessageDao = {
-      insert: vi.fn(async () => {}),
-      listByThread: vi.fn(async () => [
-        { id: 'msg_1', thread_id: 'thr_1', role: 'user', content_type: 'text', content: 'hi', source: 'web', created_at: '2025-01-01T00:00:00Z' },
-        { id: 'msg_2', thread_id: 'thr_1', role: 'assistant', content_type: 'text', content: 'hello', source: 'web', created_at: '2025-01-01T00:00:01Z' },
-      ]),
-    };
-    mockAgentLoopDao = {
-      create: vi.fn(async () => {}),
-      complete: vi.fn(async () => true),
-      getById: vi.fn(async () => null),
-      getActive: vi.fn(async () => null),
-      reapStale: vi.fn(async () => 0),
-    };
-    cache = new ContainerMappingCache(mockDbForCache as any);
-    cache.set({
-      user_id: 'u1',
-      container_name: 'hermes-u1',
-      container_url: 'http://localhost:8080',
-      status: 'ready',
-      provisioning_step: null,
-      progress_pct: 100,
-      error_message: null,
-      azure_files_share: 'user-u1',
-      created_at: new Date().toISOString(),
-      ready_at: new Date().toISOString(),
-    });
+    vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue({ id: 'thr_1', user_id: 'u1', source: 'web' } as any);
+    vi.mocked(dao.messages.listByThread).mockResolvedValue([
+      { id: 'msg_1', thread_id: 'thr_1', role: 'user', content_type: 'text', content: 'hi', source: 'web', created_at: '2025-01-01T00:00:00Z' },
+      { id: 'msg_2', thread_id: 'thr_1', role: 'assistant', content_type: 'text', content: 'hello', source: 'web', created_at: '2025-01-01T00:00:01Z' },
+    ]);
   });
 
   const makeApp = () => {
@@ -195,7 +143,7 @@ describe('GET /api/threads/:id/messages', () => {
     app.use(express.json());
     app.use(cookieParser());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
+    app.use(buildChatRouter(mw));
     return app;
   };
 
@@ -207,7 +155,7 @@ describe('GET /api/threads/:id/messages', () => {
     expect(res.status).toBe(200);
     expect(res.body.messages).toHaveLength(2);
     expect(res.body.messages[0]).toMatchObject({ id: 'msg_1', role: 'user', content: 'hi' });
-    expect(mockMessageDao.listByThread).toHaveBeenCalledWith('thr_1');
+    expect(dao.messages.listByThread).toHaveBeenCalledWith('thr_1');
   });
 
   it('401 without session', async () => {
@@ -216,7 +164,7 @@ describe('GET /api/threads/:id/messages', () => {
   });
 
   it('404 when thread not owned by user', async () => {
-    mockThreadsDao.getByIdAndUser.mockResolvedValue(null);
+    vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/threads/thr_999/messages')
       .set('Cookie', validCookie('u1'));
@@ -225,33 +173,12 @@ describe('GET /api/threads/:id/messages', () => {
 });
 
 describe('GET /api/threads/:id/loop', () => {
-  let mockThreadsDao: any;
-  let mockMessageDao: any;
-  let mockAgentLoopDao: any;
-  let cache: ContainerMappingCache;
-
   beforeEach(() => {
-    mockThreadsDao = {
-      create: vi.fn(),
-      listByUser: vi.fn(),
-      getByIdAndUser: vi.fn(async () => ({ id: 'thr_1', user_id: 'u1', source: 'web' })),
-      archive: vi.fn(),
-    };
-    mockMessageDao = {
-      insert: vi.fn(async () => {}),
-      listByThread: vi.fn(async () => []),
-    };
-    mockAgentLoopDao = {
-      create: vi.fn(async () => {}),
-      complete: vi.fn(async () => true),
-      getById: vi.fn(async () => null),
-      getActive: vi.fn(async () => ({
-        id: 'loop_1', thread_id: 'thr_1', message_id: 'msg_1',
-        completion: null, created_at: '2025-01-01T00:00:00Z', completed_at: null,
-      })),
-      reapStale: vi.fn(async () => 0),
-    };
-    cache = new ContainerMappingCache(mockDbForCache as any);
+    vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue({ id: 'thr_1', user_id: 'u1', source: 'web' } as any);
+    vi.mocked(dao.agentLoops.getActive).mockResolvedValue({
+      id: 'loop_1', thread_id: 'thr_1', message_id: 'msg_1',
+      completion: null, created_at: '2025-01-01T00:00:00Z', completed_at: null,
+    });
   });
 
   const makeApp = () => {
@@ -259,7 +186,7 @@ describe('GET /api/threads/:id/loop', () => {
     app.use(express.json());
     app.use(cookieParser());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildChatRouter(mockThreadsDao, cache, mw, undefined, mockMessageDao, mockAgentLoopDao));
+    app.use(buildChatRouter(mw));
     return app;
   };
 
@@ -273,7 +200,7 @@ describe('GET /api/threads/:id/loop', () => {
   });
 
   it('returns null when no active loop', async () => {
-    mockAgentLoopDao.getActive.mockResolvedValue(null);
+    vi.mocked(dao.agentLoops.getActive).mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/threads/thr_1/loop')
       .set('Cookie', validCookie('u1'));

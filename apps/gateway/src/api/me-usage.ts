@@ -5,7 +5,7 @@
  * 只读 user_balance 一行, 前端可以按需刷新。
  */
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
-import type { UsageDao } from '../db/usage-dao.js';
+import { dao } from '../db/index.js';
 
 export interface MeUsageResponse {
   used_cny_month: number;
@@ -15,7 +15,6 @@ export interface MeUsageResponse {
 }
 
 export const buildMeUsageRouter = (
-  usageDao: UsageDao,
   sessionMw: RequestHandler,
 ): RouterType => {
   const router = Router();
@@ -23,7 +22,7 @@ export const buildMeUsageRouter = (
   router.get('/api/me/usage', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
     try {
-      const b = await usageDao.getBalance(userId);
+      const b = await dao.usage.getBalance(userId);
       const body: MeUsageResponse = {
         used_cny_month: b.used_cny_month,
         free_quota_cny_month: b.free_quota_cny_month,

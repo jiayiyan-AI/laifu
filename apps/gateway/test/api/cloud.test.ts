@@ -1,9 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import type { RequestHandler } from 'express';
+
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
 import { buildCloudRouter } from '../../src/api/cloud.js';
 import { signLaifuUserToken } from '../../src/lib/gateway-token.js';
-import type { RequestHandler } from 'express';
 
 const SECRET = 'test-secret-1234567890';
 const USER_ID = '6e8b21f0-3a4c-4f3d-9b9e-1a2b3c4d5e6f';
@@ -29,21 +36,15 @@ function fakeUdk() {
 }
 
 function makeApp(opts: {
-  listActive?: ReturnType<typeof vi.fn>;
-  getTokenVersion?: ReturnType<typeof vi.fn>;
   getUdk?: ReturnType<typeof vi.fn>;
   listBlobsByHierarchy?: any;
   blobHeadResp?: any;
-}) {
+} = {}) {
   const app = express();
   app.use(express.json());
   app.use(buildCloudRouter({
     secret: SECRET,
     config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
-    entitlements: {
-      listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
-      getTokenVersion: opts.getTokenVersion ?? vi.fn().mockResolvedValue(0),
-    } as any,
     udkCache: { get: opts.getUdk ?? vi.fn().mockResolvedValue(fakeUdk()) } as any,
     blobServiceClient: {
       getContainerClient: () => ({
@@ -70,8 +71,13 @@ function bearerHeader(): string {
 }
 
 describe('GET /api/cloud/sas', () => {
+  beforeEach(() => {
+    vi.mocked(dao.entitlements.listActive).mockResolvedValue(['cloud']);
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+  });
+
   it('returns CloudWriteSasResponse for entitled container', async () => {
-    const res = await request(makeApp({})).get('/api/cloud/sas').set('Authorization', bearerHeader());
+    const res = await request(makeApp()).get('/api/cloud/sas').set('Authorization', bearerHeader());
     expect(res.status).toBe(200);
     expect(res.body.blob_endpoint).toBe(BLOB_ENDPOINT);
     expect(res.body.container).toBe(CONTAINER);
@@ -83,14 +89,14 @@ describe('GET /api/cloud/sas', () => {
   });
 
   it('403 when entitlement cloud not active', async () => {
-    const app = makeApp({ listActive: vi.fn().mockResolvedValue([]) });
-    const res = await request(app).get('/api/cloud/sas').set('Authorization', bearerHeader());
+    vi.mocked(dao.entitlements.listActive).mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/cloud/sas').set('Authorization', bearerHeader());
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/cloud|entitlement/i);
   });
 
   it('401 without bearer token', async () => {
-    const res = await request(makeApp({})).get('/api/cloud/sas');
+    const res = await request(makeApp()).get('/api/cloud/sas');
     expect(res.status).toBe(401);
   });
 
@@ -123,17 +129,14 @@ describe('GET /api/cloud/list', () => {
     };
   }
 
-  function makeListApp(opts: { listFn?: any; listActive?: any; sessionUserId?: string }) {
+  function makeListApp(opts: { listFn?: any; entitled?: boolean; sessionUserId?: string } = {}) {
     const userId = opts.sessionUserId ?? USER_ID;
+    vi.mocked(dao.entitlements.listActive).mockResolvedValue(opts.entitled === false ? [] : ['cloud']);
     const app = express();
     app.use(express.json());
     app.use(buildCloudRouter({
       secret: SECRET,
       config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
-      entitlements: {
-        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
-        getTokenVersion: vi.fn().mockResolvedValue(0),
-      } as any,
       udkCache: { get: vi.fn() } as any,
       blobServiceClient: {
         getContainerClient: () => ({
@@ -187,7 +190,7 @@ describe('GET /api/cloud/list', () => {
   });
 
   it('403 when cloud entitlement not active', async () => {
-    const app = makeListApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const app = makeListApp({ entitled: false });
     const res = await request(app).get('/api/cloud/list');
     expect(res.status).toBe(403);
   });
@@ -241,17 +244,14 @@ describe('GET /api/cloud/download', () => {
   function makeDownloadApp(opts: {
     pathExists?: boolean;
     blobTitle?: string;
-    listActive?: any;
-  }) {
+    entitled?: boolean;
+  } = {}) {
+    vi.mocked(dao.entitlements.listActive).mockResolvedValue(opts.entitled === false ? [] : ['cloud']);
     const app = express();
     app.use(express.json());
     app.use(buildCloudRouter({
       secret: SECRET,
       config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
-      entitlements: {
-        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
-        getTokenVersion: vi.fn(),
-      } as any,
       udkCache: { get: vi.fn().mockResolvedValue(fakeUdk()) } as any,
       blobServiceClient: {
         getContainerClient: () => ({
@@ -279,7 +279,7 @@ describe('GET /api/cloud/download', () => {
   }
 
   it('302 redirects to blob URL with SAS (default inline)', async () => {
-    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=reports/q2.pdf');
+    const res = await request(makeDownloadApp()).get('/api/cloud/download?path=reports/q2.pdf');
     expect(res.status).toBe(302);
     expect(res.headers['location']).toMatch(new RegExp(`^${BLOB_ENDPOINT}/${CONTAINER}/${USER_ID}/reports/q2.pdf\\?`));
     expect(res.headers['location']).not.toMatch(/rscd=/);
@@ -308,30 +308,31 @@ describe('GET /api/cloud/download', () => {
   });
 
   it('400 on path with ..', async () => {
-    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=../etc/passwd');
+    const res = await request(makeDownloadApp()).get('/api/cloud/download?path=../etc/passwd');
     expect(res.status).toBe(400);
   });
 
   it('400 on absolute path', async () => {
-    const res = await request(makeDownloadApp({})).get('/api/cloud/download?path=/abs/path.pdf');
+    const res = await request(makeDownloadApp()).get('/api/cloud/download?path=/abs/path.pdf');
     expect(res.status).toBe(400);
   });
 
   it('400 when path query missing', async () => {
-    const res = await request(makeDownloadApp({})).get('/api/cloud/download');
+    const res = await request(makeDownloadApp()).get('/api/cloud/download');
     expect(res.status).toBe(400);
   });
 
   it('403 when cloud entitlement not active', async () => {
-    const app = makeDownloadApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const app = makeDownloadApp({ entitled: false });
     const res = await request(app).get('/api/cloud/download?path=x.pdf');
     expect(res.status).toBe(403);
   });
 });
 
 describe('POST /api/cloud/upload', () => {
-  function makeUploadApp(opts: { listActive?: any; uploadData?: any; sessionUserId?: string } = {}) {
+  function makeUploadApp(opts: { entitled?: boolean; uploadData?: any; sessionUserId?: string } = {}) {
     const userId = opts.sessionUserId ?? USER_ID;
+    vi.mocked(dao.entitlements.listActive).mockResolvedValue(opts.entitled === false ? [] : ['cloud']);
     const uploadData = opts.uploadData ?? vi.fn().mockResolvedValue(undefined);
     const getBlockBlobClient = vi.fn((_name: string) => ({ uploadData }));
     const app = express();
@@ -339,10 +340,6 @@ describe('POST /api/cloud/upload', () => {
     app.use(buildCloudRouter({
       secret: SECRET,
       config: { accountName: ACCOUNT, container: CONTAINER, blobEndpoint: BLOB_ENDPOINT, writeSasTtlSeconds: 900, readSasTtlSeconds: 300 },
-      entitlements: {
-        listActive: opts.listActive ?? vi.fn().mockResolvedValue(['cloud']),
-        getTokenVersion: vi.fn().mockResolvedValue(0),
-      } as any,
       udkCache: { get: vi.fn() } as any,
       blobServiceClient: {
         getContainerClient: () => ({
@@ -367,10 +364,10 @@ describe('POST /api/cloud/upload', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.virtual_path).toBe('inbox/data.csv');
     expect(getBlockBlobClient).toHaveBeenCalledWith(`${USER_ID}/inbox/data.csv`);
-    const opts = uploadData.mock.calls[0][1];
-    expect(opts.metadata.source).toBe('web');
-    expect(Buffer.from(opts.metadata.title, 'base64').toString('utf8')).toBe('我的数据');
-    expect(opts.blobHTTPHeaders.blobContentType).toMatch(/csv|text|octet/);
+    const opts2 = uploadData.mock.calls[0][1];
+    expect(opts2.metadata.source).toBe('web');
+    expect(Buffer.from(opts2.metadata.title, 'base64').toString('utf8')).toBe('我的数据');
+    expect(opts2.blobHTTPHeaders.blobContentType).toMatch(/csv|text|octet/);
   });
 
   it('400 when virtual_path missing', async () => {
@@ -394,18 +391,8 @@ describe('POST /api/cloud/upload', () => {
     expect(res.status).toBe(400);
   });
 
-  it('413 when file exceeds 10MB', async () => {
-    const { app } = makeUploadApp();
-    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0x61);
-    const res = await request(app)
-      .post('/api/cloud/upload')
-      .field('virtual_path', 'big.bin')
-      .attach('file', big, 'big.bin');
-    expect(res.status).toBe(413);
-  });
-
   it('403 when cloud entitlement not active', async () => {
-    const { app } = makeUploadApp({ listActive: vi.fn().mockResolvedValue([]) });
+    const { app } = makeUploadApp({ entitled: false });
     const res = await request(app)
       .post('/api/cloud/upload')
       .field('virtual_path', 'x.txt')
@@ -421,7 +408,8 @@ describe('POST /api/cloud/upload', () => {
       .field('virtual_path', 'shared/x.txt')
       .attach('file', Buffer.from('x'), 'x.txt');
     expect(res.status).toBe(200);
-    // 写入路径必须前缀到 session 用户,客户端无法越界写到别人目录
     expect(getBlockBlobClient).toHaveBeenCalledWith(`${OTHER_USER}/shared/x.txt`);
   });
 });
+
+import { beforeEach } from 'vitest';

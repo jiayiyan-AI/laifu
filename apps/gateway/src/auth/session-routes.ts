@@ -6,10 +6,9 @@
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import { requireSession } from './middleware.js';
 import type { AuthMeResponse } from '@lingxi/shared';
-import type { UsersDao } from '../db/users-dao.js';
+import { dao } from '../db/index.js';
 
 export interface SessionRoutesOpts {
-  usersDao: UsersDao;
   sessionSecret: string;
   cookieName: string;
   ttlHours: number;
@@ -30,7 +29,7 @@ export const buildSessionRoutes = (opts: SessionRoutesOpts): RouterType => {
 
   r.get('/api/auth/me', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
-    const user = await opts.usersDao.getById(userId);
+    const user = await dao.users.getById(userId);
     if (!user) return res.status(401).json({ error: 'user not found' });
     res.json(toMeResponse(user));
   });

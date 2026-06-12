@@ -12,13 +12,12 @@ import { Router, type Request, type Response, type Router as RouterType } from '
 import { randomBytes } from 'node:crypto';
 import { signSession, sessionCookieOpts } from './session.js';
 import type { OAuthProvider, NormalizedUser } from './providers/types.js';
-import type { UsersDao } from '../db/users-dao.js';
+import { dao } from '../db/index.js';
 
 const STATE_COOKIE = 'lingxi_oauth_state';
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 export interface OAuthRouterOpts {
-  usersDao: UsersDao;
   providers: Record<string, OAuthProvider>;
   sessionSecret: string;
   cookieName: string;
@@ -88,7 +87,7 @@ export const buildOAuthRouter = (opts: OAuthRouterOpts): RouterType => {
       return res.status(502).json({ error: 'oauth userinfo fetch failed' });
     }
 
-    const row = await opts.usersDao.upsertByProvider(providerName, userinfo);
+    const row = await dao.users.upsertByProvider(providerName, userinfo);
     if (!row) return res.status(500).json({ error: 'user upsert failed' });
 
     const token = signSession({ user_id: row.id }, opts.sessionSecret, opts.ttlHours);

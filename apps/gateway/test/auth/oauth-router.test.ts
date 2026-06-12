@@ -2,8 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import { buildOAuthRouter } from '../../src/auth/oauth-router.js';
 import type { OAuthProvider } from '../../src/auth/providers/types.js';
+
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
+import { buildOAuthRouter } from '../../src/auth/oauth-router.js';
 
 const SECRET = 'test-secret-do-not-use-in-prod-1234567';
 const COOKIE_NAME = 'lingxi_sid';
@@ -24,18 +31,11 @@ const makeMockProvider = (): OAuthProvider => ({
   })),
 });
 
-const makeUsersDao = () => ({
-  getById: vi.fn(async () => null),
-  getTokenVersion: vi.fn(async () => 0),
-  upsertByProvider: vi.fn(async () => ({ id: 'u_alice' })),
-});
-
-const makeApp = (providers: Record<string, OAuthProvider>, usersDao: any = makeUsersDao()) => {
+const makeApp = (providers: Record<string, OAuthProvider>) => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
   app.use(buildOAuthRouter({
-    usersDao,
     providers,
     sessionSecret: SECRET,
     cookieName: COOKIE_NAME,
@@ -43,16 +43,19 @@ const makeApp = (providers: Record<string, OAuthProvider>, usersDao: any = makeU
     publicBaseUrl: PUBLIC_BASE,
     frontendBaseUrl: FRONTEND_BASE,
   }));
-  return { app, usersDao };
+  return app;
 };
 
 describe('oauth-router', () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(dao.users.upsertByProvider).mockResolvedValue({ id: 'u_alice' });
+  });
 
   describe('GET /api/auth/:provider/start', () => {
     it('sets state cookie, 302 to provider auth URL with state + correct callback', async () => {
       const provider = makeMockProvider();
-      const { app } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
 
       const res = await request(app).get('/api/auth/mock/start');
 
@@ -67,7 +70,7 @@ describe('oauth-router', () => {
     });
 
     it('404 for unknown provider', async () => {
-      const { app } = makeApp({});
+      const app = makeApp({});
       const res = await request(app).get('/api/auth/nonexistent/start');
       expect(res.status).toBe(404);
     });
@@ -76,7 +79,7 @@ describe('oauth-router', () => {
   describe('GET /api/auth/:provider/callback', () => {
     it('happy path: exchange → fetch userinfo → upsert user → session cookie → 302 /desktop', async () => {
       const provider = makeMockProvider();
-      const { app, usersDao } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
 
       const state = 'STATE_ABC';
       const res = await request(app)
@@ -88,19 +91,17 @@ describe('oauth-router', () => {
       expect(res.headers['location']).toBe(`${FRONTEND_BASE}/desktop`);
       expect(provider.exchangeCode).toHaveBeenCalledWith('the_code', `${PUBLIC_BASE}/api/auth/mock/callback`);
       expect(provider.fetchUserinfo).toHaveBeenCalledWith('mock-token');
-      expect(usersDao.upsertByProvider).toHaveBeenCalledWith('mock', expect.objectContaining({
+      expect(dao.users.upsertByProvider).toHaveBeenCalledWith('mock', expect.objectContaining({
         external_id: 'ext_123',
         email: 'alice@example.com',
       }));
-      // session cookie set
       expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(true);
-      // state cookie cleared
       expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${STATE_COOKIE}=;`))).toBe(true);
     });
 
     it('400 on state CSRF mismatch', async () => {
       const provider = makeMockProvider();
-      const { app } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
       const res = await request(app)
         .get('/api/auth/mock/callback')
         .query({ code: 'c', state: 'A' })
@@ -111,7 +112,7 @@ describe('oauth-router', () => {
 
     it('400 when state cookie missing', async () => {
       const provider = makeMockProvider();
-      const { app } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
       const res = await request(app)
         .get('/api/auth/mock/callback')
         .query({ code: 'c', state: 'A' });
@@ -120,7 +121,7 @@ describe('oauth-router', () => {
 
     it('400 on provider error (?error=access_denied) — no token exchange', async () => {
       const provider = makeMockProvider();
-      const { app } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
       const res = await request(app)
         .get('/api/auth/mock/callback')
         .query({ error: 'access_denied', state: 'A' })
@@ -130,7 +131,7 @@ describe('oauth-router', () => {
     });
 
     it('404 for unknown provider', async () => {
-      const { app } = makeApp({});
+      const app = makeApp({});
       const res = await request(app)
         .get('/api/auth/x/callback')
         .query({ code: 'c', state: 'A' })
@@ -141,7 +142,7 @@ describe('oauth-router', () => {
     it('502 when exchangeCode throws', async () => {
       const provider = makeMockProvider();
       provider.exchangeCode = vi.fn(async () => { throw new Error('boom'); });
-      const { app } = makeApp({ mock: provider });
+      const app = makeApp({ mock: provider });
       const res = await request(app)
         .get('/api/auth/mock/callback')
         .query({ code: 'c', state: 'A' })

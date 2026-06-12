@@ -10,20 +10,13 @@
  */
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { HermesCallbackPayload, HermesCallbackResult } from '@lingxi/shared';
-import type { MessageDao } from '../db/message-dao.js';
-import type { AgentLoopDao } from '../db/agent-loop-dao.js';
-import type { ThreadsDao } from '../db/threads-dao.js';
-import type { UsageDao } from '../db/usage-dao.js';
 import { genId } from '@lingxi/db';
+import { dao } from '../db/index.js';
 import { touchHeartbeat, consumePendingLoop, emitLoopEvent } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
 
 export interface CallbackRouterDeps {
   containerAuth: RequestHandler;
-  messageDao: MessageDao;
-  agentLoopDao: AgentLoopDao;
-  threadsDao: ThreadsDao;
-  usageDao?: UsageDao;
   /** 微信回复能力：给定 threadId 和回复文本，发送到对应微信对话 */
   wechatReplier?: (threadId: string, text: string) => Promise<void>;
 }
@@ -66,11 +59,11 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
       source = cached.source;
     } else {
       // 进程重启了，fallback 到 DB
-      const loop = await deps.agentLoopDao.getById(body.loop_id);
+      const loop = await dao.agentLoops.getById(body.loop_id);
       if (!loop) {
         return res.status(404).json({ error: 'loop not found' });
       }
-      const thread = await deps.threadsDao.getByIdAndUser(loop.thread_id, userId);
+      const thread = await dao.threads.getByIdAndUser(loop.thread_id, userId);
       if (!thread) {
         return res.status(403).json({ error: 'thread ownership mismatch' });
       }
@@ -82,14 +75,14 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     const completion = (result.exit_code === 0 && result.reply) ? 'success' : 'fail';
 
     // 幂等: 已完成则跳过
-    const changed = await deps.agentLoopDao.complete(body.loop_id, completion);
+    const changed = await dao.agentLoops.complete(body.loop_id, completion);
     if (!changed) {
       return res.json({ ok: true, already_completed: true });
     }
 
     // 插入 assistant 消息
     if (result.reply) {
-      await deps.messageDao.insert({
+      await dao.messages.insert({
         id: genId.message,
         thread_id: threadId,
         role: 'assistant',
@@ -100,8 +93,8 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     }
 
     // 计量
-    if (deps.usageDao && result.usage) {
-      deps.usageDao.recordUsage({
+    if (result.usage) {
+      dao.usage.recordUsage({
         userId,
         threadId,
         source,
