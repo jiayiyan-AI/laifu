@@ -329,6 +329,14 @@ export interface CloudUploadResponse {
 
 // === 邮件能力 (B1) ===
 
+/** 一个入站附件在 Blob 里的引用 + 元数据。key 是 email-attachments 容器内相对路径,不含 userId。 */
+export interface AttachmentRef {
+  key: string;          // e.g. "01JAB...-quote.pdf"
+  filename: string;     // 原始文件名(展示 + 下载 content-disposition)
+  content_type: string; // MIME, 缺省 "application/octet-stream"
+  size: number;         // 字节
+}
+
 /** provider 把入站邮件解析成的中立结构 */
 export interface ParsedInboundEmail {
   to_localpart: string;        // 收件人 @ 前那段, 路由键
@@ -341,6 +349,7 @@ export interface ParsedInboundEmail {
   reference_ids: string[];
   body_text: string;           // 去引用后的纯文本
   has_attachments: boolean;
+  attachment_keys: AttachmentRef[];  // 无附件则 []
 }
 
 export type EmailDirection = 'inbound' | 'outbound';
@@ -367,6 +376,7 @@ export interface EmailDetail extends EmailListItem {
   in_reply_to: string | null;
   reference_ids: string[];
   body_text: string;
+  attachment_keys: AttachmentRef[];
 }
 
 export interface EmailDetailResponse {

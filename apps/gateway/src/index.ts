@@ -185,7 +185,18 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
     app.use(buildMeEntitlementsRouter({ secret: config.auth.gatewaySecret }));
 
-    // 邮件能力
+    // Blob 依赖(云盘 + 邮件附件共用)。无 Azure 配置时为 null,附件相关端点回 501。
+    const blobDeps = (config.azure.storageAccount && config.cloud.blobEndpoint)
+      ? {
+          blobServiceClient: getBlobServiceClient({ accountName: config.azure.storageAccount, blobEndpoint: config.cloud.blobEndpoint }),
+          udkCache: getUserDelegationKeyCache({ accountName: config.azure.storageAccount, blobEndpoint: config.cloud.blobEndpoint, udkLifetimeSeconds: config.cloud.udkLifetimeSeconds }),
+        }
+      : null;
+    if (blobDeps) {
+      blobDeps.blobServiceClient.getContainerClient(config.email.attachmentContainer).createIfNotExists().catch(() => {});
+    }
+
+    // 邮件能力 (B1): inbound webhook (Basic-Auth) + 容器侧 list/get/send (containerAuth + email entitlement)
     {
       const emailProvider = getEmailProvider({
         provider: config.email.provider,
@@ -206,6 +217,14 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         },
         containerAuth: emailContainerAuth,
         requireEmailEntitlement: makeEmailEntitlementMiddleware(),
+        attachments: blobDeps ? {
+          udkCache: blobDeps.udkCache,
+          accountName: config.azure.storageAccount,
+          container: config.email.attachmentContainer,
+          blobEndpoint: config.cloud.blobEndpoint,
+          writeSasTtlSeconds: config.cloud.writeSasTtlSeconds,
+          readSasTtlSeconds: config.cloud.readSasTtlSeconds,
+        } : undefined,
       }));
       console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
     }
@@ -218,17 +237,8 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     app.use(buildAuthRefreshRouter({ secret: config.auth.gatewaySecret }));
 
     // P2: cloud data plane (SAS / list / download)
-    if (config.azure.storageAccount && config.cloud.blobEndpoint) {
-      const blobServiceClient = getBlobServiceClient({
-        accountName: config.azure.storageAccount,
-        blobEndpoint: config.cloud.blobEndpoint,
-      });
-      const udkCache = getUserDelegationKeyCache({
-        accountName: config.azure.storageAccount,
-        blobEndpoint: config.cloud.blobEndpoint,
-        udkLifetimeSeconds: config.cloud.udkLifetimeSeconds,
-      });
-
+    // Only wire when cloud config is populated (otherwise local-dev without Azure creds would crash).
+    if (blobDeps) {
       app.use(buildCloudRouter({
         secret: config.auth.gatewaySecret,
         config: {
@@ -238,8 +248,8 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
           writeSasTtlSeconds: config.cloud.writeSasTtlSeconds,
           readSasTtlSeconds: config.cloud.readSasTtlSeconds,
         },
-        udkCache,
-        blobServiceClient,
+        udkCache: blobDeps.udkCache,
+        blobServiceClient: blobDeps.blobServiceClient,
         sessionMw,
       }));
       console.log('[gateway] cloud routes mounted (account=' + config.azure.storageAccount + ')');

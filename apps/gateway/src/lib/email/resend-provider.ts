@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ParsedInboundEmail } from '@lingxi/shared';
+import type { ParsedInboundEmail, AttachmentRef } from '@lingxi/shared';
 import type { EmailProvider, SendInput, SendResult } from './provider.js';
 
 const localpartOf = (addr: string): string => addr.split('@')[0]!.trim().toLowerCase();
@@ -35,7 +35,15 @@ export const makeResendProvider = (cfg: ResendConfig): EmailProvider => ({
       in_reply_to: b['in_reply_to'] ? String(b['in_reply_to']) : null,
       reference_ids: refs,
       body_text: String(b['body_text'] ?? b['text'] ?? ''),
-      has_attachments: Boolean(b['has_attachments']),
+      has_attachments: Array.isArray(b['attachment_keys']) ? b['attachment_keys'].length > 0 : Boolean(b['has_attachments']),
+      attachment_keys: Array.isArray(b['attachment_keys'])
+        ? (b['attachment_keys'] as AttachmentRef[]).map((a) => ({
+            key: String(a.key),
+            filename: String(a.filename ?? 'attachment'),
+            content_type: String(a.content_type ?? 'application/octet-stream'),
+            size: Number(a.size ?? 0),
+          }))
+        : [],
     };
   },
 

@@ -27,6 +27,7 @@ export const makeFakeProvider = (): EmailProvider => ({
       reference_ids: refs,
       body_text: String(b['text'] ?? b['body_text'] ?? ''),
       has_attachments: false,
+      attachment_keys: [],
     };
   },
 

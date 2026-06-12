@@ -82,6 +82,12 @@ resource cloudContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   properties: { publicAccess: 'None' }
 }
 
+resource emailAttachmentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'email-attachments'
+  properties: { publicAccess: 'None' }
+}
+
 resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
   parent: storage
   name: 'default'
@@ -411,6 +417,7 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     POSTMARK_INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-inbound-webhook-secret)'
     POSTMARK_SERVER_TOKEN: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-server-token)'
     RESEND_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=resend-api-key)'
+    EMAIL_ATTACHMENT_CONTAINER: 'email-attachments'
   }
 }
 

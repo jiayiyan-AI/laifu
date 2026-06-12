@@ -74,6 +74,7 @@ export const makeEmailDao = (db: Db): EmailDao => {
         reference_ids: parsed.reference_ids,
         body_text: parsed.body_text,
         has_attachments: parsed.has_attachments,
+        attachment_keys: parsed.attachment_keys,
       });
       return id;
     },
@@ -137,6 +138,7 @@ export const makeEmailDao = (db: Db): EmailDao => {
         reference_ids: em.reference_ids,
         body_text: em.body_text,
         has_attachments: em.has_attachments,
+        attachment_keys: em.attachment_keys,
         received_at: em.received_at,
       })
         .from(em)

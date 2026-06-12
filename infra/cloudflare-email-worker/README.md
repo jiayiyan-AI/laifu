@@ -5,9 +5,12 @@
 
 ## 这个 Worker 干什么
 
-`laifu.uncagedai.org` 收到的邮件 → Email Routing catch-all 投给本 Worker → Worker 用 postal-mime
-解析 → `POST {GATEWAY_URL}/api/email/inbound`(Basic-Auth)把规整 JSON 交给后端。代码 `src/index.ts`,
-域名无关(按信封收件人路由),无需改。
+`laifu.uncagedai.org` 收到的邮件 → Email Routing catch-all 投给本 Worker → postal-mime 解析:
+- **有附件**:先 `POST {GATEWAY_URL}/api/email/inbound/prepare` 拿每个附件的 write-SAS → 直接 PUT 到 Azure Blob → 再 `POST {GATEWAY_URL}/api/email/inbound`(commit)带 attachment_keys 落库。
+- **无附件**:直接 commit。
+- 任一步失败 → `message.setReject()` 让发件方 MTA 重投(不丢信)。
+
+部署方式不变(`wrangler deploy`);**不需要给 Worker 任何 Azure 凭据**——写 SAS 由 gateway 签发。
 
 ## 🔒 硬约束:账号
 
@@ -55,6 +58,7 @@ Cloudflare 已支持子域 Email Routing。面板 → `uncagedai.org` zone → *
 `npx wrangler tail` 开着,往 `sunco@laifu.uncagedai.org` 发一封测试邮件,应看到:
 - Worker 被触发;
 - 它向 `${GATEWAY_URL}/api/email/inbound` 发了 POST。
+- 发**含附件**的测试邮件时,应额外看到:先一次 `prepare` 调用、一或多次 Azure Blob `PUT`、最后才是 `commit`。
 gateway 返回非 2xx 会在 tail 里打 `gateway inbound <code>`(后端是否落库由项目方那边看,不在本文范围)。
 
 常见:catch-all 没指到 Worker → tail 无触发;gateway 回 401 → INBOUND_WEBHOOK_SECRET 两边不一致。

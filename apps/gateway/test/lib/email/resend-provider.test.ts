@@ -33,6 +33,21 @@ describe('resend provider · parseInbound (CF Email Worker payload)', () => {
   it('无有效收件人时抛错', () => {
     expect(() => p.parseInbound({ from_addr: 'x@y.com' })).toThrow(/no.*recipient|invalid|missing/i);
   });
+
+  it('解析 attachment_keys(Worker commit 带来的)', () => {
+    const parsed = p.parseInbound({
+      to: 'sunco@laifu.uncagedai.org', from_addr: 'b@x.com',
+      subject: 's', text: 't',
+      attachment_keys: [{ key: '01J-a.pdf', filename: 'a.pdf', content_type: 'application/pdf', size: 99 }],
+    });
+    expect(parsed.attachment_keys).toEqual([
+      { key: '01J-a.pdf', filename: 'a.pdf', content_type: 'application/pdf', size: 99 },
+    ]);
+  });
+  it('无 attachment_keys 时回 []', () => {
+    const parsed = p.parseInbound({ to: 'sunco@laifu.uncagedai.org' });
+    expect(parsed.attachment_keys).toEqual([]);
+  });
 });
 
 describe('resend provider · send', () => {
