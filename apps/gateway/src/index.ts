@@ -41,7 +41,7 @@ import { providers } from './auth/providers/index.js';
 import { buildWechatBindRouter } from './api/wechat-bind.js';
 import { PollManager } from './wechat-ilink/poll-manager.js';
 import { makeHandleInbound, wechatReplyContexts } from './wechat-ilink/inbound-handler.js';
-import { getStaleLoopIds, pendingLoops, emitLoopEvent } from './lib/pending-loops.js';
+import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
 import { loadPromptStore } from './lib/prompt-store.js';
 
 export interface CreateAppOptions {
@@ -290,26 +290,15 @@ export const start = async (): Promise<void> => {
     console.log(`[gateway] listening on :${config.port}`);
   });
 
-  // Reaper: 心跳超时检测
-  const REAP_INTERVAL_MS = 30_000;
-  const REAP_TIMEOUT_MS = 5 * 60 * 1000;
-  const reaperTimer = setInterval(() => {
-    const staleIds = getStaleLoopIds(REAP_TIMEOUT_MS);
-    for (const loopId of staleIds) {
-      pendingLoops.delete(loopId);
-      emitLoopEvent(loopId, { type: 'fail', error: '响应超时' });
-      dao.agentLoops.complete(loopId, 'fail').catch(() => {});
-    }
-    if (staleIds.length > 0) {
-      console.log(`[reaper] marked ${staleIds.length} stale loops as failed (in-memory)`);
-    }
-    dao.agentLoops.reapStale(REAP_TIMEOUT_MS).then((count) => {
-      if (count > 0) console.log(`[reaper] marked ${count} stale loops as failed (db fallback)`);
-    }).catch((err) => {
-      console.error('[reaper] db fallback error:', err);
-    });
-  }, REAP_INTERVAL_MS);
-  reaperTimer.unref();
+  // 一次性扫尾: 上次崩溃丢的 in-flight loop —— 它们的 per-loop deadline timer 随进程一起没了,
+  // 这里把超过 HARD_DEADLINE_MS 还没完成的 row 全标 fail
+  // 每个新 loop 自己挂一个 setTimeout 到 ctx 上 (见 lib/pending-loops.ts)。
+  try {
+    const swept = await dao.agentLoops.failOrphans(HARD_DEADLINE_MS);
+    if (swept > 0) console.log(`[boot] swept ${swept} orphan loops`);
+  } catch (err) {
+    console.error('[boot] failOrphans error:', err);
+  }
 
   // 优雅停机
   const shutdown = (signal: string) => {

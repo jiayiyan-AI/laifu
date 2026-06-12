@@ -1,102 +1,184 @@
 /**
- * 进程内 pending loop 上下文缓存 + per-loop SSE 事件流。
+ * Per-loop 进程内状态: 业务上下文 + SSE 订阅集合 + hard deadline timer。
  *
- * dispatch 时存入，callback 时取出。避免 callback 路径查 DB 拿 thread/source 信息。
- * 同时管理前端 SSE 订阅：前端发消息后连接 loop SSE，gateway 收到容器心跳/结果时
- * 通过 stream 推送给前端。
+ * 生命周期:
+ *   storePendingLoop  ─ dispatch 后入库 + 启 timer
+ *   touchHeartbeat    ─ 容器心跳到达 → 重排 timer (故意不写 DB, 避免和 result
+ *                       callback 抢 iterated_at latch)
+ *   emitLoopEvent     ─ 终态 (done/fail) 推 SSE + 关 stream + 清 timer + 删 entry
  *
- * 进程重启后丢失 — fallback 查 DB (agent_loops + threads 表)。
+ * 进程重启全丢: callback 路径 fallback 查 DB; boot 时 dao.agentLoops.failOrphans()
+ * 一次性扫尾上次崩溃丢的 in-flight loop。
+ *
+ * 实现: 单 entry 的状态机封装到 `PendingLoop` class (timer / streams / 终态自清理
+ * 都内聚在 class 里), 模块级函数作 facade —— 调用方拿到的还是一组无状态 API。
  */
 import Stream from './stream-iterator.js';
 
-// === Loop SSE 事件类型 ===
+/**
+ * 单个 loop 的硬超时上限 (10 分钟)。
+ *
+ * 容器侧 HEARTBEAT_INTERVAL = 120s, 留 5 倍空间吸收网络抖动 / 容器卡顿,
+ * 又不让真死掉的 loop 挂太久不上报。
+ */
+export const HARD_DEADLINE_MS = 10 * 60 * 1000;
+
+// ─── Public types ───
 
 export type LoopEvent =
   | { type: 'heartbeat' }
   | { type: 'done'; reply: string; completion: 'success' | 'limit' }
   | { type: 'fail'; error: string };
 
-// === PendingLoopContext ===
-
+/** 业务上下文 — callback 路径用来跳过 DB 查 thread/source。 */
 export interface PendingLoopContext {
   loopId: string;
   threadId: string;
   userId: string;
   source: 'web' | 'wechat';
-  lastHeartbeatAt: number;  // Date.now() 时间戳
-  /** 前端 SSE 订阅者 */
-  streams: Set<Stream<LoopEvent>>;
 }
 
-/** 进程内 Map: loopId → context */
-export const pendingLoops = new Map<string, PendingLoopContext>();
+export interface StorePendingLoopOpts {
+  hardDeadlineMs: number;
+  /** Hard deadline fire 时调用 (标 fail + 推 SSE)。心跳路径会 reset 这个 timer。 */
+  onDeadline: () => void | Promise<void>;
+}
 
-export const storePendingLoop = (ctx: Omit<PendingLoopContext, 'lastHeartbeatAt' | 'streams'>): void => {
-  pendingLoops.set(ctx.loopId, { ...ctx, lastHeartbeatAt: Date.now(), streams: new Set() });
-};
+// ─── Internal entry ───
 
-export const touchHeartbeat = (loopId: string): boolean => {
-  const ctx = pendingLoops.get(loopId);
-  if (!ctx) return false;
-  ctx.lastHeartbeatAt = Date.now();
-  return true;
-};
+/**
+ * 单个 pending loop 的进程内状态机。模块外不可见 —— 外界只能通过下面的 facade 函数接触。
+ *
+ * 是 capability bag: 只暴露 subscribe / unsubscribe / emit / rearm / dispose,
+ * 不感知 "事件是不是终态" —— 该判断留在 facade (emitLoopEvent), 由 registry 决定何时
+ * dispose + 从 Map 删自己。
+ */
+class PendingLoop {
+  readonly ctx: PendingLoopContext;
+  private readonly streams = new Set<Stream<LoopEvent>>();
+  private readonly hardDeadlineMs: number;
+  private readonly onDeadline: () => void | Promise<void>;
+  private timer: NodeJS.Timeout | undefined;
 
-export const consumePendingLoop = (loopId: string): PendingLoopContext | undefined => {
-  const ctx = pendingLoops.get(loopId);
-  // 不再立即删除 — 等 emitLoopEvent 终态事件时统一清理
-  // 这样 emit 时 ctx.streams 还在
-  return ctx;
+  constructor(ctx: PendingLoopContext, opts: StorePendingLoopOpts) {
+    this.ctx = ctx;
+    this.hardDeadlineMs = opts.hardDeadlineMs;
+    this.onDeadline = opts.onDeadline;
+    this.rearm();
+  }
+
+  /** 心跳 / 构造时调用 —— 重排 deadline timer。 */
+  rearm = (): void => {
+    this.cancelTimer();
+    this.timer = setTimeout(this.fireDeadline, this.hardDeadlineMs);
+  };
+
+  private cancelTimer(): void {
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  // setTimeout callback 抛 unhandled rejection 会拖垮进程。
+  // onDeadline 自己负责日志, 这里只兜底吞掉。
+  private fireDeadline = (): void => {
+    Promise.resolve(this.onDeadline()).catch(() => { /* swallowed; see comment above */ });
+  };
+
+  subscribe(): Stream<LoopEvent> {
+    const stream = new Stream<LoopEvent>();
+    this.streams.add(stream);
+    return stream;
+  }
+
+  unsubscribe(stream: Stream<LoopEvent>): void {
+    stream.close();
+    this.streams.delete(stream);
+  }
+
+  emit(event: LoopEvent): void {
+    for (const s of this.streams) {
+      try { s.send(event); } catch { /* stream already closed */ }
+    }
+  }
+
+  /** 关闭所有 stream + 清 timer。registry 终态 / 测试 reset / 重复 store 都用它。 */
+  dispose(): void {
+    this.cancelTimer();
+    for (const s of this.streams) s.close();
+    this.streams.clear();
+  }
+}
+
+// ─── Registry ───
+
+const loops = new Map<string, PendingLoop>();
+
+// ─── Public API (facade) ───
+
+export const storePendingLoop = (ctx: PendingLoopContext, opts: StorePendingLoopOpts): void => {
+  // 同一 loopId 重复 store (理论上不应发生; 防御性收掉旧 timer + streams 避免泄漏)。
+  loops.get(ctx.loopId)?.dispose();
+  loops.set(ctx.loopId, new PendingLoop(ctx, opts));
 };
 
 /**
- * Reaper 扫描：返回所有 lastHeartbeatAt 超时的 loop id。
- * 调用方负责标 fail + 删除。
+ * 容器心跳 → 重排 deadline timer。
+ * 返回 false 表示 entry 不存在 (loop 已终态 / 进程刚重启没缓存), 调用方可忽略。
  */
-export const getStaleLoopIds = (timeoutMs: number): string[] => {
-  const cutoff = Date.now() - timeoutMs;
-  const stale: string[] = [];
-  for (const [loopId, ctx] of pendingLoops) {
-    if (ctx.lastHeartbeatAt < cutoff) {
-      stale.push(loopId);
-    }
-  }
-  return stale;
+export const touchHeartbeat = (loopId: string): boolean => {
+  const entry = loops.get(loopId);
+  if (!entry) return false;
+  entry.rearm();
+  return true;
 };
 
-// === Per-loop SSE 订阅 ===
+/**
+ * 取业务 ctx。不立即删 entry —— 等 emitLoopEvent 终态时统一清理
+ * (届时 SSE streams 还在能推最后一条事件)。
+ */
+export const consumePendingLoop = (loopId: string): PendingLoopContext | undefined => {
+  return loops.get(loopId)?.ctx;
+};
 
-/** 订阅指定 loop 的事件流。若 ctx 已不存在（已完成），返回已关闭的 stream。 */
-export function subscribeLoop(loopId: string): Stream<LoopEvent> {
-  const stream = new Stream<LoopEvent>();
-  const ctx = pendingLoops.get(loopId);
-  if (ctx) {
-    ctx.streams.add(stream);
-  } else {
-    // loop 已结束（emitLoopEvent 终态事件已清理），立即关闭
-    stream.close();
+/** 若 entry 已不存在 (loop 已终态), 返回已关闭的 stream。 */
+export const subscribeLoop = (loopId: string): Stream<LoopEvent> => {
+  const entry = loops.get(loopId);
+  if (!entry) {
+    const closed = new Stream<LoopEvent>();
+    closed.close();
+    return closed;
   }
-  return stream;
-}
+  return entry.subscribe();
+};
 
-/** 取消订阅并关闭单个 stream */
-export function unsubscribeLoop(loopId: string, stream: Stream<LoopEvent>): void {
-  stream.close();
-  const ctx = pendingLoops.get(loopId);
-  if (ctx) ctx.streams.delete(stream);
-}
+export const unsubscribeLoop = (loopId: string, stream: Stream<LoopEvent>): void => {
+  loops.get(loopId)?.unsubscribe(stream);
+};
 
-/** 向指定 loop 的所有订阅者推送事件。终态事件推送后自动关闭所有 stream 并从 Map 中删除。 */
-export function emitLoopEvent(loopId: string, event: LoopEvent): void {
-  const ctx = pendingLoops.get(loopId);
-  if (!ctx) return;
-  for (const s of ctx.streams) {
-    try { s.send(event); } catch { /* stream already closed */ }
-  }
-  // 终态事件：关闭所有 stream 并从 Map 中清除
+/**
+ * 向指定 loop 的所有订阅者推送事件。终态 (done/fail) 由 registry 在这里 dispose + 删 entry。
+ */
+export const emitLoopEvent = (loopId: string, event: LoopEvent): void => {
+  const entry = loops.get(loopId);
+  if (!entry) return;
+  entry.emit(event);
   if (event.type === 'done' || event.type === 'fail') {
-    for (const s of ctx.streams) { s.close(); }
-    ctx.streams.clear();
-    pendingLoops.delete(loopId);
+    entry.dispose();
+    loops.delete(loopId);
   }
-}
+};
+
+// ─── Introspection / test utilities ───
+
+/** 进程内是否还跟着这个 loop。callback 路径 / 测试都可用。 */
+export const hasPendingLoop = (loopId: string): boolean => loops.has(loopId);
+
+/**
+ * 测试 reset 用。生产代码不要调 —— 会直接抛掉所有 in-flight loop 的 timer 和 SSE 订阅。
+ */
+export const __resetPendingLoopsForTests = (): void => {
+  for (const e of loops.values()) e.dispose();
+  loops.clear();
+};
