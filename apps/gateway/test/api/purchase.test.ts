@@ -2,8 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
 import { buildPurchaseRouter } from '../../src/api/purchase.js';
-import { ContainerMappingCache } from '../../src/db/cache.js';
 import { signSession } from '../../src/auth/session.js';
 import { requireSession } from '../../src/auth/middleware.js';
 
@@ -11,23 +17,11 @@ const SECRET = 'test-secret-do-not-use-in-prod-123456';
 const COOKIE_NAME = 'lingxi_sid';
 
 describe('POST /api/purchase', () => {
-  let mockMappingDao: any;
-  let mockDb: any;
-  let cache: ContainerMappingCache;
-
   beforeEach(() => {
     let inserted: any = null;
-    mockMappingDao = {
-      insert: vi.fn(async (row: any) => { inserted = row; }),
-      getByUserId: vi.fn(async () => inserted ? { ...inserted, container_url: null, provisioning_step: null, error_message: null, created_at: new Date().toISOString(), ready_at: null } : null),
-      listByStatus: vi.fn(async () => []),
-      updateStep: vi.fn(async () => {}),
-      markReady: vi.fn(async () => {}),
-      markFailed: vi.fn(async () => {}),
-    };
-    // mock db for ContainerMappingCache
-    mockDb = { select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })) };
-    cache = new ContainerMappingCache(mockDb as any);
+    vi.mocked(dao.containerMapping.insert).mockImplementation(async (row: any) => { inserted = row; });
+    vi.mocked(dao.containerMapping.getByUserId).mockImplementation(async () => inserted ? { ...inserted, container_url: null, provisioning_step: null, error_message: null, created_at: new Date().toISOString(), ready_at: null } : null);
+    vi.mocked(dao.cache.get).mockReturnValue(null);
   });
 
   const makeApp = (provisioner: any) => {
@@ -35,7 +29,7 @@ describe('POST /api/purchase', () => {
     app.use(cookieParser());
     app.use(express.json());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildPurchaseRouter(mockMappingDao, cache, provisioner, mw));
+    app.use(buildPurchaseRouter(provisioner, mw));
     return app;
   };
 
@@ -53,7 +47,7 @@ describe('POST /api/purchase', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('provisioning');
     expect(res.body.user_id).toBe('u1');
-    expect(mockMappingDao.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1' }));
+    expect(dao.containerMapping.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1' }));
     expect(provisioner).toHaveBeenCalledOnce();
   });
 

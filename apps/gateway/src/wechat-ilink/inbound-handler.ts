@@ -1,27 +1,12 @@
 /**
  * 收到 iLink 入站消息 → 异步 dispatch hermes Agent → 回调完成后 iLink 回复。
  *
- * 工厂模式: makeHandleInbound(deps) 返一个 OnMessageFactory,PollManager 会
+ * 工厂模式: makeHandleInbound(opts?) 返一个 OnMessageFactory,PollManager 会
  * 对每个 binding 调一次拿到 onMessage 回调注给 pollLoop。
- *
- * 流程 (异步化):
- *   1. parseInbound → 跳过 echo / 生成中 / 非 text
- *   2. 若 binding.thread_id 缺,新建 thread (source='wechat') + DAO.bindThread 回写
- *   3. 插入 user 消息到 Postgres + 创建 agent loop
- *   4. 异步 dispatch: 只等 202 ack,不等结果
- *   5. 结果通过回调路径 (internal-callback.ts) 返回,触发 sendText 回微信
- *
- * 微信回复上下文 (context_token + to_user_id) 存入进程内 Map，
- * 回调路由通过 wechatReplier 取用。
  */
 import { parseInbound } from './inbound.js';
 import type { OnMessageFactory } from './poll-manager.js';
-import type { WechatBindingDao } from '../db/wechat-binding-dao.js';
-import type { ThreadsDao } from '../db/threads-dao.js';
-import type { MessageDao } from '../db/message-dao.js';
-import type { AgentLoopDao } from '../db/agent-loop-dao.js';
-import type { ContainerMappingCache } from '../db/cache.js';
-import type { UsageDao } from '../db/usage-dao.js';
+import { dao } from '../db/index.js';
 import { dispatchHermesChat } from '../lib/aca-call.js';
 import { genId } from '@lingxi/db';
 import { storePendingLoop } from '../lib/pending-loops.js';
@@ -42,36 +27,29 @@ export const wechatReplyContexts = new Map<string, {
   client: { sendText: (a: { to_user_id: string; text: string; context_token: string }) => Promise<void> };
 }>();
 
-interface HandleInboundDeps {
-  dao: WechatBindingDao;
-  threadsDao: ThreadsDao;
-  messageDao: MessageDao;
-  agentLoopDao: AgentLoopDao;
-  cache: ContainerMappingCache;
+export interface HandleInboundOpts {
   fetchImpl?: typeof fetch;
-  usageDao?: UsageDao;
 }
 
 const resolveThread = async (
-  deps: HandleInboundDeps,
   binding: { id: string; user_id: string; thread_id: string | null },
 ): Promise<string> => {
   if (binding.thread_id) return binding.thread_id;
   const id = genId.thread;
-  await deps.threadsDao.create({ id, user_id: binding.user_id, source: 'wechat', title: '微信' });
-  await deps.dao.bindThread(binding.id, id);
+  await dao.threads.create({ id, user_id: binding.user_id, source: 'wechat', title: '微信' });
+  await dao.wechatBindings.bindThread(binding.id, id);
   binding.thread_id = id;
   return id;
 };
 
-export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => {
+export const makeHandleInbound = (opts?: HandleInboundOpts): OnMessageFactory => {
   return (binding, client) => async (raw: unknown) => {
     const msg = parseInbound(raw);
     if (!msg) return;
 
     let threadId: string;
     try {
-      threadId = await resolveThread(deps, binding);
+      threadId = await resolveThread(binding);
     } catch (e) {
       console.error('[handleInbound] resolveThread failed:', e);
       await safeSendText(client, msg, FALLBACK_TEXT);
@@ -79,20 +57,18 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
     }
 
     // 配额检查
-    if (deps.usageDao) {
-      try {
-        const b = await deps.usageDao.getBalance(binding.user_id);
-        if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
-          await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
-          return;
-        }
-      } catch (e) {
-        log.warn({ event: 'wechat.quota.check.failed', user_id: binding.user_id, err: String(e) });
+    try {
+      const b = await dao.usage.getBalance(binding.user_id);
+      if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
+        await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
+        return;
       }
+    } catch (e) {
+      log.warn({ event: 'wechat.quota.check.failed', user_id: binding.user_id, err: String(e) });
     }
 
     // 容器 ready 检查
-    const mapping = deps.cache.get(binding.user_id);
+    const mapping = dao.cache.get(binding.user_id);
     if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
       await safeSendText(client, msg, CONTAINER_NOT_READY_TEXT);
       return;
@@ -103,7 +79,7 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
     const loopId = genId.agentLoop;
 
     try {
-      await deps.messageDao.insert({
+      await dao.messages.insert({
         id: userMsgId,
         thread_id: threadId,
         role: 'user',
@@ -111,7 +87,7 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
         content: msg.text,
         source: 'wechat',
       });
-      await deps.agentLoopDao.create({ id: loopId, thread_id: threadId, message_id: userMsgId });
+      await dao.agentLoops.create({ id: loopId, thread_id: threadId, message_id: userMsgId });
     } catch (e) {
       console.error('[handleInbound] DB insert failed:', e);
       await safeSendText(client, msg, FALLBACK_TEXT);
@@ -138,12 +114,12 @@ export const makeHandleInbound = (deps: HandleInboundDeps): OnMessageFactory => 
       sessionId,
       message: msg.text,
       loopId,
-      fetchImpl: deps.fetchImpl,
+      fetchImpl: opts?.fetchImpl,
     });
 
     if (!dispatch.ok) {
       wechatReplyContexts.delete(loopId);
-      await deps.agentLoopDao.complete(loopId, 'fail');
+      await dao.agentLoops.complete(loopId, 'fail');
       await safeSendText(client, msg, FALLBACK_TEXT);
     }
   };

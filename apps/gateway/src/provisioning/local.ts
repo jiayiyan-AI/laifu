@@ -1,6 +1,4 @@
-import type { ContainerMappingCache } from '../db/cache.js';
-import type { ContainerMappingDao } from '../db/container-mapping-dao.js';
-import type { UsersDao } from '../db/users-dao.js';
+import { dao } from '../db/index.js';
 import { signLaifuUserToken } from '../lib/gateway-token.js';
 import { config } from '../config.js';
 import { promises as fs } from 'node:fs';
@@ -24,29 +22,26 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 export interface LocalProvisionArgs {
   userId: string;
-  mappingDao: ContainerMappingDao;
-  usersDao: UsersDao;
-  cache: ContainerMappingCache;
   localContainerUrl: string;
   stepDelayMs?: number;
   signTokenAndRestart?: (userId: string, tokenVersion: number) => Promise<void>;
 }
 
 export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise<void> => {
-  const { userId, mappingDao, usersDao, cache, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
+  const { userId, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
   try {
     for (let i = 0; i < STEPS.length - 1; i++) {
       const s = STEPS[i]!;
-      await mappingDao.updateStep(userId, s.step, s.pct);
-      const data = await mappingDao.getByUserId(userId);
-      if (data) cache.set(data);
+      await dao.containerMapping.updateStep(userId, s.step, s.pct);
+      const data = await dao.containerMapping.getByUserId(userId);
+      if (data) dao.cache.set(data);
       if (stepDelayMs > 0) await sleep(stepDelayMs);
     }
 
     const ready = STEPS[5]!;
 
     if (signTokenAndRestart) {
-      const tokenVersion = await usersDao.getTokenVersion(userId) ?? 0;
+      const tokenVersion = await dao.users.getTokenVersion(userId) ?? 0;
       try {
         await signTokenAndRestart(userId, tokenVersion);
       } catch (err) {
@@ -54,13 +49,13 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
       }
     }
 
-    await mappingDao.markReady(userId, localContainerUrl, ready.step, ready.pct);
-    const data = await mappingDao.getByUserId(userId);
-    if (data) cache.set(data);
+    await dao.containerMapping.markReady(userId, localContainerUrl, ready.step, ready.pct);
+    const data = await dao.containerMapping.getByUserId(userId);
+    if (data) dao.cache.set(data);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await mappingDao.markFailed(userId, msg);
-    cache.delete(userId);
+    await dao.containerMapping.markFailed(userId, msg);
+    dao.cache.delete(userId);
     console.error(`[local-provisioning] failed for ${userId}:`, msg);
   }
 };

@@ -1,4 +1,5 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { dao } from '../db/index.js';
 import {
   signLaifuUserToken,
   verifyLaifuUserToken,
@@ -13,7 +14,6 @@ const LIFETIME_SECONDS = 90 * 24 * 3600;
 
 export interface AuthRefreshDeps {
   secret: string;
-  getTokenVersion: (userId: string) => Promise<number | null>;
 }
 
 interface PeekedPayload {
@@ -52,7 +52,7 @@ export const buildAuthRefreshRouter = (deps: AuthRefreshDeps): RouterType => {
 
     let currentVersion: number | null;
     try {
-      currentVersion = await deps.getTokenVersion(userId);
+      currentVersion = await dao.entitlements.getTokenVersion(userId);
     } catch (err) {
       console.error(`[auth-refresh] getTokenVersion threw for ${userId}:`, err);
       res.status(500).json({ error: 'internal' });

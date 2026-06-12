@@ -1,6 +1,4 @@
-import type { ContainerMappingCache } from '../db/cache.js';
-import type { ContainerMappingDao } from '../db/container-mapping-dao.js';
-import type { UsersDao } from '../db/users-dao.js';
+import { dao } from '../db/index.js';
 
 // 与 spec §1.1 用户旅程里 6 步进度文案一致
 const STEPS = [
@@ -27,42 +25,37 @@ export interface ProvisionContainerArgs {
   userId: string;
   containerName: string;
   shareName: string;
-  mappingDao: ContainerMappingDao;
-  usersDao: UsersDao;
-  cache: ContainerMappingCache;
   azure: AzureProvisioner;
   signTokenAndRestart?: SignTokenAndRestart;
 }
 
 const updateStep = async (
-  mappingDao: ContainerMappingDao,
   userId: string,
   step: string,
   pct: number,
-  cache: ContainerMappingCache,
 ): Promise<void> => {
-  await mappingDao.updateStep(userId, step, pct);
-  const data = await mappingDao.getByUserId(userId);
-  if (data) cache.set(data);
+  await dao.containerMapping.updateStep(userId, step, pct);
+  const data = await dao.containerMapping.getByUserId(userId);
+  if (data) dao.cache.set(data);
 };
 
 export const provisionContainer = async (args: ProvisionContainerArgs): Promise<void> => {
-  const { userId, containerName, shareName, mappingDao, usersDao, cache, azure, signTokenAndRestart } = args;
+  const { userId, containerName, shareName, azure, signTokenAndRestart } = args;
 
   try {
-    await updateStep(mappingDao, userId, STEPS[0].step, STEPS[0].pct, cache);
+    await updateStep(userId, STEPS[0].step, STEPS[0].pct);
 
-    await updateStep(mappingDao, userId, STEPS[1].step, STEPS[1].pct, cache);
+    await updateStep(userId, STEPS[1].step, STEPS[1].pct);
     await azure.createFileShare(shareName);
 
-    await updateStep(mappingDao, userId, STEPS[2].step, STEPS[2].pct, cache);
+    await updateStep(userId, STEPS[2].step, STEPS[2].pct);
     const url = await azure.createContainerApp({ containerName, shareName });
 
-    await updateStep(mappingDao, userId, STEPS[3].step, STEPS[3].pct, cache);
-    await updateStep(mappingDao, userId, STEPS[4].step, STEPS[4].pct, cache);
+    await updateStep(userId, STEPS[3].step, STEPS[3].pct);
+    await updateStep(userId, STEPS[4].step, STEPS[4].pct);
 
     if (signTokenAndRestart) {
-      const tokenVersion = await usersDao.getTokenVersion(userId) ?? 0;
+      const tokenVersion = await dao.users.getTokenVersion(userId) ?? 0;
       try {
         await signTokenAndRestart(userId, tokenVersion);
       } catch (err) {
@@ -71,13 +64,13 @@ export const provisionContainer = async (args: ProvisionContainerArgs): Promise<
     }
 
     // 最终 ready
-    await mappingDao.markReady(userId, url, STEPS[5].step, STEPS[5].pct);
-    const data = await mappingDao.getByUserId(userId);
-    if (data) cache.set(data);
+    await dao.containerMapping.markReady(userId, url, STEPS[5].step, STEPS[5].pct);
+    const data = await dao.containerMapping.getByUserId(userId);
+    if (data) dao.cache.set(data);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await mappingDao.markFailed(userId, msg);
-    cache.delete(userId);
+    await dao.containerMapping.markFailed(userId, msg);
+    dao.cache.delete(userId);
     console.error(`[provisioning] failed for user ${userId}:`, msg);
   }
 };

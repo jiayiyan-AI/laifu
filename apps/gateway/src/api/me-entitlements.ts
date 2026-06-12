@@ -1,27 +1,24 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { makeContainerTokenMiddleware } from '../auth/container-token.js';
-import type { EntitlementsDao } from '../db/entitlements-dao.js';
-import type { ObservedStateDao } from '../db/observed-state-dao.js';
+import { dao } from '../db/index.js';
 import type { EntitlementsList } from '@lingxi/shared';
 
 export interface MeEntitlementsRouterDeps {
   secret: string;
-  entitlements: EntitlementsDao;
-  observedState: ObservedStateDao;
 }
 
 export const buildMeEntitlementsRouter = (deps: MeEntitlementsRouterDeps): RouterType => {
   const router = Router();
   const containerAuth = makeContainerTokenMiddleware({
     secret: deps.secret,
-    tokenVersionFetcher: (userId) => deps.entitlements.getTokenVersion(userId),
+    tokenVersionFetcher: (userId) => dao.entitlements.getTokenVersion(userId),
   });
 
   router.get('/api/me/entitlements', containerAuth, async (req: Request, res: Response) => {
     const userId = req.user_id!;
     try {
-      const features = await deps.entitlements.listActive(userId);
-      const tokenVersion = await deps.entitlements.getTokenVersion(userId);
+      const features = await dao.entitlements.listActive(userId);
+      const tokenVersion = await dao.entitlements.getTokenVersion(userId);
       const body: EntitlementsList = {
         entitlements: features,
         token_version: tokenVersion ?? 0,
@@ -40,7 +37,7 @@ export const buildMeEntitlementsRouter = (deps: MeEntitlementsRouterDeps): Route
       return;
     }
     try {
-      await deps.observedState.upsert({
+      await dao.observedState.upsert({
         user_id: userId,
         observed_entitlements: body.observed as string[],
         observed_token_version: body.token_version,

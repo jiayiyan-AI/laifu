@@ -1,23 +1,13 @@
 /**
  * PollManager —— 进程内单例,管所有活跃 wechat 绑定的 iLink 长轮询循环。
- *
- * 生命周期:
- *   gateway 启动 → startAll() (DB 扫 is_active=true 逐个起 startOne)
- *   用户扫码绑定成功 → startOne(newBinding) 立即开循环
- *   解绑 / session_expired → stopOne(id) 取消 + DAO.deactivate
- *   SIGTERM/SIGINT → stopAll() 取消所有 + 等清理
- *
- * 每个 binding 一个 AbortController,abort 时 pollLoop 立刻退。
- * floating promise + .catch 兜底,任何异常都不会 unhandledRejection。
  */
 import { pollLoop } from './poll-loop.js';
 import { makeIlinkClient, type IlinkClient } from './client.js';
-import type { WechatBinding, WechatBindingDao } from '../db/wechat-binding-dao.js';
+import { dao } from '../db/index.js';
+import type { WechatBinding } from '../db/wechat-binding-dao.js';
 
 /**
  * 工厂签名: 收到 (binding, client) 后返回 inbound 回调。
- * client 复用 PollManager 起循环时建的那个 IlinkClient — 用同一对 fetch keep-alive,
- * 也省一次创建。client.sendText 在回复时调。
  */
 export type OnMessageFactory = (
   binding: WechatBinding,
@@ -25,8 +15,7 @@ export type OnMessageFactory = (
 ) => (raw: unknown) => Promise<void>;
 
 export interface PollManagerOpts {
-  dao: WechatBindingDao;
-  /** 每个 binding 一个 inbound 回调工厂; B6 实现 (resolve thread → hermes → sendText)。 */
+  /** 每个 binding 一个 inbound 回调工厂 */
   onMessageFor: OnMessageFactory;
   /** 注入用,测试里可替成 mock。 */
   clientFactory?: (opts: { botToken: string; baseUrl: string }) => IlinkClient;
@@ -40,7 +29,6 @@ export class PollManager {
 
   constructor(opts: PollManagerOpts) {
     this.opts = {
-      dao: opts.dao,
       onMessageFor: opts.onMessageFor,
       clientFactory: opts.clientFactory ?? makeIlinkClient,
       runLoop: opts.runLoop ?? pollLoop,
@@ -49,7 +37,7 @@ export class PollManager {
 
   /** 启动时扫 DB 拉所有活跃绑定,逐个起循环。 */
   async startAll(): Promise<void> {
-    const bindings = await this.opts.dao.listActive();
+    const bindings = await dao.wechatBindings.listActive();
     for (const b of bindings) this.startOne(b);
     console.log(`[PollManager] started ${bindings.length} pollers`);
   }
@@ -65,15 +53,14 @@ export class PollManager {
       baseUrl: binding.base_url,
     });
 
-    // floating promise: 不 await,后台跑。.catch 兜底防 unhandledRejection。
     this.opts.runLoop({
       client,
       initialCursor: binding.updates_cursor,
       signal: ac.signal,
       onMessage: this.opts.onMessageFor(binding, client),
-      onCursorUpdate: (c) => this.opts.dao.updateCursor(binding.id, c),
+      onCursorUpdate: (c) => dao.wechatBindings.updateCursor(binding.id, c),
       onSessionExpired: async () => {
-        await this.opts.dao.deactivate(binding.id);
+        await dao.wechatBindings.deactivate(binding.id);
         this.pollers.delete(binding.id);
         console.log(`[PollManager] binding ${binding.id} session expired, deactivated`);
       },

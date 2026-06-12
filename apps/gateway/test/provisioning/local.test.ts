@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { provisionContainerLocal } from '../../src/provisioning/local.js';
 
 // 测试隔离: 把 HOME 指到临时目录。
 const { TEST_HOME } = vi.hoisted(() => ({
@@ -17,7 +16,13 @@ vi.mock('node:child_process', () => ({
   exec: vi.fn((_cmd: string, cb: any) => cb(null, { stdout: 'true\n', stderr: '' })),
 }));
 
-import { signTokenAndInjectLocal, restartContainerAppLocal } from '../../src/provisioning/local.js';
+vi.mock('../../src/db/index.js', async () => {
+  const { mockDaoModule } = await import('../helpers/mock-dao.js');
+  return mockDaoModule();
+});
+
+import { dao } from '../../src/db/index.js';
+import { provisionContainerLocal, signTokenAndInjectLocal, restartContainerAppLocal } from '../../src/provisioning/local.js';
 
 const TOKEN_PATH = path.join(homedir(), '.hermes-dev', '.hermes', '.laifu_user_token');
 
@@ -39,42 +44,21 @@ const finalReadyRow = {
 };
 
 describe('provisionContainerLocal', () => {
-  let mockMappingDao: any;
-  let mockUsersDao: any;
-  let mockCache: any;
-
   beforeEach(() => {
-    mockMappingDao = {
-      insert: vi.fn(async () => {}),
-      getByUserId: vi.fn(async () => finalReadyRow),
-      listByStatus: vi.fn(async () => []),
-      updateStep: vi.fn(async () => {}),
-      markReady: vi.fn(async () => {}),
-      markFailed: vi.fn(async () => {}),
-    };
-    mockUsersDao = {
-      getById: vi.fn(async () => null),
-      getTokenVersion: vi.fn(async () => 0),
-      upsertByProvider: vi.fn(async () => null),
-    };
-    mockCache = { set: vi.fn(), delete: vi.fn() };
+    vi.mocked(dao.containerMapping.getByUserId).mockResolvedValue(finalReadyRow as any);
+    vi.mocked(dao.users.getTokenVersion).mockResolvedValue(0);
   });
 
   it('walks 6 steps and marks ready with localhost URL', async () => {
     await provisionContainerLocal({
       userId: 'u1',
-      mappingDao: mockMappingDao,
-      usersDao: mockUsersDao,
-      cache: mockCache,
       localContainerUrl: 'http://localhost:8080',
       stepDelayMs: 0,
     });
 
-    // updateStep called for intermediate steps (5 steps before ready)
-    expect(mockMappingDao.updateStep.mock.calls.length).toBeGreaterThanOrEqual(5);
-    // markReady called
-    expect(mockMappingDao.markReady).toHaveBeenCalledWith('u1', 'http://localhost:8080', '灵犀助理上岗完成', 100);
-    expect(mockCache.set).toHaveBeenCalled();
+    expect(vi.mocked(dao.containerMapping.updateStep).mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(dao.containerMapping.markReady).toHaveBeenCalledWith('u1', 'http://localhost:8080', '灵犀助理上岗完成', 100);
+    expect(dao.cache.set).toHaveBeenCalled();
   });
 });
 

@@ -3,7 +3,7 @@ import multer from 'multer';
 import { makeContainerTokenMiddleware } from '../auth/container-token.js';
 import { buildDirectoryWriteSas, buildReadBlobSas } from '../lib/sas-builder.js';
 import { buildContentDisposition } from '../lib/content-disposition.js';
-import type { EntitlementsDao } from '../db/entitlements-dao.js';
+import { dao } from '../db/index.js';
 import type { UserDelegationKeyCache } from '../lib/user-delegation-key-cache.js';
 import { validateVirtualPath } from '@lingxi/shared';
 import type { CloudWriteSasResponse, CloudListResponse, CloudFileItem, CloudFolderItem, CloudUploadResponse } from '@lingxi/shared';
@@ -20,7 +20,6 @@ export interface CloudRouterConfig {
 export interface CloudRouterDeps {
   secret: string;
   config: CloudRouterConfig;
-  entitlements: Pick<EntitlementsDao, 'listActive' | 'getTokenVersion'>;
   udkCache: Pick<UserDelegationKeyCache, 'get'>;
   blobServiceClient: Pick<BlobServiceClient, 'getContainerClient'>;
   sessionMw: RequestHandler;
@@ -53,13 +52,13 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
   const router = Router();
   const containerAuth = makeContainerTokenMiddleware({
     secret: deps.secret,
-    tokenVersionFetcher: (uid) => deps.entitlements.getTokenVersion(uid),
+    tokenVersionFetcher: (uid) => dao.entitlements.getTokenVersion(uid),
   });
 
   const requireCloudForContainer: RequestHandler = async (req, res, next) => {
     const userId = req.user_id!;
     try {
-      const active = await deps.entitlements.listActive(userId);
+      const active = await dao.entitlements.listActive(userId);
       if (!active.includes(FEATURE)) {
         res.status(403).json({ error: 'cloud entitlement not active' });
         return;
@@ -97,14 +96,12 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
   router.get('/api/cloud/list', deps.sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
 
-    // entitlement check
-    const active = await deps.entitlements.listActive(userId);
+    const active = await dao.entitlements.listActive(userId);
     if (!active.includes(FEATURE)) {
       res.status(403).json({ error: 'cloud entitlement not active' });
       return;
     }
 
-    // prefix validation: validateVirtualPath rejects trailing slash, so strip+validate+restore
     const prefixParam = (req.query['prefix'] as string) ?? '';
     if (prefixParam) {
       const trimmed = prefixParam.replace(/\/+$/, '');
@@ -157,7 +154,7 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
   router.get('/api/cloud/download', deps.sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
 
-    const active = await deps.entitlements.listActive(userId);
+    const active = await dao.entitlements.listActive(userId);
     if (!active.includes(FEATURE)) {
       res.status(403).json({ error: 'cloud entitlement not active' });
       return;
@@ -180,7 +177,6 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     const containerClient = deps.blobServiceClient.getContainerClient(deps.config.container);
     const blobClient = containerClient.getBlobClient(fullPath);
 
-    // HEAD: verify exists + get title for filename
     let props: { contentType?: string; metadata?: Record<string, string> };
     try {
       props = await blobClient.getProperties() as any;
@@ -193,7 +189,6 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
       return;
     }
 
-    // Build SAS
     const udk = await deps.udkCache.get();
     let contentDisposition: string | undefined;
     if (dispose === 'attachment') {
@@ -210,8 +205,6 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
       contentDisposition,
     });
 
-    // 逐段编码: blob 名可能含空格 / 括号等 (如 "record (1).mp4"), 原样拼进 URL 非法。
-    // SAS sig 由 SDK 用原始 blobName 签, Azure 收到后会先解码再验, 故编码不破坏 sig。
     const encodedPath = fullPath.split('/').map(encodeURIComponent).join('/');
     const url = `${deps.config.blobEndpoint}/${deps.config.container}/${encodedPath}?${sas.sasToken}`;
     res.redirect(302, url);
@@ -220,7 +213,7 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
   router.post('/api/cloud/upload', deps.sessionMw, uploadSingle, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
 
-    const active = await deps.entitlements.listActive(userId);
+    const active = await dao.entitlements.listActive(userId);
     if (!active.includes(FEATURE)) {
       res.status(403).json({ error: 'cloud entitlement not active' });
       return;

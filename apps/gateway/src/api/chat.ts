@@ -1,11 +1,7 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
-import type { ContainerMappingCache } from '../db/cache.js';
-import type { UsageDao } from '../db/usage-dao.js';
-import type { ThreadsDao } from '../db/threads-dao.js';
-import type { MessageDao } from '../db/message-dao.js';
-import type { AgentLoopDao } from '../db/agent-loop-dao.js';
 import type { WebChatResponse, WebThreadMessagesResponse } from '@lingxi/shared';
 import { genId } from '@lingxi/db';
+import { dao } from '../db/index.js';
 import { dispatchHermesChat } from '../lib/aca-call.js';
 import { storePendingLoop, subscribeLoop, unsubscribeLoop } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
@@ -13,12 +9,7 @@ import { log } from '../lib/logger.js';
 const SSE_HEARTBEAT_MS = 10_000; // gateway→web 心跳间隔（独立于 ACA→gateway 的 2 分钟心跳）
 
 export const buildChatRouter = (
-  threadsDao: ThreadsDao,
-  cache: ContainerMappingCache,
   sessionMw: RequestHandler,
-  usageDao?: UsageDao,
-  messageDao?: MessageDao,
-  agentLoopDao?: AgentLoopDao,
 ): RouterType => {
   const r = Router();
 
@@ -30,54 +21,48 @@ export const buildChatRouter = (
     }
 
     // 1. 验证 thread 属于该用户
-    const thread = await threadsDao.getByIdAndUser(thread_id, userId);
+    const thread = await dao.threads.getByIdAndUser(thread_id, userId);
     if (!thread) return res.status(404).json({ error: 'thread not found' });
 
     // 2. 取该用户的 container url
-    const mapping = cache.get(userId);
+    const mapping = dao.cache.get(userId);
     if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
       return res.status(503).json({ error: 'assistant not ready' });
     }
 
     // 2.5 软配额检查
-    if (usageDao) {
-      try {
-        const b = await usageDao.getBalance(userId);
-        if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
-          return res.status(402).json({
-            error: 'quota exhausted',
-            used_cny_month: b.used_cny_month,
-            free_quota_cny_month: b.free_quota_cny_month,
-            balance_cny: b.balance_cny,
-          });
-        }
-      } catch (err) {
-        log.warn({
-          event: 'usage.balance.check.failed',
-          user_id: userId,
-          err: err instanceof Error ? err.message : String(err),
+    try {
+      const b = await dao.usage.getBalance(userId);
+      if (b.used_cny_month >= b.free_quota_cny_month && b.balance_cny <= 0) {
+        return res.status(402).json({
+          error: 'quota exhausted',
+          used_cny_month: b.used_cny_month,
+          free_quota_cny_month: b.free_quota_cny_month,
+          balance_cny: b.balance_cny,
         });
       }
+    } catch (err) {
+      log.warn({
+        event: 'usage.balance.check.failed',
+        user_id: userId,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // 3. 插入 user 消息 + 创建 agent loop
     const userMsgId = genId.message;
     const loopId = genId.agentLoop;
 
-    if (messageDao) {
-      await messageDao.insert({
-        id: userMsgId,
-        thread_id,
-        role: 'user',
-        content_type: 'text',
-        content: message,
-        source: thread.source as 'web' | 'wechat',
-      });
-    }
+    await dao.messages.insert({
+      id: userMsgId,
+      thread_id,
+      role: 'user',
+      content_type: 'text',
+      content: message,
+      source: thread.source as 'web' | 'wechat',
+    });
 
-    if (agentLoopDao) {
-      await agentLoopDao.create({ id: loopId, thread_id, message_id: userMsgId });
-    }
+    await dao.agentLoops.create({ id: loopId, thread_id, message_id: userMsgId });
 
     // 4. 异步 dispatch（只等 202 ack）
     const sessionId = `${thread.source}:${thread_id}`;
@@ -93,9 +78,7 @@ export const buildChatRouter = (
     });
 
     if (!dispatch.ok) {
-      if (agentLoopDao) {
-        await agentLoopDao.complete(loopId, 'fail');
-      }
+      await dao.agentLoops.complete(loopId, 'fail');
       return res.status(502).json({ error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
     }
 
@@ -108,17 +91,12 @@ export const buildChatRouter = (
     const userId = req.session!.user_id;
     const threadId = req.params['id'] as string;
 
-    const thread = await threadsDao.getByIdAndUser(threadId, userId);
+    const thread = await dao.threads.getByIdAndUser(threadId, userId);
     if (!thread) return res.status(404).json({ error: 'thread not found' });
 
-    if (messageDao) {
-      const messages = await messageDao.listByThread(threadId);
-      const body: WebThreadMessagesResponse = { messages };
-      return res.json(body);
-    }
-
-    // fallback: 无 messageDao 时返回空（不应在生产中发生）
-    res.json({ messages: [] } satisfies WebThreadMessagesResponse);
+    const messages = await dao.messages.listByThread(threadId);
+    const body: WebThreadMessagesResponse = { messages };
+    res.json(body);
   });
 
   // 查询 thread 的活跃 loop（前端轮询用）
@@ -126,15 +104,11 @@ export const buildChatRouter = (
     const userId = req.session!.user_id;
     const threadId = req.params['id'] as string;
 
-    const thread = await threadsDao.getByIdAndUser(threadId, userId);
+    const thread = await dao.threads.getByIdAndUser(threadId, userId);
     if (!thread) return res.status(404).json({ error: 'thread not found' });
 
-    if (agentLoopDao) {
-      const loop = await agentLoopDao.getActive(threadId);
-      return res.json({ loop });
-    }
-
-    res.json({ loop: null });
+    const loop = await dao.agentLoops.getActive(threadId);
+    res.json({ loop });
   });
 
   // Per-loop SSE: 前端发消息后订阅，接收心跳和最终结果
@@ -142,12 +116,10 @@ export const buildChatRouter = (
     const userId = req.session!.user_id;
     const loopId = req.params['loopId'] as string;
 
-    if (!agentLoopDao) return res.status(500).end();
-
     // 校验 loop 归属
-    const loop = await agentLoopDao.getById(loopId);
+    const loop = await dao.agentLoops.getById(loopId);
     if (!loop) return res.status(404).end();
-    const thread = await threadsDao.getByIdAndUser(loop.thread_id, userId);
+    const thread = await dao.threads.getByIdAndUser(loop.thread_id, userId);
     if (!thread) return res.status(403).end();
 
     // 若 loop 已完成，直接返回终态事件
@@ -158,8 +130,7 @@ export const buildChatRouter = (
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
       if (loop.completion === 'success' || loop.completion === 'limit') {
-        // 拉最后一条 assistant 消息作为 reply
-        const msgs = messageDao ? await messageDao.listByThread(loop.thread_id) : [];
+        const msgs = await dao.messages.listByThread(loop.thread_id);
         const last = msgs.filter(m => m.role === 'assistant').pop();
         const reply = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : '';
         res.write(`event: done\ndata: ${JSON.stringify({ reply, completion: loop.completion })}\n\n`);
@@ -216,10 +187,10 @@ export const buildChatRouter = (
 
     // 竞态 fallback：for-await 立即结束（stream 订阅时 ctx 已不在），重查 DB
     if (!gotTerminal && !closed) {
-      const freshLoop = await agentLoopDao!.getById(loopId);
+      const freshLoop = await dao.agentLoops.getById(loopId);
       if (freshLoop?.completed_at) {
         if (freshLoop.completion === 'success' || freshLoop.completion === 'limit') {
-          const msgs = messageDao ? await messageDao.listByThread(freshLoop.thread_id) : [];
+          const msgs = await dao.messages.listByThread(freshLoop.thread_id);
           const last = msgs.filter(m => m.role === 'assistant').pop();
           const reply = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : '';
           res.write(`event: done\ndata: ${JSON.stringify({ reply, completion: freshLoop.completion })}\n\n`);
