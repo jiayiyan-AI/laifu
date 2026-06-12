@@ -35,6 +35,7 @@ export const makePostmarkProvider = (cfg: PostmarkConfig): EmailProvider => ({
       // StrippedTextReply 去掉了引用历史, 优先; 没有则退回 TextBody
       body_text: String(b['StrippedTextReply'] ?? b['TextBody'] ?? ''),
       has_attachments: attachments.length > 0,
+      attachment_keys: [],
     };
   },
 

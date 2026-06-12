@@ -59,12 +59,44 @@ describe('emailDao.insertInbound', () => {
     const id = await dao.insertInbound({
       to_localpart: 'sunco', from_addr: 'bob@x.com', to_addrs: ['sunco@m'], cc_addrs: [],
       subject: '报价', message_id: '<m1>', in_reply_to: null, reference_ids: [],
-      body_text: '请确认', has_attachments: false,
+      body_text: '请确认', has_attachments: false, attachment_keys: [],
     }, 'u1');
     expect(id).toMatch(/^eml_/);
     expect(captured.insertedValues.direction).toBe('inbound');
     expect(captured.insertedValues.user_id).toBe('u1');
     expect(captured.insertedValues.from_addr).toBe('bob@x.com');
+  });
+});
+
+describe('emailDao.insertInbound + get attachment_keys', () => {
+  it('写入 attachment_keys, get 返回相同内容', async () => {
+    const attachments = [
+      { key: 'k0-a.pdf', filename: 'a.pdf', content_type: 'application/pdf', size: 10 },
+    ];
+    const fakeRow = {
+      id: 'eml_x', direction: 'inbound' as const,
+      from_addr: 'bob@x.com', to_addrs: ['sunco@m'], cc_addrs: [],
+      subject: '报价带附件', message_id: '<m2>', in_reply_to: null, reference_ids: [],
+      body_text: '请查收', has_attachments: true,
+      attachment_keys: attachments,
+      received_at: new Date('2026-06-10T00:00:00Z'),
+    };
+    const { db, captured } = mockDrizzleDb({ selectRows: [fakeRow] });
+    const dao = makeEmailDao(db as any);
+
+    // 写入
+    await dao.insertInbound({
+      to_localpart: 'sunco', from_addr: 'bob@x.com', to_addrs: ['sunco@m'], cc_addrs: [],
+      subject: '报价带附件', message_id: '<m2>', in_reply_to: null, reference_ids: [],
+      body_text: '请查收', has_attachments: true, attachment_keys: attachments,
+    }, 'u1');
+    expect(captured.insertedValues.attachment_keys).toEqual(attachments);
+
+    // 读取
+    const detail = await dao.get('u1', 'eml_x');
+    expect(detail!.attachment_keys).toEqual([
+      { key: 'k0-a.pdf', filename: 'a.pdf', content_type: 'application/pdf', size: 10 },
+    ]);
   });
 });
 

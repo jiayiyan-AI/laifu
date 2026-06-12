@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
 import type { UserDelegationKey } from '@azure/storage-blob';
-import { buildDirectoryWriteSas, buildReadBlobSas } from '../../src/lib/sas-builder.js';
+import { buildDirectoryWriteSas, buildReadBlobSas, buildWriteBlobSas } from '../../src/lib/sas-builder.js';
 
 const ACCOUNT = 'laifudev';
 const CONTAINER = 'laifu-cloud';
@@ -295,5 +295,31 @@ describe('buildReadBlobSas', () => {
     const ms = expiresAt.getTime();
     expect(ms).toBeGreaterThanOrEqual(before + 300_000 - 5000);
     expect(ms).toBeLessThanOrEqual(after + 300_000 + 5000);
+  });
+});
+
+const udk = {
+  signedObjectId: '11111111-1111-1111-1111-111111111111',
+  signedTenantId: '22222222-2222-2222-2222-222222222222',
+  signedStartsOn: new Date('2026-06-12T00:00:00Z'),
+  signedExpiresOn: new Date('2026-06-19T00:00:00Z'),
+  signedService: 'b',
+  signedVersion: '2020-02-10',
+  value: Buffer.from('test-key-bytes').toString('base64'),
+} as any;
+
+describe('buildWriteBlobSas', () => {
+  it('签出 blob-scoped(sr=b)写 SAS, 含 create/write 权限', () => {
+    const out = buildWriteBlobSas({
+      account: 'stlingxilaifu',
+      container: 'email-attachments',
+      blobName: '01JABC-quote.pdf',
+      udk,
+      ttlSeconds: 300,
+    });
+    const params = new URLSearchParams(out.sasToken);
+    expect(params.get('sr')).toBe('b');       // blob-scoped, 非 directory
+    expect(params.get('sp')).toBe('cw');      // 精确断言 create+write, 不含 read
+    expect(out.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 });

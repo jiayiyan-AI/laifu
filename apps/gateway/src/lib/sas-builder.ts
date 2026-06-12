@@ -222,3 +222,51 @@ export function buildReadBlobSas(input: ReadBlobSasInput): ReadBlobSasOutput {
     expiresAt: expiresOn,
   };
 }
+
+// === Write SAS (sr=b, blob-scoped) — 给 CF Worker 直传单个附件 blob 用 ===
+
+export interface WriteBlobSasInput {
+  account: string;
+  container: string;
+  blobName: string;   // email-attachments 容器内相对路径,如 "01JABC-quote.pdf"
+  udk: UserDelegationKey;
+  ttlSeconds: number; // 推荐 300 (5min)
+}
+
+export interface WriteBlobSasOutput {
+  sasToken: string;
+  expiresAt: Date;
+}
+
+/**
+ * blob-scoped 写 SAS(create + write),最小授权:仅该 blob、仅写、短 TTL。
+ * 与 buildReadBlobSas 同构,用 SDK(sr=b 原生支持)。
+ */
+export function buildWriteBlobSas(input: WriteBlobSasInput): WriteBlobSasOutput {
+  const startsOn = new Date(Date.now() - 60 * 1000);
+  const expiresOn = new Date(Date.now() + input.ttlSeconds * 1000);
+  const permissions = BlobSASPermissions.from({ create: true, write: true });
+
+  const toDate = (v: Date | string): Date => (v instanceof Date ? v : new Date(v));
+  const normalizedUdk: UserDelegationKey = {
+    ...input.udk,
+    signedStartsOn: toDate(input.udk.signedStartsOn),
+    signedExpiresOn: toDate(input.udk.signedExpiresOn),
+  };
+
+  const sasQueryParams = generateBlobSASQueryParameters(
+    {
+      containerName: input.container,
+      blobName: input.blobName,
+      permissions,
+      protocol: SASProtocol.Https,
+      startsOn,
+      expiresOn,
+      version: '2020-02-10',
+    },
+    normalizedUdk,
+    input.account,
+  );
+
+  return { sasToken: sasQueryParams.toString(), expiresAt: expiresOn };
+}

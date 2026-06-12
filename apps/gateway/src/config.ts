@@ -105,6 +105,8 @@ export const config = {
     postmarkServerToken: process.env['POSTMARK_SERVER_TOKEN'] ?? '',
     // Resend 发信 API key (仅 provider=resend 用)
     resendApiKey: process.env['RESEND_API_KEY'] ?? '',
+    // 附件专用 Blob 容器(与云盘 laifu-cloud 分开)
+    attachmentContainer: process.env['EMAIL_ATTACHMENT_CONTAINER'] ?? 'email-attachments',
   },
 };
 
