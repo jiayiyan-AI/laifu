@@ -9,13 +9,31 @@ import type { AgentLoopRow } from '@lingxi/shared';
 
 export interface AgentLoopDao {
   create(params: { id: string; thread_id: string; message_id: string }): Promise<void>;
-  /** 标记循环完成。返回 false 表示已完成（幂等）。 */
+  /**
+   * 标记循环完成 (deadline timer / dispatch 失败用)。返回 false 表示已完成（幂等）。
+   * 只判 completed_at,不动 iterated_at —— 让后续晚到的 result callback 仍能赢 latch。
+   */
   complete(loopId: string, completion: 'success' | 'fail' | 'limit'): Promise<boolean>;
+  /**
+   * Result callback 专用幂等 latch。
+   *
+   * iterated_at 这一列被重新定义为 "result 已落库" 的 sentinel:
+   *   - WHERE iterated_at IS NULL 抢锁,赢的那次写消息;
+   *   - 即便 deadline timer 已先把 completion 标成 fail (completed_at 已写,iterated_at 仍 NULL),
+   *     result callback 也能反转 completion 把 reply 持久化。
+   *
+   * 返回 true 表示抢到 latch,调用方负责后续写 assistant 消息 / 推 SSE / wechat reply。
+   */
+  recordResult(loopId: string, completion: 'success' | 'fail' | 'limit'): Promise<boolean>;
   getById(loopId: string): Promise<AgentLoopRow | null>;
   /** 第一个未完成的循环 */
   getActive(threadId: string): Promise<AgentLoopRow | null>;
-  /** 超时未完成的循环标 fail（基于 coalesce(iterated_at, created_at)），返回影响行数 */
-  reapStale(olderThanMs: number): Promise<number>;
+  /**
+   * 启动时一次性扫尾: 把比 olderThanMs 还老、还没完成的 loop 标 fail。
+   * 用来收拾上次进程崩溃时丢的 in-flight loop —— 它们的 per-loop deadline timer 随进程一起没了。
+   * 返回影响行数。
+   */
+  failOrphans(olderThanMs: number): Promise<number>;
 }
 
 const toRow = (r: typeof schema.agentLoops.$inferSelect): AgentLoopRow => ({
@@ -45,6 +63,14 @@ export const makeAgentLoopDao = (db: Db): AgentLoopDao => {
       return (result.rowCount ?? 0) > 0;
     },
 
+    async recordResult(loopId, completion) {
+      const now = new Date();
+      const result = await db.update(t)
+        .set({ iterated_at: now, completion, completed_at: now })
+        .where(and(eq(t.id, loopId), isNull(t.iterated_at)));
+      return (result.rowCount ?? 0) > 0;
+    },
+
     async getById(loopId) {
       const rows = await db.select().from(t).where(eq(t.id, loopId)).limit(1);
       return rows[0] ? toRow(rows[0]) : null;
@@ -57,14 +83,13 @@ export const makeAgentLoopDao = (db: Db): AgentLoopDao => {
       return rows[0] ? toRow(rows[0]) : null;
     },
 
-    async reapStale(olderThanMs) {
+    async failOrphans(olderThanMs) {
       const cutoff = new Date(Date.now() - olderThanMs);
-      // 基于 coalesce(iterated_at, created_at) — 有心跳用心跳时间，无心跳用创建时间
       const result = await db.update(t)
         .set({ completed_at: new Date(), completion: 'fail' })
         .where(and(
           isNull(t.completed_at),
-          sql`coalesce(${t.iterated_at}, ${t.created_at}) < ${cutoff}`,
+          sql`${t.created_at} < ${cutoff}`,
         ));
       return result.rowCount ?? 0;
     },

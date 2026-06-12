@@ -3,7 +3,13 @@ import type { WebChatResponse, WebThreadMessagesResponse } from '@lingxi/shared'
 import { genId } from '@lingxi/db';
 import { dao } from '../db/index.js';
 import { dispatchHermesChat } from '../lib/aca-call.js';
-import { storePendingLoop, subscribeLoop, unsubscribeLoop } from '../lib/pending-loops.js';
+import {
+  storePendingLoop,
+  subscribeLoop,
+  unsubscribeLoop,
+  emitLoopEvent,
+  HARD_DEADLINE_MS,
+} from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
 
 const SSE_HEARTBEAT_MS = 10_000; // gateway→web 心跳间隔（独立于 ACA→gateway 的 2 分钟心跳）
@@ -66,7 +72,21 @@ export const buildChatRouter = (
 
     // 4. 异步 dispatch（只等 202 ack）
     const sessionId = `${thread.source}:${thread_id}`;
-    storePendingLoop({ loopId, threadId: thread_id, userId, source: thread.source as 'web' | 'wechat' });
+    storePendingLoop(
+      { loopId, threadId: thread_id, userId, source: thread.source as 'web' | 'wechat' },
+      {
+        hardDeadlineMs: HARD_DEADLINE_MS,
+        onDeadline: async () => {
+          // 用 complete() (WHERE completed_at IS NULL) 标 fail —— 不动 iterated_at,
+          // 留给后续晚到的 result callback 通过 recordResult() 翻盘。
+          const changed = await dao.agentLoops.complete(loopId, 'fail').catch(() => false);
+          if (changed) {
+            log.warn({ event: 'loop.deadline.fired', loop_id: loopId, thread_id, user_id: userId });
+            emitLoopEvent(loopId, { type: 'fail', error: '响应超时' });
+          }
+        },
+      },
+    );
     const dispatch = await dispatchHermesChat({
       containerUrl: mapping.container_url,
       userId,
@@ -79,6 +99,8 @@ export const buildChatRouter = (
 
     if (!dispatch.ok) {
       await dao.agentLoops.complete(loopId, 'fail');
+      // 立刻清掉 pending ctx + deadline timer,避免挂 10min 才 GC
+      emitLoopEvent(loopId, { type: 'fail', error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
       return res.status(502).json({ error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
     }
 

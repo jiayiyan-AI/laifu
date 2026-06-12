@@ -34,9 +34,10 @@ export const createMockDao = () => ({
   agentLoops: {
     create: vi.fn(async () => {}),
     complete: vi.fn(async () => true),
+    recordResult: vi.fn(async () => true),
     getById: vi.fn(async () => null),
     getActive: vi.fn(async () => null),
-    reapStale: vi.fn(async () => 0),
+    failOrphans: vi.fn(async () => 0),
   },
   wechatBindings: {
     listActive: vi.fn(async () => []),

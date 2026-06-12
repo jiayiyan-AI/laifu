@@ -36,6 +36,9 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     }
 
     // ─── 心跳 ───
+    // 容器还活着 → 仅 reset 内存 deadline timer。
+    // 故意不写 DB: 旧代码会更新 iterated_at,但现在 iterated_at 被复用为 "result 已落库" 的 latch,
+    // 一旦心跳写它就会污染 result callback 的幂等判断。心跳完全交给 per-loop timer 跟。
     if (body.type === 'heartbeat') {
       touchHeartbeat(body.loop_id);
       emitLoopEvent(body.loop_id, { type: 'heartbeat' });
@@ -74,10 +77,13 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     // 确定 completion
     const completion = (result.exit_code === 0 && result.reply) ? 'success' : 'fail';
 
-    // 幂等: 已完成则跳过
-    const changed = await dao.agentLoops.complete(body.loop_id, completion);
-    if (!changed) {
-      return res.json({ ok: true, already_completed: true });
+    // 幂等 latch: 抢 iterated_at IS NULL。
+    // 即便 deadline timer 已先把 completion 标 fail (completed_at 已写但 iterated_at 未动),
+    // result callback 在这里仍会赢并反转 completion → 不丢回复。
+    // 重复 callback (容器重试 / 进程 redeliver) 第二次 0 rows → already_committed 直接返回。
+    const won = await dao.agentLoops.recordResult(body.loop_id, completion);
+    if (!won) {
+      return res.json({ ok: true, already_committed: true });
     }
 
     // 插入 assistant 消息
