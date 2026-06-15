@@ -29,7 +29,7 @@ export const createMockDao = () => ({
     create: vi.fn(async (row: any) => ({ ...row, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived: false })),
     listByUser: vi.fn(async () => []),
     getByIdAndUser: vi.fn(async () => null),
-    archive: vi.fn(async () => {}),
+    deleteById: vi.fn(async () => true),
   },
   agentLoops: {
     create: vi.fn(async () => {}),

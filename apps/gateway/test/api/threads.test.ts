@@ -29,14 +29,16 @@ describe('threads CRUD', () => {
     }));
     vi.mocked(dao.threads.listByUser).mockResolvedValue([]);
     vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(null);
+    vi.mocked(dao.threads.deleteById).mockResolvedValue(true);
+    vi.mocked(dao.cache.get).mockReturnValue(null);
   });
 
-  const makeApp = () => {
+  const makeApp = (fetchImpl?: typeof fetch) => {
     const app = express();
     app.use(cookieParser());
     app.use(express.json());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildThreadsRouter(mw));
+    app.use(buildThreadsRouter(mw, fetchImpl));
     return app;
   };
 
@@ -92,11 +94,77 @@ describe('threads CRUD', () => {
     expect(res.body.id).toBe('thr_1');
   });
 
-  it('DELETE /api/threads/:id archives instead of hard delete', async () => {
-    const res = await request(makeApp())
-      .delete('/api/threads/thr_1')
-      .set('Cookie', validCookie('u1'));
-    expect(res.status).toBe(200);
-    expect(dao.threads.archive).toHaveBeenCalledWith('thr_1', 'u1');
+  describe('DELETE /api/threads/:id', () => {
+    const ownedThread = {
+      id: 'thr_1', user_id: 'u1', title: 'A', source: 'web', archived: false,
+      created_at: 'x', updated_at: 'x',
+    } as any;
+    const readyMapping = {
+      user_id: 'u1', status: 'ready' as const, container_url: 'http://hermes.test',
+    } as any;
+
+    it('returns 404 when thread not owned', async () => {
+      vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(null);
+      const res = await request(makeApp())
+        .delete('/api/threads/thr_1')
+        .set('Cookie', validCookie('u1'));
+      expect(res.status).toBe(404);
+      expect(dao.threads.deleteById).not.toHaveBeenCalled();
+    });
+
+    it('hard-deletes the row when container not ready (skips container call)', async () => {
+      vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
+      vi.mocked(dao.cache.get).mockReturnValue({ ...readyMapping, status: 'provisioning' });
+      const fetchSpy = vi.fn();
+      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+        .delete('/api/threads/thr_1')
+        .set('Cookie', validCookie('u1'));
+      expect(res.status).toBe(200);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(dao.threads.deleteById).toHaveBeenCalledWith('thr_1', 'u1');
+    });
+
+    it('calls container DELETE /session then deletes DB row', async () => {
+      vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
+      vi.mocked(dao.cache.get).mockReturnValue(readyMapping);
+      const fetchSpy = vi.fn(async () => new Response(
+        JSON.stringify({ ok: true, deleted: true, hermes_session_id: 'sess_xyz' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ));
+      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+        .delete('/api/threads/thr_1')
+        .set('Cookie', validCookie('u1'));
+      expect(res.status).toBe(200);
+      // 容器 URL 形如 .../session?session_id=web%3Athr_1
+      const callUrl = fetchSpy.mock.calls[0]![0] as string;
+      expect(callUrl).toBe('http://hermes.test/session?session_id=web%3Athr_1');
+      expect((fetchSpy.mock.calls[0]![1] as RequestInit).method).toBe('DELETE');
+      expect(dao.threads.deleteById).toHaveBeenCalledWith('thr_1', 'u1');
+    });
+
+    it('still deletes DB row when container call fails (best-effort)', async () => {
+      vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
+      vi.mocked(dao.cache.get).mockReturnValue(readyMapping);
+      const fetchSpy = vi.fn(async () => { throw new Error('econnrefused'); });
+      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+        .delete('/api/threads/thr_1')
+        .set('Cookie', validCookie('u1'));
+      expect(res.status).toBe(200);
+      expect(dao.threads.deleteById).toHaveBeenCalledWith('thr_1', 'u1');
+    });
+
+    it('still deletes DB row when container returns 500', async () => {
+      vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
+      vi.mocked(dao.cache.get).mockReturnValue(readyMapping);
+      const fetchSpy = vi.fn(async () => new Response(
+        JSON.stringify({ error: 'hermes sessions delete exit 1' }),
+        { status: 500, headers: { 'content-type': 'application/json' } },
+      ));
+      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+        .delete('/api/threads/thr_1')
+        .set('Cookie', validCookie('u1'));
+      expect(res.status).toBe(200);
+      expect(dao.threads.deleteById).toHaveBeenCalledWith('thr_1', 'u1');
+    });
   });
 });

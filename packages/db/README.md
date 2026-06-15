@@ -143,6 +143,8 @@ DATABASE_URL=postgres://postgres:postgres@localhost:54422/postgres pnpm db:push
 # 灌种子数据（pricing 单价、view、表达式索引）
 DATABASE_URL=postgres://postgres:postgres@localhost:54422/postgres pnpm db:seed
 
+DATABASE_URL=postgres://postgres:postgres@localhost:54422/postgres pnpm db:studio
+
 # ── 云上部署 ───────────────────────────────────────────────
 # 生成版本化迁移 SQL（提交到 git，可 review）
 DATABASE_URL=<云上连接串> pnpm db:generate --name add_xxx
