@@ -17,7 +17,7 @@
 import {
   readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync,
 } from 'node:fs';
-import { log, warn, readToken, httpJson, HOME_DIR } from './lib.mjs';
+import { log, warn, readToken, httpJson, HOME_DIR } from './lib.ts';
 
 export const DYNAMIC_DIR = `${HOME_DIR}/dynamic_prompts`;
 export const LOCAL_MANIFEST = `${DYNAMIC_DIR}/manifest.json`;
@@ -26,23 +26,30 @@ const HERMES_SOUL = `${HOME_DIR}/.hermes/SOUL.md`;
 /** 容器侧支持的最高协议版本。远端 version 高于此 → 跳过同步, 不破坏本地。 */
 const SUPPORTED_VERSION = 1;
 
-function readLocalManifest() {
+export interface RemoteManifest {
+  version?: number;
+  files?: Record<string, string>;
+}
+
+type FileMap = Record<string, string>;
+
+function readLocalManifest(): FileMap {
   if (!existsSync(LOCAL_MANIFEST)) return {};
   try {
-    const raw = JSON.parse(readFileSync(LOCAL_MANIFEST, 'utf8'));
+    const raw = JSON.parse(readFileSync(LOCAL_MANIFEST, 'utf8')) as unknown;
     // 老格式 (扁平 { name: sha }) 也接, 一并视为 files
-    if (raw && typeof raw === 'object' && raw.files && typeof raw.files === 'object') {
-      return raw.files;
+    if (raw && typeof raw === 'object' && 'files' in raw && typeof (raw as { files: unknown }).files === 'object') {
+      return (raw as { files: FileMap }).files;
     }
-    if (raw && typeof raw === 'object') return raw;
+    if (raw && typeof raw === 'object') return raw as FileMap;
     return {};
   } catch (e) {
-    warn(`local manifest corrupted, treating as empty: ${e.message}`);
+    warn(`local manifest corrupted, treating as empty: ${(e as Error).message}`);
     return {};
   }
 }
 
-async function downloadOne(gateway, token, name) {
+async function downloadOne(gateway: string, token: string, name: string): Promise<string> {
   const { status, body } = await httpJson({
     method: 'GET',
     url: `${gateway}/api/me/prompts/${encodeURIComponent(name)}`,
@@ -59,7 +66,7 @@ async function downloadOne(gateway, token, name) {
  * 处理单文件下载副作用 — 主要是 SOUL.md 镜像到 ~/.hermes/SOUL.md。
  * 集中一处方便后续加更多 mirror。
  */
-function applyDownloadSideEffect(name, content) {
+function applyDownloadSideEffect(name: string, content: string): void {
   if (name === 'SOUL.md') {
     writeFileSync(HERMES_SOUL, content);
     log(`mirrored SOUL.md → ~/.hermes/SOUL.md`);
@@ -70,8 +77,8 @@ function applyDownloadSideEffect(name, content) {
  * @param remoteManifest { version, files } 来自 /api/me/runtime-config
  * @returns 实际同步成功的 files map (写回本地用)
  */
-export async function syncPrompts(remoteManifest) {
-  const GATEWAY = process.env['GATEWAY_BASE_URL'];
+export async function syncPrompts(remoteManifest: RemoteManifest | null | undefined): Promise<FileMap> {
+  const GATEWAY = process.env['GATEWAY_BASE_URL'] ?? '';
   const token = readToken();
   if (!token) {
     warn('no token — skip prompt sync');
@@ -87,12 +94,12 @@ export async function syncPrompts(remoteManifest) {
     warn(`remote manifest version ${remoteVersion} > supported ${SUPPORTED_VERSION} — skip sync to avoid corruption`);
     return local;
   }
-  const remoteFiles = (remote.files && typeof remote.files === 'object') ? remote.files : {};
+  const remoteFiles: FileMap = (remote.files && typeof remote.files === 'object') ? remote.files : {};
 
   mkdirSync(DYNAMIC_DIR, { recursive: true });
 
-  const toDownload = [];
-  const toDelete = [];
+  const toDownload: string[] = [];
+  const toDelete: string[] = [];
   for (const [name, sha] of Object.entries(remoteFiles)) {
     if (local[name] !== sha) toDownload.push(name);
   }
@@ -108,7 +115,7 @@ export async function syncPrompts(remoteManifest) {
   log(`prompts to download: ${toDownload.join(', ') || '(none)'}; to delete: ${toDelete.join(', ') || '(none)'}`);
 
   // 并行下载 (Promise.allSettled: 单个失败不影响其他)
-  const synced = { ...local };
+  const synced: FileMap = { ...local };
   const downloadResults = await Promise.allSettled(
     toDownload.map(async (name) => {
       const content = await downloadOne(GATEWAY, token, name);
@@ -119,9 +126,12 @@ export async function syncPrompts(remoteManifest) {
     }),
   );
   for (let i = 0; i < downloadResults.length; i++) {
-    if (downloadResults[i].status === 'rejected') {
+    const r = downloadResults[i];
+    if (r.status === 'rejected') {
       // 失败的文件 synced 里不更新 sha, 下次 boot 自动重试
-      warn(`download ${toDownload[i]} failed: ${downloadResults[i].reason?.message ?? downloadResults[i].reason}`);
+      const reason = r.reason as { message?: string } | string;
+      const msg = typeof reason === 'object' && reason?.message ? reason.message : String(reason);
+      warn(`download ${toDownload[i]} failed: ${msg}`);
     }
   }
 
@@ -130,7 +140,7 @@ export async function syncPrompts(remoteManifest) {
     const p = `${DYNAMIC_DIR}/${name}`;
     if (existsSync(p)) {
       try { unlinkSync(p); log(`removed ~/dynamic_prompts/${name}`); }
-      catch (e) { warn(`unlink ${name} failed: ${e.message}`); }
+      catch (e) { warn(`unlink ${name} failed: ${(e as Error).message}`); }
     }
     delete synced[name];
   }
@@ -141,7 +151,7 @@ export async function syncPrompts(remoteManifest) {
 }
 
 /** 给 render-config 等外部模块读 dynamic prompt 的辅助 (没有就返回 null)。 */
-export function readDynamicPrompt(name) {
+export function readDynamicPrompt(name: string): string | null {
   const p = `${DYNAMIC_DIR}/${name}`;
   if (!existsSync(p)) return null;
   try {

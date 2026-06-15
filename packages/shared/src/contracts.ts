@@ -1,5 +1,5 @@
 // === Container HTTP 契约 (Gateway → Container) ===
-// 沿用同事 Hermes Container (docker/hermes/server.py) 的同步 /chat 契约
+// 沿用同事 Hermes Container (docker/hermes/server/, 前身 server.py) 的同步 /chat 契约
 
 export interface ContainerChatRequest {
   message: string;
@@ -43,7 +43,7 @@ export interface ContainerChatResponse {
   session_id: string;
   exit_code: number;
   hermes_session_id?: string | null;
-  usage?: ContainerChatUsage;       // server.py PR1 后稳定返回; ? 兑兼旧镜像
+  usage?: ContainerChatUsage;       // server/index.ts (前身 server.py PR1) 稳定返回; ? 兑兼旧镜像
 }
 
 export interface ContainerHistoryMessage {
@@ -240,7 +240,7 @@ export interface RefreshTokenResponse {
 
 /**
  * 容器启动时拉运行期配置 (GET /api/me/runtime-config)。
- * 由 docker/hermes/scripts/pull-runtime-config.mjs 调用,渲染 ~/.hermes/config.yaml。
+ * 由 docker/hermes/scripts/pull-runtime-config.ts 调用,渲染 ~/.hermes/config.yaml。
  *
  * 设计动机: 之前 provider/model/base_url 是 createContainerApp 时一次性写进 ACA env 的快照,
  * 之后永远锁死。改成每次容器启动 pull 后, gateway 改这几个值 + ACA restart 即生效,
@@ -272,8 +272,6 @@ export interface RuntimeConfig {
   provider: string;                  // anthropic / openai / custom
   model: string;
   base_url: string | null;           // null 表示用 provider 默认 endpoint
-  request_timeout_seconds: number;
-  stale_timeout_seconds: number;
   prompts_manifest: PromptsManifest;
 }
 

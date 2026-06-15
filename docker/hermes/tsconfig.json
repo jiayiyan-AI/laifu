@@ -1,0 +1,29 @@
+{
+  // 仅给编辑器 LSP + `bun typecheck` 用 (server/* + scripts/* 的 import resolution 和类型推导)。
+  // **不参与 build 或 runtime** — Bun 1.3+ 原生跑 .ts, 无 tsc 步骤。
+  // typecheck: cd docker/hermes && bun typecheck
+  //
+  // 字段对齐 Bun 官方 (@types/bun 推荐) 配置:
+  //   - module: "Preserve" — Bun 1.x 推荐, 跟 moduleResolution:"bundler" 配合, 保留 import 原貌不重写
+  //   - moduleDetection: "force" — 所有 .ts 当作 module, 避免某文件没 import/export 就被当 script
+  //   - verbatimModuleSyntax: true — 强制 `import type`, 跟项目规则 (ts-import-type) 一致
+  //   - allowImportingTsExtensions: true — Bun 强制相对 import 带 .ts 后缀
+  //   - types: ["bun"] — 解析 @types/bun (它依赖 @types/node, 间接拉 NodeJS.* 全局)
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["bun"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "paths": {
+      "/opt/lingxi-scripts/*": ["./scripts/*"]
+    }
+  },
+  "include": ["server/**/*.ts", "scripts/**/*.ts"]
+}

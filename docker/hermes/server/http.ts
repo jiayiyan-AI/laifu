@@ -1,0 +1,107 @@
+// http.ts — HTTP 路由 handler (Request → Response, Bun.serve 形态)
+//
+// 暴露一个 `handle(req)` 给 index.ts 装到 Bun.serve.fetch 上。
+// 内部按 method + pathname 分发到三个子 handler:
+//   GET  /health   → 200 {status:"ok"}
+//   GET  /history  → 200 {messages:[{role,content,ts}]}
+//   POST /chat     → 同步: 200 + reply / 异步: 202 + 后台跑
+//
+// /history 直接组合 session-map + state-db, 不在 state-db 里耦合; state-db 保持纯 SQLite。
+//
+// 用 `Response.json()` (web 标准 ResponseInit overload) 收敛序列化, 不再手写
+// Content-Type / Content-Length — Bun.serve 自动算。
+
+import {
+  DEFAULT_SESSION,
+  DEFAULT_SOURCE,
+  HERMES_BIN,
+  HERMES_PROVIDER,
+} from './config.ts';
+import { getHermesId } from './session-map.ts';
+import { loadMessagesByUuid } from './state-db.ts';
+import { cleanReply } from './hermes-proc.ts';
+import { callHermes, asyncChatAndCallback } from './chat.ts';
+
+export async function handle(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  if (req.method === 'GET' && url.pathname === '/health') return handleHealth();
+  if (req.method === 'GET' && url.pathname === '/history') return handleHistory(url);
+  if (req.method === 'POST' && url.pathname === '/chat') return handleChat(req);
+  return Response.json({ error: 'not found' }, { status: 404 });
+}
+
+function handleHealth(): Response {
+  return Response.json({ status: 'ok' });
+}
+
+async function handleHistory(url: URL): Promise<Response> {
+  const sessionName = (url.searchParams.get('session_id') ?? DEFAULT_SESSION).trim();
+  if (!sessionName) return Response.json({ error: "missing 'session_id'" }, { status: 400 });
+  try {
+    const uuid = await getHermesId(sessionName);
+    const messages = uuid ? loadMessagesByUuid(uuid) : [];
+    return Response.json({ messages });
+  } catch (e) {
+    console.error(`[server] load_history failed: ${(e as Error).message}`);
+    return Response.json({ error: 'load_history failed' }, { status: 500 });
+  }
+}
+
+interface ChatRequestBody {
+  message?: string;
+  session_id?: string;
+  source?: string;
+  callback?: { loop_id?: string } | null;
+}
+
+async function handleChat(req: Request): Promise<Response> {
+  let body: ChatRequestBody;
+  try {
+    body = (await req.json()) as ChatRequestBody;
+  } catch {
+    return Response.json({ error: 'invalid json' }, { status: 400 });
+  }
+
+  const message = (body.message ?? '').trim();
+  if (!message) return Response.json({ error: "missing 'message'" }, { status: 400 });
+
+  const sessionId = (body.session_id ?? DEFAULT_SESSION).trim();
+  const source = (body.source ?? DEFAULT_SOURCE).trim();
+  const callback = body.callback;
+
+  // 异步模式: 带 callback.loop_id 时立即 202, 后台跑;
+  // fire-and-forget 的 promise 在 event loop 里独立活, 不被 fetch 返回影响。
+  // 任何异常 asyncChatAndCallback 内部已经吃掉, .catch 是兜底防 unhandled rejection。
+  if (callback && typeof callback === 'object' && callback.loop_id) {
+    const loopId = callback.loop_id;
+    asyncChatAndCallback(message, sessionId, source, loopId).catch((e) => {
+      console.error(`[server] asyncChatAndCallback unhandled: ${(e as Error).message}`);
+    });
+    return Response.json({ accepted: true }, { status: 202 });
+  }
+
+  // 同步模式 (向后兼容)
+  try {
+    const { stdout, stderr, exitCode, resolved, usage, timedOut } = await callHermes(
+      message,
+      sessionId,
+      source,
+    );
+    if (timedOut) {
+      return Response.json({ error: 'hermes timeout' }, { status: 504 });
+    }
+    return Response.json({
+      reply: cleanReply(stdout) || stderr.trim() || '',
+      session_id: sessionId,
+      hermes_session_id: resolved,
+      exit_code: exitCode,
+      usage: { ...usage, provider: HERMES_PROVIDER },
+    });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return Response.json({ error: `hermes binary not found (${HERMES_BIN})` }, { status: 500 });
+    }
+    return Response.json({ error: err.message ?? String(e) }, { status: 500 });
+  }
+}

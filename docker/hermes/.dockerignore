@@ -1,0 +1,13 @@
+# 镜像 build 用不上的 host-only 文件 — 都是给本地 LSP / typecheck 用的。
+# 排在这里, COPY 时不会被拉进 build context。
+node_modules
+package.json
+package-lock.json
+bun.lock
+bun.lockb
+tsconfig.json
+.dockerignore
+
+# 上一版 Node 实现的 monolith, 已不参与 build (Phase 1 保留作 rollback 兜底)
+# 仍留在 repo 里, 但不打进镜像
+server.py

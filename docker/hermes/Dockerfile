@@ -18,8 +18,19 @@
 #   HERMES_HOME                → 显式锁定 Hermes 数据目录为 /home/hermes/.hermes
 #   PIP_USER / PYTHONUSERBASE  → pip install 装到 /home/hermes/.local（落在 volume）
 #   NPM_CONFIG_PREFIX          → npm install -g 装到 /home/hermes/.npm-global（落在 volume）
-#   PATH                       → 把上面两个 bin 目录 + /opt/hermes-agent/.venv/bin 加入查找路径
+#   PNPM_HOME                  → pnpm 的 store + 全局包目录, 锁到 /home/hermes/.local/share/pnpm（落在 volume）
+#   PATH                       → 把上面三个 bin 目录 + /opt/hermes-agent/.venv/bin 加入查找路径
 
+# ============ Bun 二进制源 (多阶段, 仅取 binary) ============
+# oven/bun 是 Bun 官方维护的 Docker image, ARG 锁定 tag 保证可复现。
+# `:1.3.14-slim` 同时支持 linux/amd64 + linux/arm64, BuildKit 按宿主 arch 自动选,
+# 不再需要手写 dpkg/case 映射, 也不需要 unzip 解 release zip。
+# 整个上游镜像约 ~120MB, 但我们只 COPY /usr/local/bin/bun 一个二进制到最终镜像,
+# 实际增量 ~95MB (跟手动 release zip 解出来等价)。
+ARG BUN_VERSION=1.3.14
+FROM oven/bun:${BUN_VERSION}-slim AS bun-source
+
+# ============ 最终镜像 ============
 FROM python:3.12-slim
 
 # ============ 系统依赖 ============
@@ -30,8 +41,32 @@ RUN (sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sourc
      || true) \
  && apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
-    nodejs npm ripgrep sudo jq \
+    ripgrep sudo jq \
     && rm -rf /var/lib/apt/lists/*
+
+# ============ Node.js 24 LTS + pnpm ============
+# Debian 12 仓库的 nodejs 卡在 18.x (已 EOL 2025-04),走 NodeSource 装 24.x LTS。
+# pnpm 走 npm -g 装到 /usr/bin (NodeSource 的 npm prefix 是 /usr),所有用户共享;
+# 锁定到 npm 仓库的 latest tag,build 时拉到 pnpm 最新稳定版。
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g pnpm@latest \
+    && npm cache clean --force
+
+# ============ Bun (TypeScript runtime for our HTTP server + bootstrap scripts) ============
+# 装到 /usr/local/bin/bun, 世界可读, hermes 用户能直接调。
+# 选 Bun 而非继续 Node 的理由 (vs Phase 1):
+#   - 原生 .ts (零 build, 跟 Phase 1 的"无 build 步骤"硬约束一致)
+#   - 原生 YAML (干掉 yaml@2 npm 依赖, 见下面 /opt/lingxi-scripts 段落)
+#   - 原生 bun:sqlite (跟 node:sqlite 一样零 native module, 容器 build 不依赖 build-essential)
+# Node 不能下: 用户的 AI agent 仍要靠 pnpm 装 npm CLI 工具 (Bug A 触发那条 `pnpm add -g`),
+# 所以 Bun 是 *加法*, 不是替换。镜像净增 ~95MB, 相对 ~2GB 镜像可忽略。
+#
+# 多阶段 COPY 替代手动 release 下载: oven/bun 镜像就是 Bun 官方发版渠道之一,
+# tag 锁定时单次拉取, 跨 arch 自动选, 上面 FROM 那段定义了 builder stage。
+COPY --from=bun-source /usr/local/bin/bun /usr/local/bin/bun
+RUN bun --version
 
 # ============ 创建非 root 用户 ============
 RUN useradd -m -s /bin/bash hermes \
@@ -45,21 +80,37 @@ RUN useradd -m -s /bin/bash hermes \
 # 关键：install.sh 用 uv 拉独立 Python，默认装到 /root/.local/share/uv（700 权限），
 # hermes 用户无法 traverse。手动 export UV_PYTHON_INSTALL_DIR 到世界可读路径，
 # 这样 venv 里的 python3 软链才能被 hermes 用户跟随。
+#
+# 顺手装 Anthropic SDK (hermes 默认带 OpenAI/DashScope, Anthropic provider 需另装)。
+# 必须跟 install.sh 同一 RUN —— 拆出去再 chmod -R a+rX 会触发 OverlayFS copy-up,
+# 把整个 /opt/hermes-agent (~1.5GB) 在新层复制一份, 镜像凭空多 ~500MB 压缩体积。
+# uv 创建的 venv 不自带 pip, 先 ensurepip 再 pip install。
+#
+# ★ HERMES_REF 双 pin: 同时锁 install.sh 脚本本身 (raw URL 用 SHA) +
+#   install.sh 内部 git clone 的 hermes-agent 仓库 (--commit 参数)。
+#   两边同一个 SHA → 脚本逻辑跟它装的代码完全自洽, 重复 build 完全可复现。
+#   不 pin 时拉 main, 镜像体积 / behavior 会跟着上游每次 commit 漂移
+#   (实例: 6-09 #42998 fix(install) self-heal Electron download → 镜像 -740MB)。
+#
+# 升级流程:
+#   1. 看 NousResearch/hermes-agent 是否有新 release tag (semver-friendly):
+#        curl -s 'https://api.github.com/repos/NousResearch/hermes-agent/releases?per_page=1' | jq -r '.[0].tag_name'
+#      或抓 main HEAD (没 release 时):
+#        curl -s 'https://api.github.com/repos/NousResearch/hermes-agent/commits/main' | jq -r '.sha'
+#   2. 改下面 ARG, 重 build, 跑 docker/hermes/server smoke test
+#   3. 镜像体积变化对照 docker history 看是不是上游 install.sh 漂移
+#
+# 当前 pin: 2026-06-15 main HEAD, 我们本次 5 项验证矩阵 (sync/async/pgkill/multimodal/health) 全过。
+ARG HERMES_REF=95715dcb03003eab086eb0494083e6dc1c65f3b3
 RUN export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
     && export UV_PYTHON_BIN_DIR=/usr/local/bin \
     && export UV_NO_CONFIG=1 \
-    && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-    | bash -s -- --dir /opt/hermes-agent --hermes-home /tmp/install-home \
+    && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh" \
+    | bash -s -- --dir /opt/hermes-agent --hermes-home /tmp/install-home --commit "${HERMES_REF}" \
     && ln -sf /opt/hermes-agent/venv/bin/hermes /usr/local/bin/hermes \
-    && chmod -R a+rX /opt/hermes-agent /usr/local/share/uv
-
-# ============ 装 LLM provider 客户端 (Anthropic SDK) ============
-# Hermes 默认装 OpenAI/DashScope 路径用的依赖,Anthropic provider 需另外装。
-# uv 创建的 venv 不自带 pip,先 ensurepip 引导,再 pip install。
-# 装到 venv (read-only 层),所有用户共享。
-RUN /opt/hermes-agent/venv/bin/python -m ensurepip --upgrade \
+    && /opt/hermes-agent/venv/bin/python -m ensurepip --upgrade \
     && /opt/hermes-agent/venv/bin/python -m pip install --no-cache-dir 'anthropic>=0.39.0' \
-    && chmod -R a+rX /opt/hermes-agent
+    && chmod -R a+rX /opt/hermes-agent /usr/local/share/uv
 
 # ============ 准备 hermes 用户的初始 home 骨架 ============
 # install.sh 在 /tmp/install-home 下创建了完整 .hermes/{cron,sessions,logs,memories,...}
@@ -77,15 +128,41 @@ ENV HERMES_HOME=/home/hermes/.hermes
 ENV PIP_USER=1
 ENV PYTHONUSERBASE=/home/hermes/.local
 ENV NPM_CONFIG_PREFIX=/home/hermes/.npm-global
-ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/opt/hermes-agent/venv/bin:$PATH"
+# pnpm 默认 storeDir/globalDir 走 XDG ($HOME/.local/share/pnpm/...), 也落在 volume,
+# 显式设 PNPM_HOME 避免依赖 HOME/XDG_DATA_HOME 推导链;
+# pnpm v11+ 把全局 cli 的 bin 放 $PNPM_HOME/bin (子目录),需要进 PATH 才能在 shell 里直接调用。
+ENV PNPM_HOME=/home/hermes/.local/share/pnpm
+ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/home/hermes/.local/share/pnpm/bin:/opt/hermes-agent/venv/bin:$PATH"
 
 # ============ config.yaml 由 entrypoint 每次启动按 env 渲染 ============
 # 不再 COPY 静态文件,改 provider/model 只需改 env, 无需重 build 镜像。
 # 详见 entrypoint.sh Step 2。
 
-# ============ Seed 目录 ============
-# 构建时 home 里只有 .hermes/ 骨架，seed 体积很小（< 10MB）
+# ============ login shell PATH 修复 ============
+# Dockerfile 的 ENV 只覆盖容器主进程 + 非 login shell。AI agent 经 hermes 调用
+# 外部命令时走 `bash -l`,Debian 的 /etc/profile 会把 PATH 强制重置成
+# `/usr/local/bin:/usr/bin:/bin:...`,抹掉我们上面 ENV PATH 里加的三个 bin
+# (~/.local/bin / ~/.npm-global/bin / $PNPM_HOME/bin),pnpm/npm/pip 全局
+# install 因而看不到 global-bin-dir, 报 ERR_PNPM_NO_GLOBAL_BIN_DIR 等错。
+# 解法:再下一份 /etc/profile.d/lingxi.sh,login shell 走 /etc/profile 时
+# 自动 source, 跟 ENV 双保险, 保证两类 shell 看到的 env 完全一致。
 USER root
+RUN cat > /etc/profile.d/lingxi.sh <<'EOF'
+# 跟 Dockerfile ENV 同源, 给 login shell (bash -l) 重 assert
+export HERMES_HOME=/home/hermes/.hermes
+export PIP_USER=1
+export PYTHONUSERBASE=/home/hermes/.local
+export NPM_CONFIG_PREFIX=/home/hermes/.npm-global
+export PNPM_HOME=/home/hermes/.local/share/pnpm
+case ":$PATH:" in
+  *":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:$PNPM_HOME/bin:/opt/hermes-agent/venv/bin:$PATH" ;;
+esac
+EOF
+RUN chmod 0644 /etc/profile.d/lingxi.sh
+
+# ============ Seed 目录 ============
+# 构建时 home 里只有 .hermes/ 骨架,seed 体积很小(< 10MB)
 RUN cp -a /home/hermes /home/hermes-seed \
     && chown -R hermes:hermes /home/hermes-seed
 
@@ -93,19 +170,15 @@ RUN cp -a /home/hermes /home/hermes-seed \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-COPY --chown=hermes:hermes server.py /app/server.py
+COPY --chown=hermes:hermes server/ /app/server/
 
-# Bootstrap Node 脚本 (放只读层, volume 覆盖不到)。
-# 优先用 Node 标准库; 真需要三方包再 RUN npm install --prefix /opt/lingxi-scripts <pkg>。
+# Bootstrap Bun (TypeScript) 脚本 (放只读层, volume 覆盖不到)。
+# Bun 原生支持 TS + YAML, 不再需要 npm install yaml@2 三方包,
+# /opt/lingxi-scripts 退化成"一堆 .ts 文件"目录, 不需要 package.json / node_modules。
 USER root
 RUN mkdir -p /opt/lingxi-scripts
 COPY scripts/ /opt/lingxi-scripts/
 RUN chmod -R a+rX /opt/lingxi-scripts
-# yaml: pull-runtime-config 需要解析 + 改写 ~/.hermes/config.yaml (partial merge,
-# 保留 hermes seed 已有字段, 只覆盖我们关心的 model.* 等)。标准库做不到, 必须装包。
-# 装到只读层, 运行时 import 'yaml' 沿 import.meta.url 向上找 node_modules。
-RUN cd /opt/lingxi-scripts && npm init -y >/dev/null && npm install yaml@2 --no-audit --no-fund --loglevel=warn \
-    && chmod -R a+rX /opt/lingxi-scripts
 # 不切回 hermes — 后续 mkdir /opt/hermes-skills + pip install -e 都需要 root,
 # 最末尾 line ~130 才统一切回 hermes。
 
@@ -134,4 +207,4 @@ USER hermes
 EXPOSE 8080
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python", "/app/server.py"]
+CMD ["bun", "/app/server/index.ts"]
