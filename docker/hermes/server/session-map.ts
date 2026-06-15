@@ -48,3 +48,15 @@ export function putHermesId(name: string, hermesId: string): Promise<void> {
     await saveMap(m);
   });
 }
+
+// 删除一个映射条目; 不存在时静默通过 (idempotent)。
+// 调用方: HTTP DELETE /session 在 `hermes sessions delete` 成功后调一次, 把
+// {gateway_name → hermes_uuid} 这条孤记录摘掉, 避免 list/history 翻出已死的 UUID。
+export function delHermesId(name: string): Promise<void> {
+  return withMapLock(async () => {
+    const m = await loadMap();
+    if (!(name in m)) return;
+    delete m[name];
+    await saveMap(m);
+  });
+}

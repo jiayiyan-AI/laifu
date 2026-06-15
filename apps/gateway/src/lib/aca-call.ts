@@ -159,3 +159,78 @@ export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchRe
     return { ok: false, status: 0, error: err };
   }
 };
+
+// === Session delete (gateway → container DELETE /session) ===
+
+interface DeleteSessionArgs {
+  containerUrl: string;
+  userId: string;
+  threadId: string;
+  source: string;
+  sessionId: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface DeleteSessionResult {
+  ok: boolean;
+  status: number;
+  /** 容器侧是否真删了一行 (无映射时为 false; 跟 ok=true 共存代表幂等成功)。 */
+  deleted?: boolean;
+  hermesSessionId?: string;
+  error?: string;
+}
+
+/**
+ * 调容器 `DELETE /session?session_id=...` 清理 hermes state.db 里的 session + map 条目。
+ *
+ * 失败语义 (调用方按需处理):
+ *  - 网络错误 / 非 2xx: ok=false, error 写明; gateway 仍会继续删 DB (best-effort 策略)
+ *  - 容器返 ok=true 但 deleted=false: 容器侧没找到映射, 跟成功删等价
+ *
+ * 不重试: 容器侧已经是幂等的, 一次失败后让用户重试或后台兜底, 比阻塞 HTTP 更好。
+ */
+export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<DeleteSessionResult> => {
+  const { containerUrl, userId, threadId, source, sessionId } = args;
+  const fetcher = args.fetchImpl ?? fetch;
+  try {
+    const url = `${containerUrl}/session?session_id=${encodeURIComponent(sessionId)}`;
+    const resp = await fetcher(url, { method: 'DELETE' });
+    if (!resp.ok) {
+      log.warn({
+        event: 'aca.session.delete',
+        user_id: userId,
+        thread_id: threadId,
+        source,
+        status: `http_${resp.status}`,
+      });
+      return { ok: false, status: resp.status, error: `http ${resp.status}` };
+    }
+    const body = await resp.json() as { ok?: boolean; deleted?: boolean; hermes_session_id?: string };
+    log.info({
+      event: 'aca.session.delete',
+      user_id: userId,
+      thread_id: threadId,
+      source,
+      status: 'ok',
+      deleted: body.deleted ?? false,
+      hermes_session_id: body.hermes_session_id ?? undefined,
+    });
+    return {
+      ok: true,
+      status: resp.status,
+      deleted: body.deleted ?? false,
+      hermesSessionId: body.hermes_session_id,
+    };
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    log.error({
+      event: 'aca.session.delete',
+      user_id: userId,
+      thread_id: threadId,
+      source,
+      status: 'error',
+      err,
+    });
+    return { ok: false, status: 0, error: err };
+  }
+};

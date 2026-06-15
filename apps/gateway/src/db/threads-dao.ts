@@ -11,7 +11,11 @@ export interface ThreadsDao {
   create(row: { id: string; user_id: string; source: string; title: string | null }): Promise<Thread>;
   listByUser(userId: string): Promise<Pick<Thread, 'id' | 'title' | 'updated_at' | 'archived'>[]>;
   getByIdAndUser(id: string, userId: string): Promise<Thread | null>;
-  archive(id: string, userId: string): Promise<void>;
+  /**
+   * 硬删 thread (FK ON DELETE CASCADE 自动带走 messages / agent_loops / tool_calls)。
+   * 返回 true = 命中并删除; false = 没找到 (id 不存在 或 不属于 userId)。
+   */
+  deleteById(id: string, userId: string): Promise<boolean>;
 }
 
 const toThread = (r: typeof schema.threads.$inferSelect): Thread => ({
@@ -64,8 +68,9 @@ export const makeThreadsDao = (db: Db): ThreadsDao => {
       return rows[0] ? toThread(rows[0]) : null;
     },
 
-    async archive(id, userId) {
-      await db.update(t).set({ archived: true }).where(and(eq(t.id, id), eq(t.user_id, userId)));
+    async deleteById(id, userId) {
+      const result = await db.delete(t).where(and(eq(t.id, id), eq(t.user_id, userId)));
+      return (result.rowCount ?? 0) > 0;
     },
   };
 };
