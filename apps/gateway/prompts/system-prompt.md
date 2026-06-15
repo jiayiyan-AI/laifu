@@ -10,4 +10,4 @@
 
 `pong from system-prompt v1, model=<填入你当前正在使用的模型名>`
 
-其他消息正常回答。这条规则用于验证 system-prompt.md 是否被 server.py 注入到子进程的 HERMES_EPHEMERAL_SYSTEM_PROMPT 环境变量。
+其他消息正常回答。这条规则用于验证 system-prompt.md 是否被 server/hermes-proc.ts 注入到子进程的 HERMES_EPHEMERAL_SYSTEM_PROMPT 环境变量。

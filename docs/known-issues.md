@@ -10,11 +10,11 @@
 
 - **原因**：ACA 的 readiness/liveness probe 每 5s 打一次 `/health`, 5 次失败后强杀容器。单线程 server 处理 chat 时无法响应 health, 必死。
 - **规则**：
-  - HTTP server 必须能并发处理请求 (Python 用 `ThreadingHTTPServer`、Node 默认即可)
+  - HTTP server 必须能并发处理请求 (Python 用 `ThreadingHTTPServer`、Node 默认 event loop 即可)
   - `/health` 必须独立、轻量、不与业务共享阻塞资源
   - 本地测试矩阵应加"并发 chat + health"组合
   - Azure 出诡异行为先翻 `az containerapp logs show --type system`
-- **现状**:`docker/hermes/server.py` 已用 `ThreadingHTTPServer` 落实 (见末尾 `main()` 注释)。**加新容器时这条规则仍然适用**。
+- **现状**:`docker/hermes/server/index.ts` 用 `node:http` event loop 模型实现 (Bun + TS, 前身 Python `server.py` → Node `server.mjs`)。**加新容器时这条规则仍然适用**。
 
 ---
 
@@ -33,18 +33,18 @@
 
 利用 "idle timeout 只看字节流动" 的特性, 保证 `gateway → ACA /chat` 这段连接每 < 240s 内必有字节流动, ingress 就不会砍。
 
-改动只在 **`docker/hermes/server.py` + `apps/gateway/src/lib/aca-call.ts`**, 对外接口 (`POST /api/chat` / 微信 inbound) 形状不变, 前端 / 微信侧零改动。
+改动只在 **`docker/hermes/server/` + `apps/gateway/src/lib/aca-call.ts`**, 对外接口 (`POST /api/chat` / 微信 inbound) 形状不变, 前端 / 微信侧零改动。
 
 落地清单：
 
-- server.py `/chat` 改 SSE 输出：`Content-Type: text/event-stream`, 立即 flush headers
+- server/http.ts `/chat` 改 SSE 输出:`Content-Type: text/event-stream`, 立即 flush headers
 - 另起 heartbeat 线程, 每 30s 写一帧 `: heartbeat\n\n` (SSE 注释帧, 不算 data)
 - hermes 跑完后写 `data: {"done":true,"reply":"..."}\n\n`
 - 待验证：Hermes CLI `-Q -q` 模式 stdout 是不是增量打印 token。如果是, 顺手把每段 token 作为 `data: {"delta":"..."}` 推出去, 给将来做前端流式打字效果留接口
 - gateway `aca-call.ts` 不再 `await resp.json()`, 改读 `resp.body.getReader()` + SSE 解析, 收到 `done` 帧才 resolve, 对外仍返回 `{ ok, reply }` 不变
 - gateway `fetch` AbortSignal timeout 设大 (如 30 分钟)
 - 微信入站 `apps/gateway/src/wechat-ilink/poll-loop.ts` 的 timeout 同步调高
-- hermes 自身 `HERMES_TIMEOUT=300s` (`server.py:38`) 同步调高, 否则它就是新的天花板
+- hermes 自身 `HERMES_TIMEOUT` (server/config.ts 默认 14400s) 如已被人手动调小, 重新调高, 否则它就是新的天花板
 
 效果：240s → 实际可达数十分钟到小时级。
 
@@ -68,7 +68,7 @@ gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通
 ### #3 ~~`tirith security scanner` 警告污染回复~~ — **已修**
 
 - 历史现象:每次 `/chat` 响应正文前会多一行 `⚠ tirith security scanner enabled but not available ...`
-- 修法:`docker/hermes/server.py:_clean_reply()` (大约第 133 行) 把 `⚠️ / ⚠ / [server]` 开头的行整行剔除, 第 290 行调用。
+- 修法:`docker/hermes/server/hermes-proc.ts:cleanReply()` 把 `⚠️ / ⚠ / [server]` 开头的行整行剔除, `callHermes()` / `asyncChatAndCallback()` 调用。
 - 留作记录: hermes 上游版本若改告警前缀, 这个清洗逻辑要跟着更新。
 
 ### #4 PATH 中 `~/.local/bin` 优先于 `~/.npm-global/bin`
@@ -161,19 +161,19 @@ gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通
 
 ---
 
-### #11 微信 `/new` 指令不会真正切换 session — server.py session map 不更新
+### #11 微信 `/new` 指令不会真正切换 session — server/ session map 不更新
 
 - **现象**：微信用户发 `/new`，Hermes CLI 内部新建了 session 并回复「已新建会话」，但后续消息仍然 `--resume` 旧 session。导致 model 不更新、上下文不重置。
 - **根因**：涉及三层问题：
   1. **Gateway 层**：微信 binding 绑定 1 个 thread_id 后永不更新（`resolveThread` 中 `if (binding.thread_id) return`），所以 session_name = `wechat:<threadId>` 永远不变。
-  2. **server.py 层**：`call_hermes` 中只有 `not existing` 时才走 detect + put 更新 `_gateway_session_map.json`（第 296-299 行）。当 existing 有值时，即使 Hermes 内部切了 session，map 也不会更新。
+  2. **server/chat.ts 层**:`callHermes` 中只有 `not existing` 时才走 detect + put 更新 `_gateway_session_map.json`。当 existing 有值时,即使 Hermes 内部切了 session,map 也不会更新。
   3. **结果**：后续请求还是 `--resume <旧hermes_uuid>` → 旧 session → 旧 model。
 - **影响**：微信用户无法通过 `/new` 切换到新模型配置；usage_events 中 model 字段停留在旧值。
 - **临时绕过**：手动清掉 binding 的 thread_id：`UPDATE wechat_bindings SET thread_id = NULL WHERE user_id = '...'`，下次发消息会新建 thread → 新 session。
 - **修复方向**：
-  - 方案 A：server.py 在 `existing` 有值时也检测 Hermes stdout 中的 session 切换信号，更新 map。
+  - 方案 A:server/chat.ts 在 `existing` 有值时也检测 Hermes stdout 中的 session 切换信号,更新 map。
   - 方案 B：Gateway 层识别 `/new` 指令，主动新建 thread + 清 binding 的 thread_id，让 session_name 变化。
-  - 方案 C：两层都改 — Gateway 感知指令 + server.py 容错检测。
+  - 方案 C:两层都改 — Gateway 感知指令 + server/chat.ts 容错检测。
 
 ---
 
@@ -239,7 +239,7 @@ az acr repository delete -n acrlingxidev --image hermes:v3 --yes
 
 #### 排查证据
 
-调用链：浏览器 → gateway `GET /api/threads/:id/messages` (`apps/gateway/src/api/chat.ts:67`) → 容器 `GET /history` (`docker/hermes/server.py:245`) → `load_history()` (`docker/hermes/server.py:166`) → `hermes_state.SessionDB.get_messages(uuid)`
+调用链:浏览器 → gateway `GET /api/threads/:id/messages` (`apps/gateway/src/api/chat.ts:67`) → 容器 `GET /history` (`docker/hermes/server/http.ts handleHistory`) → `loadMessagesByUuid()` (`docker/hermes/server/state-db.ts`) → `bun:sqlite` 直读 `state.db`
 
 Log Analytics 查询 (`ContainerAppConsoleLogs_CL`) 多次命中：
 
@@ -285,7 +285,7 @@ SQLite 在打开数据库时就会用 `fcntl(F_SETLK)` 尝试拿 reserved/exclus
 
 #### 衍生影响（比 502 严重得多）
 
-`call_hermes` (`docker/hermes/server.py:204`) 调 hermes CLI 时用 `--resume <uuid>` 让 hermes 从 `state.db` 恢复历史 context。由于 db 是空的, **每条消息进入 hermes 时都没有任何历史 context, 等于每次都是全新对话的第 1 轮**。
+`callHermes` (`docker/hermes/server/chat.ts`) 调 hermes CLI 时用 `--resume <uuid>` 让 hermes 从 `state.db` 恢复历史 context。由于 db 是空的, **每条消息进入 hermes 时都没有任何历史 context, 等于每次都是全新对话的第 1 轮**。
 
 表现为：
 
@@ -306,10 +306,10 @@ SQLite 在打开数据库时就会用 `fcntl(F_SETLK)` 尝试拿 reserved/exclus
 
 | 方案 | 月成本增加 | 工程量 | 根治程度 | 备注 |
 |------|----------|------|---------|------|
-| A. `state.db` 走容器本地盘 + 定期导出回 Azure Files | $0 | 小 (改 entrypoint + server.py) | ⚠️ **只解 hermes 一家**, pip/npm/playwright/用户项目仍踩雷 | 早期文档里以为是首选, 现已降级 |
+| A. `state.db` 走容器本地盘 + 定期导出回 Azure Files | $0 | 小 (改 entrypoint + server/) | ⚠️ **只解 hermes 一家**, pip/npm/playwright/用户项目仍踩雷 | 早期文档里以为是首选, 现已降级 |
 | **B. Azure Files 切到 Premium FileStorage + NFS 4.1 协议** | **~$16/月/用户** (实际部署 Provisioned v1, 100 GiB share × $0.16; 早期文档错把 v2 单价 $3.2 当成 v1, 已校正; v2 切换列入 [nfs.md §十](./nfs.md#十-未来优化-v1--v2-切换-todo-高优先级) 高优先 TODO) | 当前无存量用户场景下**小** (destroy-recreate dev/prod, 见 [nfs.md](./nfs.md)) | ✅ **全面根治**, 救活所有 SQLite 用户 | 已选定。VNet 走 Service Endpoint 即可, 不必上 Private Endpoint, 无 €2/天费用 |
 | C. gateway 把消息历史改写到 Supabase 当权威源 | $0 (走现有 Supabase) | 大 (动 gateway + 数据模型 + 重做 prompt 组装) | ⚠️ **只解 hermes 一家**, pip/npm/playwright 仍踩雷 | 解决的是 hermes 这一家的 db 问题, 不解决 SMB 整体不能 host sqlite 的根本矛盾 |
-| D. 只在 `server.py` 加 `mode=ro` 只读 + retry | $0 | 极小 | ❌ **已实证无效** | 写入会失败, 多轮 context 问题不解决; 而且 SMB 上连读路径也是先拿锁, 仍会 `database is locked` |
+| D. 只在 `server/state-db.ts` 加 `mode=ro` 只读 + retry | $0 | 极小 | ❌ **已实证无效** | 写入会失败, 多轮 context 问题不解决; 而且 SMB 上连读路径也是先拿锁, 仍会 `database is locked` |
 
 不可行的方案 (已实证或权威排除):
 

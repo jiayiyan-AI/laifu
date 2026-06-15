@@ -22,12 +22,14 @@ export const buildMeRuntimeConfigRouter = (deps: MeRuntimeConfigRouterDeps): Rou
   });
 
   router.get('/api/me/runtime-config', containerAuth, (_req: Request, res: Response) => {
+    // hermes timeout 走自己的默认 (request 1800s / stale 90s + 长 ctx 自动放大到 150-240s),
+    // 不在这里覆盖。覆盖 → 写错位置 (model.* 而非 providers.<id>.*) 这种坑曾经踩过,
+    // 实测默认值就够用; 容器内 retry + fallback 链兜底 (conversation_loop 3 次 retry +
+    // _fallback_chain), 大部分跨境网络抖动 hermes 自己自愈。
     const body: RuntimeConfig = {
       provider: config.azure.hermesProvider,
       model: config.azure.hermesModel,
       base_url: config.azure.hermesBaseUrl || null,
-      request_timeout_seconds: 120,
-      stale_timeout_seconds: 300,
       prompts_manifest: deps.prompts.manifest(),
     };
     res.json(body);

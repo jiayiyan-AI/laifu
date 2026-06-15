@@ -3,7 +3,7 @@
 灵犀的每个用户跑一个独立的 Hermes 容器。本目录是该容器镜像的源代码——`Dockerfile` + HTTP 包装层 + Hermes 配置。
 
 源自同事的 PoC (`uwf-azure/container/`),改动:
-- `server.py` 加 `session_id` + `source` 参数,内部传 hermes `--continue` / `--source`,实现 Web 多 thread / 微信 / CLI 来源的对话历史隔离
+- `server/*.ts` (Bun + TypeScript, 从 Python `server.py` → Node `server.mjs` 两次迁移后的现状) 加 `session_id` + `source` 参数,内部传 hermes `--continue` / `--source`,实现 Web 多 thread / 微信 / CLI 来源的对话历史隔离
 - 其余 (Dockerfile / entrypoint.sh / hermes-config.yaml) 原样
 
 ---
@@ -42,7 +42,7 @@ curl -X POST http://localhost:8080/chat \
   -d '{"message":"你好","session_id":"web:thr_a","source":"web"}'
 ```
 
-首次 build 约 10-15 分钟(拉 3.5GB image + Hermes + playwright + chromium)。之后改 `server.py` 重 build 约 20 秒(layer 缓存命中)。
+首次 build 约 10-15 分钟(拉 3.5GB image + Hermes + playwright + chromium + Bun)。之后改 `server/*.ts` 重 build 约 20 秒(layer 缓存命中)。
 
 ---
 
@@ -120,7 +120,7 @@ jobs:
 1. **Hermes 必须装到 `/opt/hermes-agent`** (镜像只读层)。装到 home 会被 volume 覆盖,老用户跑不到新版本
 2. **`PIP_USER` + `PYTHONUSERBASE` + `NPM_CONFIG_PREFIX` 三个 env 必须设**——少一个就会出现"用户装的工具重启后丢失"
 3. **`api_key: ${ANTHROPIC_API_KEY}` 占位符**——明文 key 不能落 volume
-4. **`ThreadingHTTPServer` 必须用**——单线程在 ACA 必被 probe 5 次失败强杀
+4. **不要在 server/*.ts 里写阻塞 event loop 的同步重计算** — Bun 单 event loop 模型 (跟 Node 一样), 长 CPU 任务会拖死 /health probe, ACA 5 次失败强杀
 5. **构建时 `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`** ——否则 uv 拉 Python 落到 /root/.local (权限 700),非 root 用户的 venv python 软链悬空
 
 详细见 `~/Downloads/uwf-azure/docs/03-known-issues.md`。

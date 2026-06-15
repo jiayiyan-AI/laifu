@@ -76,7 +76,7 @@ export const callHermesChat = async (args: CallArgs): Promise<CallResult> => {
       chat_ms: chatMs,
       reply_chars: reply?.length ?? 0,
       status: reply ? 'ok' : 'no_reply',
-      // token 字段: server.py PR1 后稳定下发; 旧镜像 undefined 不进日志即可
+      // token 字段: server/index.ts (前身 server.py PR1) 稳定下发; 旧镜像 undefined 不进日志即可
       provider: usage?.provider ?? undefined,
       model: usage?.model ?? undefined,
       input_tokens: usage?.input_tokens,

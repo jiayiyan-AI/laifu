@@ -13,7 +13,7 @@ apps/
 packages/
   db/        @lingxi/db — 共享数据库层 (Drizzle schema + client + 迁移)
   shared/    跨端类型 / 契约 / 工具，gateway+web 共用
-docker/hermes/  Hermes 容器镜像 (Python server.py 包 Hermes CLI，挂 /home/hermes)
+docker/hermes/  Hermes 容器镜像 (Bun + TypeScript `server/index.ts` 包 Hermes CLI，挂 /home/hermes)
 infra/bicep/    Azure 长期资源声明（RG/ACR/Storage/CAE/KV/ASP/AppService + 6 role）
 scripts/build-deploy.sh     vite lib mode 把 gateway 打成单文件 + 扁平 node_modules
 ```
@@ -75,7 +75,7 @@ cd docker/hermes && ACR_NAME=acrlingxi${ENV} IMAGE_TAG=vX ./build-and-push.sh
 
 - 不要把 `/home/hermes` 拆成多个挂载点 — Agent 用任意 CLI，逐个枚举挂不完。整盘挂是设计。
 - 不要给 ACA Environment 配 VNet / Private Endpoint，会产生 ~€2/天基础设施费。默认配置无此费用。
-- 不要在 hermes `server.py` 里写阻塞 health — 必须并发（`ThreadingHTTPServer`），否则 5 次 probe 失败被强杀。
+- 不要在 hermes `server/*.ts` 里写阻塞 event loop 的同步重计算 — 单 event loop 模型, 长 CPU 任务会拖死 /health probe, 5 次失败被强杀。
 - App Service `Always On` 必须开，防 polling 进程被空闲回收。
 - 改 storage account 不能事后加 `isHnsEnabled`，是创建时一次性 flag，必须删 RG + purge KV 重建（dev 才能这么干）。
 - gateway system identity 必须同时拿 `Storage Account Contributor`（建 File Share）**和** `Storage Blob Data Owner`（签 User Delegation Key，云盘必需）。

@@ -47,7 +47,7 @@ echo "ℹ️  hermes provider=$HERMES_PROVIDER_VALUE model=$HERMES_MODEL_VALUE"
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "⚠️  image '$IMAGE' 不存在,需要先 build:"
   echo "     docker build -t $IMAGE docker/hermes/"
-  echo "   (首次约 10-15 分钟,之后改 server.py 增量约 20 秒)"
+  echo "   (首次约 10-15 分钟,之后改 server/*.ts 增量约 20 秒)"
   exit 1
 fi
 

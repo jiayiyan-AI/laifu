@@ -31,7 +31,7 @@
 | 入口 | 路径/形式 | 注入位置 | session 内会变? | 适合什么 |
 |---|---|---|---|---|
 | **`~/.hermes/SOUL.md`** | 文件, 写死路径 | cached / stable, session 起始一次 | ❌ | 长期人格/灵魂层 |
-| **`.hermes.md` / `HERMES.md`** | cwd → git root, first-match | cached / context | ❌ | 项目级 prompt; 我们 server.py cwd 是 `/home/hermes` |
+| **`.hermes.md` / `HERMES.md`** | cwd → git root, first-match | cached / context | ❌ | 项目级 prompt; 我们 server/ cwd 是 `/home/hermes` |
 | **`AGENTS.md` / `CLAUDE.md` / `.cursorrules`** | 类似上面, first-match | cached / context | ❌ | 兼容其他 agent 生态 |
 | **`config.yaml: agent.system_prompt`** | yaml 字段 | ephemeral, 每 turn 拼到 cached 后面 | 启动时读 env, 启动后不变 | 业务规则层 |
 | **`HERMES_EPHEMERAL_SYSTEM_PROMPT`** env | env 字符串 | 同上 (优先级高于 config.yaml) | 同上 | 同上, 跟 env 同语义 |
@@ -79,7 +79,7 @@ if effective_system:
                                    鉴权复用 LAIFU_USER_TOKEN; name 白名单防穿越
             │
             ▼
-[容器 bootstrap.mjs] (每次冷启动)
+[容器 bootstrap.ts] (每次冷启动)
   fetchRuntimeConfig → 拿到 prompts_manifest
   sync-prompts:
     跟 ~/dynamic_prompts/manifest.json diff
@@ -91,7 +91,7 @@ if effective_system:
             ▼
 [hermes 行为]
   启动时读 ~/.hermes/SOUL.md → cached prompt
-  /chat 时 server.py 读 ~/dynamic_prompts/system-prompt.md
+  /chat 时 server/hermes-proc.ts 读 ~/dynamic_prompts/system-prompt.md
         → 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT 给子进程
         → hermes 拼到 cached 后, byte-stable 时 cache 命中
 ```
@@ -101,7 +101,7 @@ if effective_system:
 ```
 apps/gateway/prompts/
 ├── SOUL.md            ← 镜像到 ~/.hermes/SOUL.md, cached 层
-└── system-prompt.md   ← 留在 ~/dynamic_prompts/, 由 server.py 注入 env
+└── system-prompt.md   ← 留在 ~/dynamic_prompts/, 由 server/hermes-proc.ts 注入 env
 ```
 
 ### Manifest 协议
@@ -123,7 +123,7 @@ apps/gateway/prompts/
 
 - 远端 manifest 不含某文件 → 删 `~/dynamic_prompts/<name>`
 - **不删** `~/.hermes/SOUL.md`: hermes 自带默认 persona, 删了破坏默认行为; 一旦镜像就保留, 直到下次 SOUL.md 又出现在 manifest 再覆盖
-- system-prompt.md 不需要这种保留: `HERMES_EPHEMERAL_SYSTEM_PROMPT` 默认就是空, server.py 自动 unset 等于"回归默认"
+- system-prompt.md 不需要这种保留: `HERMES_EPHEMERAL_SYSTEM_PROMPT` 默认就是空, server/hermes-proc.ts 自动 unset 等于"回归默认"
 
 ---
 
@@ -142,9 +142,9 @@ apps/gateway/prompts/
 | Prompt 文件存放位置 | ✅ `apps/gateway/prompts/`, vite plugin 复制到 `dist/prompts/` | 2026-06-05 |
 | 初版 prompt 文件结构 | ✅ `SOUL.md` + `system-prompt.md` 各一个文件 | 2026-06-05 |
 | Hot-reload (改 .md 自动重算 sha) | ❌ 不做, 必须 redeploy gateway | 2026-06-05 |
-| system-prompt.md 注入方式 | ✅ server.py 运行时读文件注入 env, 不写 config.yaml | 2026-06-05 |
+| system-prompt.md 注入方式 | ✅ server/hermes-proc.ts (Phase 1 server.mjs / Python 时同) 运行时读文件注入 env, 不写 config.yaml | 2026-06-05 |
 | Manifest 协议加 version 字段 | ✅ 留协议演进空间 | 2026-06-05 |
-| config.yaml 写法 | ✅ yaml 包 partial merge, 只动 model.* 几个字段, 不重写整个文件 | 2026-06-05 |
+| config.yaml 写法 | ✅ Bun YAML partial merge (Phase 2 起内置, 此前 yaml@2 包), 只动 model.* 几个字段, 不重写整个文件 | 2026-06-05 |
 
 ---
 
@@ -191,7 +191,7 @@ function manifestFor(userId: string): PromptsManifest {
 ### 6.2 hermes 的 prompt cache 命中条件
 
 `HERMES_EPHEMERAL_SYSTEM_PROMPT` 的内容变化 = 一次 cache miss。这是预期: **改一次, miss 一次, 之后稳态命中**。
-但要注意 server.py 每次 `/chat` 都 `read()` 文件后 `.strip()`——如果 prompt 文件被反复修改 (运营加空行、改标点等无意义变更), 每次都 miss。可以接受, 因为运营行为本来就该谨慎。
+但要注意 server/hermes-proc.ts 每次 `/chat` 都 `readFile` 后 `.trim()`——如果 prompt 文件被反复修改 (运营加空行、改标点等无意义变更), 每次都 miss。可以接受, 因为运营行为本来就该谨慎。
 
 ### 6.3 vite build 必须先成功才有 `dist/prompts/`
 
@@ -207,7 +207,7 @@ function manifestFor(userId: string): PromptsManifest {
 | `apps/gateway/src/api/me-runtime-config.ts` | runtime-config 和 prompts/:name 两个端点 |
 | `apps/gateway/vite.config.ts` | `copyPromptsPlugin`: build 时 cpSync 到 dist |
 | `apps/gateway/prompts/` | 真实 prompt 文件存放处 |
-| `docker/hermes/scripts/sync-prompts.mjs` | manifest diff + 并行下载 + SOUL.md 镜像 |
-| `docker/hermes/scripts/bootstrap.mjs` | 编排入口 |
-| `docker/hermes/server.py` `_build_subprocess_env()` | 每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT |
+| `docker/hermes/scripts/sync-prompts.ts` | manifest diff + 并行下载 + SOUL.md 镜像 |
+| `docker/hermes/scripts/bootstrap.ts` | 编排入口 |
+| `docker/hermes/server/hermes-proc.ts` `buildSubprocessEnv()` | 每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT |
 | `packages/shared/src/contracts.ts` `RuntimeConfig` / `PromptsManifest` | 协议类型 |

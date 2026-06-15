@@ -1,12 +1,22 @@
 // 拉 desired entitlements → 软链 /opt/hermes-skills/<feature> → ~/.hermes/skills/<feature>
 // → 上报 observed。
-import { readdirSync, lstatSync, unlinkSync, symlinkSync, mkdirSync, existsSync, statSync } from 'node:fs';
-import { log, warn, readToken, httpJson, HOME_DIR } from './lib.mjs';
+import {
+  readdirSync, lstatSync, unlinkSync, symlinkSync, mkdirSync, existsSync, statSync,
+} from 'node:fs';
+import { log, warn, readToken, httpJson, HOME_DIR } from './lib.ts';
 
 const SKILLS_DIR = `${HOME_DIR}/.hermes/skills`;
 const SKILLS_SOURCE = '/opt/hermes-skills';
 
-async function fetchEntitlements(gateway, token) {
+interface EntitlementsResponse {
+  entitlements?: string[];
+  token_version?: number;
+}
+
+async function fetchEntitlements(
+  gateway: string,
+  token: string,
+): Promise<EntitlementsResponse | null> {
   for (let i = 1; i <= 7; i++) {
     try {
       const { status, body } = await httpJson({
@@ -17,19 +27,19 @@ async function fetchEntitlements(gateway, token) {
       });
       if (status >= 200 && status < 300) {
         log(`entitlements fetched on attempt ${i}`);
-        return JSON.parse(body);
+        return JSON.parse(body) as EntitlementsResponse;
       }
       warn(`entitlements HTTP ${status} (attempt ${i}/7)`);
     } catch (e) {
-      warn(`entitlements attempt ${i}/7 failed: ${e.message}`);
+      warn(`entitlements attempt ${i}/7 failed: ${(e as Error).message}`);
     }
-    if (i < 7) await new Promise((r) => setTimeout(r, 3_000));
+    if (i < 7) await sleep(3_000);
   }
   return null;
 }
 
-export async function runSyncEntitlements() {
-  const GATEWAY = process.env['GATEWAY_BASE_URL'];
+export async function runSyncEntitlements(): Promise<void> {
+  const GATEWAY = process.env['GATEWAY_BASE_URL'] ?? '';
   const token = readToken();
   if (!token) {
     warn('no token — skip entitlement sync');
@@ -58,12 +68,12 @@ export async function runSyncEntitlements() {
     }
     if (!desired.includes(name)) {
       log(`removing stale skill: ${name}`);
-      try { unlinkSync(p); } catch (e) { warn(`unlink ${name} failed: ${e.message}`); }
+      try { unlinkSync(p); } catch (e) { warn(`unlink ${name} failed: ${(e as Error).message}`); }
     }
   }
 
   // 软链 desired (已存在的 symlink 先删再建, 保证 target 是最新的)
-  const observed = [];
+  const observed: string[] = [];
   for (const feature of desired) {
     const target = `${SKILLS_SOURCE}/${feature}`;
     const link = `${SKILLS_DIR}/${feature}`;
@@ -81,7 +91,7 @@ export async function runSyncEntitlements() {
       log(`linked skill: ${feature}`);
       observed.push(feature);
     } catch (e) {
-      warn(`symlink ${feature} failed: ${e.message}`);
+      warn(`symlink ${feature} failed: ${(e as Error).message}`);
     }
   }
 
@@ -100,6 +110,12 @@ export async function runSyncEntitlements() {
       warn(`observed-entitlements HTTP ${status}: ${body.slice(0, 200)}`);
     }
   } catch (e) {
-    warn(`observed-entitlements report failed: ${e.message}`);
+    warn(`observed-entitlements report failed: ${(e as Error).message}`);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
 }

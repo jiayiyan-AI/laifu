@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Bootstrap 入口: 编排所有启动任务。
 //
 // 执行图:
@@ -17,23 +17,23 @@
 //
 // 任何一步失败都不致命 — 打日志继续, 让 hermes server 仍能起来 (用兜底配置),
 // 避免 bootstrap 异常 → 容器永远起不来 → 用户彻底用不了。
-// 最外层 try/catch 兜底未捕获的顶层 await reject (Node 18+ 默认会 exit 1)。
-import { runRefreshToken } from './refresh-token.mjs';
-import { fetchRuntimeConfig, renderConfigYaml } from './pull-runtime-config.mjs';
-import { runSyncEntitlements } from './sync-entitlements.mjs';
-import { syncPrompts } from './sync-prompts.mjs';
-import { log, warn, envOrDie } from './lib.mjs';
+// 最外层 try/catch 兜底未捕获的顶层 await reject (Bun 跟 Node 一样, 默认 exit 1)。
+import { runRefreshToken } from './refresh-token.ts';
+import { fetchRuntimeConfig, renderConfigYaml } from './pull-runtime-config.ts';
+import { runSyncEntitlements } from './sync-entitlements.ts';
+import { syncPrompts } from './sync-prompts.ts';
+import { log, warn, envOrDie } from './lib.ts';
 
-async function safe(name, fn) {
+async function safe<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
   try {
     return await fn();
   } catch (e) {
-    warn(`${name} threw: ${e?.message ?? e}`);
+    warn(`${name} threw: ${(e as Error)?.message ?? String(e)}`);
     return null;
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   envOrDie('GATEWAY_BASE_URL');
   const t0 = Date.now();
 
@@ -63,6 +63,6 @@ try {
   await main();
 } catch (e) {
   // 真到这里说明 safe() 之外某处直接 throw, 也不能让 entrypoint 退出。
-  warn(`bootstrap fatal: ${e?.message ?? e}`);
+  warn(`bootstrap fatal: ${(e as Error)?.message ?? String(e)}`);
   process.exit(0);
 }
