@@ -35,12 +35,22 @@ export const Desktop = () => {
   const [{ observed }] = entitlementsAtom.use();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
+  // 置顶用 zIndex map, 不重排数组: 重排会让 React 移动 DOM 节点, 触发 .fade 入场动画重放 → 焦点闪烁。
+  // 保持 openApps 插入顺序稳定(DOM 节点不动), 焦点只改被点窗口的 zIndex。
+  const [zMap, setZMap] = useState<Partial<Record<AppId, number>>>({});
+  const zTop = useRef(10);
+  const bringToFront = (id: AppId) => {
+    zTop.current += 1;
+    const z = zTop.current;
+    setZMap((m) => ({ ...m, [id]: z }));
+  };
 
-  const openApp = (id: AppId) => setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
+  const openApp = (id: AppId) => {
+    setOpenApps((s) => (s.includes(id) ? s : [...s, id]));
+    bringToFront(id);
+  };
   const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
-  // 置顶: 把窗口移到数组末尾(末尾 = 最大 index = 最大 zIndex)。React 按 key 复用实例,
-  // 重排不重挂载, 窗口内部状态与位置(initialRect 仅 mount 算一次)都保留。
-  const focusApp = (id: AppId) => setOpenApps((s) => (s[s.length - 1] === id ? s : [...s.filter((x) => x !== id), id]));
+  const focusApp = (id: AppId) => bringToFront(id);
 
   useEffect(() => {
     void (async () => {
@@ -92,7 +102,7 @@ export const Desktop = () => {
         {openApps.map((id, i) => {
           const meta = titles[id];
           return (
-            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={i + 1} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
+            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={zMap[id] ?? (i + 1)} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
               {renderApp(id, openApp)}
             </Window>
           );
