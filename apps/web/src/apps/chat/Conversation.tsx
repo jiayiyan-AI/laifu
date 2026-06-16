@@ -38,6 +38,13 @@ export const Conversation = ({ threadId }: Props) => {
 
   const thinkingIdx = useRef(0);
   const loopCleanup = useRef<(() => void) | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 消息变化(切换会话载入历史 / 新消息 / 流式更新)后滚到底, 始终看到最新一条。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs]);
 
   // 连接 loop SSE 并处理事件
   const connectLoop = useCallback((loopId: string) => {
@@ -133,7 +140,7 @@ export const Conversation = ({ threadId }: Props) => {
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
-      <div style={{ flex: 1, overflow: 'auto', padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
         {loadingHistory && msgs.length === 0 && <div className="dim" style={{ fontSize: 13, textAlign: 'center', marginTop: 60 }}>载入历史…</div>}
         {!loadingHistory && msgs.length === 0 && <div className="dim" style={{ fontSize: 13, textAlign: 'center', marginTop: 60 }}>说说看，我能帮你做什么。</div>}
         {msgs.map((m, i) => (
