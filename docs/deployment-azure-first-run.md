@@ -2,23 +2,27 @@
 
 代码/Bicep/CI 能自动化的坑都已经修掉了 (`infra/bicep/main.bicep` 加齐 6 个 role assignment + deployer KV 写权限; `scripts/build-deploy.sh` 用 vite lib mode 把 gateway 打成单文件 + 扁平 npm 依赖, 配合 bicep 里 `SCM_DO_BUILD_DURING_DEPLOYMENT=false`, Oryx 不再作妖, CI 直接 `az webapp deploy --type zip`; `parameters.*.json` 默认 `qwen-plus` 对齐 DashScope)。
 
-这份文档现在留**几类无法靠代码消除的认知陷阱**——Supabase 的 key 体系 + App Service 的 SCM 怪癖 + storage 的 HNS 一次性 flag。新人接手或部署 prod 时扫一遍即可。
+这份文档现在留**几类无法靠代码消除的认知陷阱**——KV secret 漂移 + App Service 的 SCM 怪癖 + storage 的 HNS 一次性 flag。新人接手或部署 prod 时扫一遍即可。
 
 > 流程性的"先做什么再做什么"看 `infra/README.md`; 架构总览看 `docs/deployment.md`; 新环境从零拉起的完整脚本见本文末尾"下次部署 prod 环境的简化版步骤"。
 
 ---
 
-## 注意 1: Supabase 的"新 API key"不是 `service_role`
+## 注意 1: KV secret 名单跟着 bicep 走, 别照抄历史命令
 
-**现象**: 用 `sb_secret_*` 这种新格式 key 调 Supabase, gateway 启动连得上但所有 RLS 检查异常。
+**现象**: 拿旧版 README / 文档里的 `az keyvault secret set` 列表灌 KV, gateway 部署后 `/healthz` 200 但业务路由 500, 或者 KV 里多出一堆没人读的孤儿 secret。
 
-**原因**: Supabase 2025 推出了**两套 API key 体系并存**:
-- 旧版: `anon` + `service_role`, 都是 JWT (`eyJ...` 开头)
-- 新版: "publishable" + "secret", 格式 `sb_publishable_*` / `sb_secret_*`
+**原因**: KV secret 清单是跟着 `infra/bicep/main.bicep` 里 `appSettings` 块的 `@Microsoft.KeyVault(...)` reference 走的, 不是跟着文档走。历史变更:
+- 早期用 `@supabase/supabase-js` + RLS, 引用 `supabase-url` / `supabase-service-role-key`; 后来切 Drizzle + node-postgres 直连, 改成 `database-url`。前两个变成孤儿。
+- 早期 App Service env 注入 `ANTHROPIC_API_KEY` / `DASHSCOPE_API_KEY` 给 gateway, 实测 gateway 源码 0 处读取——hermes 容器自己用 `HERMES_API_KEY` 通过 `pull-runtime-config.ts` 映射成 provider-specific 名字。两个 env 已从 bicep 删除。
 
-`@supabase/supabase-js` 客户端 + RLS 默认走**旧版 service_role JWT**。新版的 `sb_secret` 是给 Admin API 用的, 不是一回事。
+**解决**: 灌 KV 前先用下面这条命令对照 bicep 当前真实引用:
 
-**解决**: 在 Supabase Dashboard 翻到 **Settings → API → Project API keys**, 往下找 `service_role` (不是默认显眼的位置), 格式必须是 `eyJhbGci...` 一长串。
+```bash
+grep "@Microsoft.KeyVault" infra/bicep/main.bicep | sed -E 's/.*SecretName=([a-z-]+)\).*/\1/' | sort -u
+```
+
+多出来的 KV secret 是孤儿, 可以 `az keyvault secret delete` 清理 (soft-delete 7 天后自动 purge)。少的就照本文末尾"下次部署 prod 环境"那段灌进去。
 
 ---
 
@@ -119,18 +123,25 @@ cd infra/bicep
 #    详见 docs/known-issues.md #9。
 #    应急手势 (顺序反了之后): `az webapp config appsettings set --settings "KV_REFRESH_TRIGGER=$(date +%s)"`
 KV=kv-lingxi-prod
-az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
-az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)"   # 容器 ↔ gateway JWT 签发密钥, 必填
-az keyvault secret set --vault-name $KV --name supabase-url --value "..."
-az keyvault secret set --vault-name $KV --name supabase-service-role-key --value "..."   # 注意 1: 必须 eyJ... 开头
+# 真实凭据 (4 个) — 必须填真值, 占位会让 gateway 启动后业务路由 500
+az keyvault secret set --vault-name $KV --name database-url --value "postgresql://..."         # Postgres 直连串 (Supabase / Azure PG 都行)
 az keyvault secret set --vault-name $KV --name google-client-id --value "..."
 az keyvault secret set --vault-name $KV --name google-client-secret --value "..."
-az keyvault secret set --vault-name $KV --name anthropic-api-key --value "TODO"           # 当前 hermes-config.yaml 锁 DashScope, 填占位即可
-az keyvault secret set --vault-name $KV --name dashscope-api-key --value "..."
+az keyvault secret set --vault-name $KV --name hermes-api-key --value "..."                    # 一身二用: gateway↔hermes 容器 token + LLM provider key (provider=alibaba 时填 DashScope key)
+# 自生成 (2 个) — 跟 prod 自己绑, 不需要从外面拿
+az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
+az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)" # 容器 ↔ gateway JWT 签发密钥, 必填
+# 邮件三件套 — bicep 已把 EMAIL_PROVIDER 默认设为 resend (出站), 入站走 CF Email Routing。
+# resend-api-key 必填真值, 否则 gateway 出站 401; 另两个 postmark-* 当前不读, 留占位即可。
+az keyvault secret set --vault-name $KV --name postmark-inbound-webhook-secret --value "placeholder-fake"
+az keyvault secret set --vault-name $KV --name postmark-server-token --value "placeholder-fake"
+az keyvault secret set --vault-name $KV --name resend-api-key --value "re_..."   # Resend 控制台 → API Keys, gitignored 来源
 
-# 3. 跑 Supabase migration
-# 浏览器打开 prod project sql editor, 复制 infra/supabase/migrations/*.sql 依次跑
-# (确认 0006_cloud_entitlements 也跑了 — 没跑云盘 enable 直接 500)
+# 3. Drizzle migration 在 step 5 末尾跑 (App Service deploy 完才有部署单元拿来执行)
+#    drizzle/*.sql 文件随 packages/db 打进 zip; 部署单元里 migrate-deploy.mjs 是入口。
+#    本地预先验证可在 step 5 之前: DATABASE_URL=<prod database-url> DATABASE_SSL=true \
+#      node packages/db/migrate-deploy.mjs
+#    详见 packages/db/README.md §部署。
 
 # 4. 推 Hermes 镜像
 cd docker/hermes
@@ -144,6 +155,11 @@ cd /Users/flyknife/Desktop/laifu
 cd app-service-deploy && zip -rq ../deploy.zip . -x '*.map' && cd ..
 az webapp deploy -g rg-lingxi-prod -n app-lingxi-prod-gateway \
   --src-path deploy.zip --type zip
+
+# 5b. 跑 Drizzle migration (从本地用 prod database-url 跑最快, 不用 ssh 进 worker)
+DATABASE_URL=$(az keyvault secret show --vault-name kv-lingxi-prod --name database-url --query value -o tsv) \
+  DATABASE_SSL=true \
+  node packages/db/migrate-deploy.mjs
 
 # 6. Google OAuth Console 加 prod redirect URI
 #    https://app-lingxi-prod-gateway.azurewebsites.net/api/auth/google/callback

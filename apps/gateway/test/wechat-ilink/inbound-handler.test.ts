@@ -164,6 +164,102 @@ describe('handleInbound', () => {
     }));
   });
 
+  it('/new without args: creates fresh thread + bindThread + ack, no Hermes call', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const binding = mockBinding({ thread_id: 'thr_old' });
+    const client = mockClient();
+
+    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/new'));
+
+    // 建了新 thread + bind 到 binding
+    expect(dao.threads.create).toHaveBeenCalledWith(expect.objectContaining({
+      user_id: 'u_alice', source: 'wechat', title: '微信',
+    }));
+    expect(dao.wechatBindings.bindThread).toHaveBeenCalled();
+    // binding 的 thread_id 已就地更新到新 id (后续轮次复用)
+    expect(binding.thread_id).not.toBe('thr_old');
+    // 发了"已开新会话"提示
+    expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/已开启新会话/),
+    }));
+    // 不调 Hermes,不写 user msg,不建 loop
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+    expect(dao.agentLoops.create).not.toHaveBeenCalled();
+  });
+
+  it('/new with args: creates fresh thread + dispatches args as first message', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const binding = mockBinding({ thread_id: 'thr_old' });
+    const client = mockClient();
+
+    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/new 顺便问一下天气'));
+
+    // 建了新 thread
+    expect(dao.threads.create).toHaveBeenCalled();
+    const newThreadId = vi.mocked(dao.threads.create).mock.calls[0]![0].id;
+    expect(binding.thread_id).toBe(newThreadId);
+    // 发了 ack(带 args 时先发"已开启新会话,正在处理…")
+    expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/已开启新会话.*正在处理/),
+    }));
+    // user msg 内容是 args 部分,不含 /new
+    expect(dao.messages.insert).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user', content: '顺便问一下天气', source: 'wechat', thread_id: newThreadId,
+    }));
+    // 调了 Hermes, message 是 args
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchImpl as any).mock.calls[0]![1].body);
+    expect(body.message).toBe('顺便问一下天气');
+    expect(body.session_id).toBe(`wechat:${newThreadId}`);
+    for (const [k] of wechatReplyContexts) wechatReplyContexts.delete(k);
+  });
+
+  it('non-/new intercept (e.g. /help): replies with gateway text, no Hermes', async () => {
+    const fetchImpl = vi.fn();
+    const binding = mockBinding({ thread_id: 'thr_x' });
+    const client = mockClient();
+
+    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/help'));
+
+    expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/灵犀可用指令/),
+    }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+    expect(dao.threads.create).not.toHaveBeenCalled();
+  });
+
+  it('non-/new reject (e.g. /model): replies with reject text, no Hermes', async () => {
+    const fetchImpl = vi.fn();
+    const binding = mockBinding({ thread_id: 'thr_x' });
+    const client = mockClient();
+
+    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/model claude'));
+
+    expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/模型由后端/),
+    }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+  });
+
+  it('forward (unknown /<word>): falls through to normal dispatch', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const binding = mockBinding({ thread_id: 'thr_x' });
+    const client = mockClient();
+
+    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/some-unknown-skill arg'));
+
+    // 走原流程 — 不建 thread (已有), 插 user msg (原文), 调 Hermes
+    expect(dao.threads.create).not.toHaveBeenCalled();
+    expect(dao.messages.insert).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user', content: '/some-unknown-skill arg',
+    }));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    for (const [k] of wechatReplyContexts) wechatReplyContexts.delete(k);
+  });
+
   it('sendText 失败 → console.error 不抛 (循环不杀)', async () => {
     const fetchImpl = vi.fn(async () => new Response('err', { status: 500 }));
     const client = {

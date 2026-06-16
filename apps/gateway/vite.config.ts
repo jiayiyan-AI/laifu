@@ -6,8 +6,7 @@
 //     真装), 只把 @lingxi/* workspace 包内联——消除 workspace:* 协议、消除单独 build
 //     这些包的顺序依赖。(注: @lingxi/db 依赖的 drizzle-orm/pg 仍作为 external 真装。)
 //     的顺序依赖。
-//   - banner 注入 createRequire 垫片, 兼容 azure SDK / supabase 偶尔在 ESM 上下文
-//     用 require 的情况。
+//   - banner 注入 createRequire 垫片, 兼容 azure SDK 偶尔在 ESM 上下文用 require 的情况。
 //   - 不打包 native module / 不打包 node:* 内置——platform=node 默认行为正确。
 //
 // 产物: dist/index.mjs (+ index.mjs.map), 配合 scripts/build-deploy.sh 拼成

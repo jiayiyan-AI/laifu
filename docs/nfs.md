@@ -24,7 +24,7 @@
 
 整盘挂 home 的架构 (`architecture.md` 第三/五章) 前提是 "SMB 能 host 任意文件 IO" — 这个前提塌了。**只要 home 还在 SMB 上, SQLite 雷区就一直在, Agent 任务随时可能因为无关紧要的 cache 写入失败而挂掉, 而我们甚至无法立刻反应过来根因**。
 
-唯一的根治路径是把 share 换成 NFS 4.1, POSIX 锁在 NFS 上工作正常, 所有 SQLite 用户全部救活。其他方案 (把 `state.db` 挪出 SMB、把消息走 Supabase) 都只是给 hermes 一家打补丁, 不解决 pip/npm/playwright/任意 Agent 项目的潜在崩溃。
+唯一的根治路径是把 share 换成 NFS 4.1, POSIX 锁在 NFS 上工作正常, 所有 SQLite 用户全部救活。其他方案 (把 `state.db` 挪出 SMB、把消息走 PG) 都只是给 hermes 一家打补丁, 不解决 pip/npm/playwright/任意 Agent 项目的潜在崩溃。
 
 ---
 
@@ -254,7 +254,8 @@ az storage account create -g $RG -n stpocnfs$RANDOM \
 
 ```bash
 # 1. 清表
-# 在 supabase dev 上手动 truncate container_mapping (没有真实用户依赖)
+# 在 dev DB 上手动 truncate container_mapping (没有真实用户依赖):
+#   psql "$DATABASE_URL" -c 'TRUNCATE container_mapping;'
 
 # 2. 销毁现有 dev RG + purge Key Vault
 az group delete -n rg-lingxi-dev --yes --no-wait
@@ -310,7 +311,7 @@ prod 上真出问题但已有少量用户的极端场景下: 保留旧 Bicep 在
 
 - 不动云盘 (StorageV2 + blob container `laifu-cloud`), 它没踩 SQLite 坑
 - 不改 hermes 源码, 不动 entrypoint
-- 不引入 Supabase 当消息历史权威源 (那是另一个方案, 等真要做"消息搜索/导出"产品功能时再考虑)
+- 不引入 PG 当消息历史权威源 (那是另一个方案, 等真要做"消息搜索/导出"产品功能时再考虑)
 - 不切 region (留在 southeastasia, 与现有 dev/prod 一致)
 - 不上 Private Endpoint, 不上 NAT Gateway, 保持网络最简
 - **不补 deletion 流程**: 当前 `provisioning/` 只清进程内 cache, 不删 ACA / file share, 删用户后会留孤儿资源。NFS 切换不依赖也不引入这个问题, 留待产品决策清楚 (删除时机 / 数据保留期 / 是否 soft delete) 后单独处理。零用户阶段无实际影响

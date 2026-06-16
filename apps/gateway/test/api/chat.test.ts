@@ -25,6 +25,7 @@ describe('POST /api/chat', () => {
   let fetchSpy: any;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue({ id: 'thr_1', user_id: 'u1', source: 'web' } as any);
     vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u1',
@@ -126,6 +127,78 @@ describe('POST /api/chat', () => {
       .send({ thread_id: 'thr_1', message: 'hi' });
     expect(res.status).toBe(502);
     expect(dao.agentLoops.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
+  });
+
+  it('intercepts /new with inline reply, no Hermes, no DB write', async () => {
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/new' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('inline');
+    expect(res.body.reply).toMatch(/新对话/);
+    // 容器侧从未被调用
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // 不入库 — 既不写 user msg 也不写 assistant msg, 也不建 loop
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+    expect(dao.agentLoops.create).not.toHaveBeenCalled();
+    expect(dao.agentLoops.recordResult).not.toHaveBeenCalled();
+  });
+
+  it('intercepts /help with inline gateway-rendered text', async () => {
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/help' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('inline');
+    expect(res.body.reply).toMatch(/灵犀可用指令/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+  });
+
+  it('intercepts /usage inline with balance from DAO', async () => {
+    vi.mocked(dao.usage.getBalance).mockResolvedValueOnce({
+      balance_cny: 12.34, free_quota_cny_month: 50, used_cny_month: 7.89, period_start: '2026-06-01',
+    });
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/usage' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('inline');
+    expect(res.body.reply).toMatch(/¥7\.89/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+  });
+
+  it('forwards unknown /<word> to Hermes (forward branch)', async () => {
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/some-random-skill 参数' });
+
+    expect(res.status).toBe(200);
+    // 走原 dispatch 链路 — fetch 被调
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+    expect(body.message).toBe('/some-random-skill 参数');
+    // 没创建第二条 assistant 消息(那是 callback 的事,这里只校验 dispatch 阶段)
+    expect(dao.messages.insert).toHaveBeenCalledTimes(1);
+    expect(dao.agentLoops.recordResult).not.toHaveBeenCalled();
+  });
+
+  it('does NOT misidentify /etc/hosts as slash command', async () => {
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/etc/hosts 是什么文件' });
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 

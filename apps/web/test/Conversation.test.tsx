@@ -13,7 +13,7 @@ const setupEmptyMock = (fetchSpy: ReturnType<typeof vi.spyOn>) =>
       return new Response(JSON.stringify({ loop: null }));
     }
     // POST /api/chat → async response
-    return new Response(JSON.stringify({ user_msg_id: 'msg_1', loop_id: 'loop_1' }));
+    return new Response(JSON.stringify({ kind: 'dispatched', user_msg_id: 'msg_1', loop_id: 'loop_1' }));
   });
 
 describe('Conversation', () => {

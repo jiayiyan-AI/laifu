@@ -119,10 +119,15 @@ export interface WebChatRequest {
   message: string;
 }
 
-export interface WebChatResponse {
-  user_msg_id: string;
-  loop_id: string;
-}
+/**
+ * POST /api/chat 的响应,discriminated union:
+ *   - `dispatched`: 消息已转发 Hermes,带 user_msg_id + loop_id,前端订阅 SSE 等结果
+ *   - `inline`: 网关已就地处理 (e.g. /help /usage 或 /new 等被拦截的 slash),
+ *     直接给一段文案,**不入库**。前端把它显示为临时气泡,刷新即消失。
+ */
+export type WebChatResponse =
+  | { kind: 'dispatched'; user_msg_id: string; loop_id: string }
+  | { kind: 'inline'; reply: string };
 
 // 历史消息(浏览器从 gateway 拉);形状跟 ContainerHistoryMessage 一致,
 // 单独起名是为了 Web 端可以单方向加字段(比如本地的 pending 标记)

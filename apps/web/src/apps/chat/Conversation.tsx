@@ -121,9 +121,17 @@ export const Conversation = ({ threadId }: Props) => {
     setBusy(true);
 
     try {
-      const { loop_id } = await api.sendChat({ thread_id: threadId, message: text });
-      // 连接 per-loop SSE
-      connectLoop(loop_id);
+      const resp = await api.sendChat({ thread_id: threadId, message: text });
+      if (resp.kind === 'inline') {
+        // 网关就地处理 (slash 拦截类): 替换 pending 气泡, 不订阅 SSE
+        // user 消息也是本地临时显示 — 不入库, 刷新页面即消失
+        setMsgs((m) => m.map((x, i) =>
+          i === m.length - 1 && x.pending ? { who: 'assistant', text: resp.reply } : x,
+        ));
+        setBusy(false);
+      } else {
+        connectLoop(resp.loop_id);
+      }
     } catch (err) {
       if (err instanceof api.QuotaError) {
         setQuotaError(true);

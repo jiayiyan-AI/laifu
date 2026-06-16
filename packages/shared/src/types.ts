@@ -1,4 +1,4 @@
-// DB row types — 与 infra/supabase/migrations/0001_init.sql + 0003_oauth_identities.sql 一致
+// DB row types — 与 packages/db/src/schema.ts 对齐 (历史: 早期对应 infra/supabase/migrations/*, 现已迁到 Drizzle)
 
 export type ContainerStatus = 'provisioning' | 'ready' | 'failed';
 export type MessageSource = 'web' | 'wechat';

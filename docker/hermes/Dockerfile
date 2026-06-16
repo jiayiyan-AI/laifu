@@ -144,21 +144,16 @@ ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/home/hermes/.loc
 # `/usr/local/bin:/usr/bin:/bin:...`,抹掉我们上面 ENV PATH 里加的三个 bin
 # (~/.local/bin / ~/.npm-global/bin / $PNPM_HOME/bin),pnpm/npm/pip 全局
 # install 因而看不到 global-bin-dir, 报 ERR_PNPM_NO_GLOBAL_BIN_DIR 等错。
-# 解法:再下一份 /etc/profile.d/lingxi.sh,login shell 走 /etc/profile 时
+# 解法:落一份 /etc/profile.d/lingxi.sh,login shell 走 /etc/profile 时
 # 自动 source, 跟 ENV 双保险, 保证两类 shell 看到的 env 完全一致。
+#
+# 注: 历史用过 `RUN cat > ... <<EOF` heredoc, 但 ACR Build 不带
+# `# syntax=docker/dockerfile:1.4+` directive 时 heredoc 不被识别,
+# 产物是 0 字节空文件 (实测 hermes:latest 在 dev 上就是这个状态),
+# login shell 拿不到 PATH 救援, pnpm/npm 全局 install 一律报 PATH 警告。
+# 改 COPY 静态文件,绕开 BuildKit 版本依赖。
 USER root
-RUN cat > /etc/profile.d/lingxi.sh <<'EOF'
-# 跟 Dockerfile ENV 同源, 给 login shell (bash -l) 重 assert
-export HERMES_HOME=/home/hermes/.hermes
-export PIP_USER=1
-export PYTHONUSERBASE=/home/hermes/.local
-export NPM_CONFIG_PREFIX=/home/hermes/.npm-global
-export PNPM_HOME=/home/hermes/.local/share/pnpm
-case ":$PATH:" in
-  *":$PNPM_HOME/bin:"*) ;;
-  *) export PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:$PNPM_HOME/bin:/opt/hermes-agent/venv/bin:$PATH" ;;
-esac
-EOF
+COPY lingxi.sh /etc/profile.d/lingxi.sh
 RUN chmod 0644 /etc/profile.d/lingxi.sh
 
 # ============ Seed 目录 ============
