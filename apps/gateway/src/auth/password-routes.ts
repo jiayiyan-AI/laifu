@@ -19,6 +19,8 @@ export interface PasswordRoutesOpts {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
 const BCRYPT_ROUNDS = 10;
+// 防枚举: 邮箱不存在时也跑一次 bcrypt 比较, 抹平时序差异。模块加载时算一次。
+const DUMMY_HASH = bcrypt.hashSync('lingxi-dummy-password', BCRYPT_ROUNDS);
 
 const toMeResponse = (row: {
   id: string; provider: string; external_id: string;
@@ -66,7 +68,7 @@ export const buildPasswordRoutes = (opts: PasswordRoutesOpts): RouterType => {
     if (!email || !password) return res.status(401).json({ error: 'invalid credentials' });
 
     const row = await dao.users.getPasswordUserByEmail(email);
-    const ok = row?.password_hash ? await bcrypt.compare(password, row.password_hash) : false;
+    const ok = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
     if (!row || !ok) return res.status(401).json({ error: 'invalid credentials' });
 
     setSessionCookie(res, opts, row.id);

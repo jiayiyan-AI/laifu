@@ -116,5 +116,15 @@ describe('password-routes', () => {
         .send({ email: 'nobody@b.com', password: 'secret12' });
       expect(res.status).toBe(401);
     });
+
+    it('邮箱不存在时仍跑一次 bcrypt 比较(防时序枚举)', async () => {
+      vi.mocked(dao.users.getPasswordUserByEmail).mockResolvedValue(null);
+      const compareSpy = vi.spyOn(bcrypt, 'compare');
+      const res = await request(makeApp())
+        .post('/api/auth/password/login')
+        .send({ email: 'nobody@b.com', password: 'secret12' });
+      expect(res.status).toBe(401);
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+    });
   });
 });
