@@ -1,9 +1,18 @@
 # Auth Setup
 
-灵犀的认证系统:**provider registry 模式**。一个动态路由 `/api/auth/:provider/{start,callback}` 跑所有 OAuth 平台。加新 provider 只要在 `apps/gateway/src/auth/providers/` 加一个文件 + 在 `index.ts` registry 注册一行,不动路由。
+灵犀的认证系统两条腿:
+
+1. **账号密码**(主要方式):邮箱 + 密码注册/登录,专用路由 `/api/auth/password/{register,login}`(`apps/gateway/src/auth/password-routes.ts`)。密码 bcrypt 哈希存 `users.password_hash`,`provider='password'` / `external_id=lower(email)`。
+2. **OAuth provider registry**(次要方式):一个动态路由 `/api/auth/:provider/{start,callback}` 跑所有 OAuth 平台。加新 provider 只要在 `apps/gateway/src/auth/providers/` 加一个文件 + 在 `index.ts` registry 注册一行,不动路由。
+
+两条腿都签发**同一套 session cookie**(JWT,`apps/gateway/src/auth/session.ts`),`/api/auth/me` 与 `/api/auth/logout` 共用。
 
 当前已接入:
-- **Google OAuth**
+- **账号密码**(登录页主入口:登录/注册 tab 表单)
+- **Google OAuth**(登录页下方次要入口)
+
+> MVP 未做:邮件验证、忘记/重置密码、登录限流、同邮箱账号合并(Google↔密码)。详见
+> `docs/superpowers/specs/2026-06-17-account-password-login-design.md`。
 
 ---
 
