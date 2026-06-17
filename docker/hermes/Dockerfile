@@ -101,6 +101,13 @@ RUN useradd -m -s /bin/bash hermes \
 #   3. 镜像体积变化对照 docker history 看是不是上游 install.sh 漂移
 #
 # 当前 pin: 2026-06-15 main HEAD, 我们本次 5 项验证矩阵 (sync/async/pgkill/multimodal/health) 全过。
+#
+# ★ 末尾 rm -rf /opt/hermes-agent/skills/email: 删掉 Hermes 自带的 email 技能类目
+#   (仅含 himalaya, 已被双否决)。它会在首启时 materialize 成 ~/.hermes/skills/email 真目录,
+#   与我们 email 能力的 entitlement 软链目标 (~/.hermes/skills/email) 撞名 →
+#   sync-entitlements 软链抛 EEXIST → observed 漏报 email → 前端购买一直 timeout。
+#   从源头删掉 builtin, 命名空间留给 entitlement 软链, 新用户天然无冲突。必须跟 install 同一
+#   RUN (单独 RUN 删只会加 whiteout 层, 旧层文件仍占体积)。cloud 能力无同名 builtin, 不受影响。
 ARG HERMES_REF=95715dcb03003eab086eb0494083e6dc1c65f3b3
 RUN export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
     && export UV_PYTHON_BIN_DIR=/usr/local/bin \
@@ -110,6 +117,7 @@ RUN export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
     && ln -sf /opt/hermes-agent/venv/bin/hermes /usr/local/bin/hermes \
     && /opt/hermes-agent/venv/bin/python -m ensurepip --upgrade \
     && /opt/hermes-agent/venv/bin/python -m pip install --no-cache-dir 'anthropic>=0.39.0' \
+    && rm -rf /opt/hermes-agent/skills/email \
     && chmod -R a+rX /opt/hermes-agent /usr/local/share/uv
 
 # ============ 准备 hermes 用户的初始 home 骨架 ============
