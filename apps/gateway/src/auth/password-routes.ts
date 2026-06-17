@@ -7,7 +7,7 @@
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import bcrypt from 'bcryptjs';
 import { signSession, sessionCookieOpts } from './session.js';
-import type { AuthMeResponse } from '@lingxi/shared';
+import { toMeResponse } from './user-view.js';
 import { dao } from '../db/index.js';
 
 export interface PasswordRoutesOpts {
@@ -21,18 +21,6 @@ const MIN_PASSWORD = 8;
 const BCRYPT_ROUNDS = 10;
 // 防枚举: 邮箱不存在时也跑一次 bcrypt 比较, 抹平时序差异。模块加载时算一次。
 const DUMMY_HASH = bcrypt.hashSync('lingxi-dummy-password', BCRYPT_ROUNDS);
-
-const toMeResponse = (row: {
-  id: string; provider: string; external_id: string;
-  email: string | null; nickname: string | null; avatar_url: string | null;
-}): AuthMeResponse => ({
-  user_id: row.id,
-  provider: row.provider,
-  external_id: row.external_id,
-  email: row.email,
-  nickname: row.nickname,
-  avatar_url: row.avatar_url,
-});
 
 const setSessionCookie = (res: Response, opts: PasswordRoutesOpts, userId: string): void => {
   const token = signSession({ user_id: userId }, opts.sessionSecret, opts.ttlHours);
