@@ -3,13 +3,15 @@ import type {
   CloudListResponse,
   CloudUploadResponse,
   EntitlementChangeResponse,
+  MessageRow,
+  AgentLoopRow,
+  PasswordLoginRequest,
+  PasswordRegisterRequest,
   PurchaseResponse,
   StatusResponse,
   ThreadCreateRequest,
   ThreadCreateResponse,
   ThreadListItem,
-  MessageRow,
-  AgentLoopRow,
   WebChatRequest,
   WebChatResponse,
   WebThreadMessagesResponse,
@@ -57,6 +59,12 @@ const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
 
 // === Auth ===
 export const me = (): Promise<AuthMeResponse> => json('/api/auth/me');
+
+export const login = (body: PasswordLoginRequest): Promise<AuthMeResponse> =>
+  json('/api/auth/password/login', { method: 'POST', body: JSON.stringify(body) });
+
+export const register = (body: PasswordRegisterRequest): Promise<AuthMeResponse> =>
+  json('/api/auth/password/register', { method: 'POST', body: JSON.stringify(body) });
 
 export const logout = (): Promise<{ ok: true }> =>
   json('/api/auth/logout', { method: 'POST' });
