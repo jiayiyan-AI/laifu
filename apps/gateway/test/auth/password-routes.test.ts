@@ -126,5 +126,27 @@ describe('password-routes', () => {
       expect(res.status).toBe(401);
       expect(compareSpy).toHaveBeenCalledTimes(1);
     });
+
+    it('DAO 抛错 → 500(不让 async reject 拖垮进程)', async () => {
+      vi.mocked(dao.users.getPasswordUserByEmail).mockRejectedValue(new Error('db down'));
+      const res = await request(makeApp())
+        .post('/api/auth/password/login')
+        .send({ email: 'a@b.com', password: 'secret12' });
+      expect(res.status).toBe(500);
+    });
+  });
+
+  // 回归: handler 内任何 DB/bcrypt 异常必须被 catch 成 500, 不能变 unhandledRejection
+  // 拖垮整个 gateway 进程 (现场 bug: users 表缺 password_hash 列时 register 直接 crash)。
+  describe('错误不拖垮进程', () => {
+    it('register: createPasswordUser 抛错 → 500', async () => {
+      vi.mocked(dao.users.createPasswordUser).mockRejectedValue(
+        new Error('column "password_hash" does not exist'),
+      );
+      const res = await request(makeApp())
+        .post('/api/auth/password/register')
+        .send({ email: 'a@b.com', password: 'secret12', nickname: 'Qiang' });
+      expect(res.status).toBe(500);
+    });
   });
 });

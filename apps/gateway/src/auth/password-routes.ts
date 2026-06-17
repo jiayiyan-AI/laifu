@@ -39,15 +39,22 @@ export const buildPasswordRoutes = (opts: PasswordRoutesOpts): RouterType => {
     if (password.length < MIN_PASSWORD) return res.status(400).json({ error: 'password too short' });
     if (!nickname) return res.status(400).json({ error: 'nickname required' });
 
-    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const created = await dao.users.createPasswordUser({ email, nickname, hash });
-    if (!created) return res.status(409).json({ error: 'email already registered' });
+    // 包 try/catch: Express 4 不捕获 async handler 的 reject, 不包会变成
+    // unhandledRejection 直接拖垮整个 gateway 进程 (而非返回 500)。与其它路由一致。
+    try {
+      const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      const created = await dao.users.createPasswordUser({ email, nickname, hash });
+      if (!created) return res.status(409).json({ error: 'email already registered' });
 
-    const row = await dao.users.getById(created.id);
-    if (!row) return res.status(500).json({ error: 'user lookup failed' });
+      const row = await dao.users.getById(created.id);
+      if (!row) return res.status(500).json({ error: 'user lookup failed' });
 
-    setSessionCookie(res, opts, created.id);
-    res.status(201).json(toMeResponse(row));
+      setSessionCookie(res, opts, created.id);
+      res.status(201).json(toMeResponse(row));
+    } catch (err) {
+      console.error('[password-routes] register failed:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'register failed' });
+    }
   });
 
   r.post('/api/auth/password/login', async (req: Request, res: Response) => {
@@ -55,12 +62,17 @@ export const buildPasswordRoutes = (opts: PasswordRoutesOpts): RouterType => {
     const password = String(req.body?.password ?? '');
     if (!email || !password) return res.status(401).json({ error: 'invalid credentials' });
 
-    const row = await dao.users.getPasswordUserByEmail(email);
-    const ok = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
-    if (!row || !ok) return res.status(401).json({ error: 'invalid credentials' });
+    try {
+      const row = await dao.users.getPasswordUserByEmail(email);
+      const ok = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
+      if (!row || !ok) return res.status(401).json({ error: 'invalid credentials' });
 
-    setSessionCookie(res, opts, row.id);
-    res.status(200).json(toMeResponse(row));
+      setSessionCookie(res, opts, row.id);
+      res.status(200).json(toMeResponse(row));
+    } catch (err) {
+      console.error('[password-routes] login failed:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'login failed' });
+    }
   });
 
   return r;
