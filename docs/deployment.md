@@ -44,22 +44,68 @@ cd infra/bicep
 
 ## ② Hermes 镜像 (docker/hermes/)
 
-**职责**：构建用户实例运行的 Hermes Agent 容器镜像，推到 ACR。
+**职责**: 构建用户实例运行的 Hermes Agent 容器镜像, 推到 ACR, **并把存量用户 ACA roll 到新镜像**。
 
-**工具**：ACR Build (`az acr build`)，云端构建 amd64。
+**工具**: ACR Build (`az acr build`) 云端构建 amd64 + `scripts/rollout-hermes.sh` 批量 update 用户 ACA。
 
-**部署**：
+### Tag 规范 (硬约束)
+
+- 镜像 tag 用 **`vN` 单调递增** (v9 → v10 → v11), N 是十进制整数。**禁止跳号、禁止只推 `:latest` 不带 vN、禁止重用旧 vN**。
+- 每次 build 同时打两个 tag: 显式版本 `vN` (用于 rollout pin 到具体版本, 可回滚) 和 `latest` (gateway provisioning 给新用户用)。`build-and-push.sh` 已经做了双 tag。
+- **打 tag 前必须先查 ACR 当前最大 vN**, 下一个 = 最大 + 1:
+  ```bash
+  az acr repository show-tags -n acrlingxi${ENV} --repository hermes \
+    --orderby time_desc --top 10 -o tsv
+  ```
+  漏跳号不算 bug, 但**不允许重复或回退**。
+
+### 部署分四阶段
+
+#### 阶段 A: 决定 tag
+查现有 tag (上面那条命令) → 取最大 vN → 下一个 = N+1。
+
+#### 阶段 B: 云端 build + push
 ```bash
 cd docker/hermes
-ACR_NAME=<acr-name> IMAGE_TAG=v1.2.0 ./build-and-push.sh
+ACR_NAME=acrlingxi${ENV} IMAGE_TAG=v11 ./build-and-push.sh
+# 内部: az acr build --image hermes:v11 --image hermes:latest --platform linux/amd64 .
+# 同时打 v11 和 latest, 上下文几十 KB, 云端 amd64 构建, 单次 2-4 min。
 ```
 
-**特点**：
-- 不在本地 build (Mac arm64 与 Azure amd64 不兼容)
-- 上传 build context (几十 KB) 而非镜像 (~1GB)
-- 镜像 tag 是声明式版本号，gateway 通过 env `HERMES_IMAGE_TAG` 引用
+#### 阶段 C: 验证镜像 (这个灵活安排，不强制)
+push v11 改了 Dockerfile 哪几行, 验证就照那几行的预期落点去戳。没有通用清单。
 
-**何时改**：Hermes 源码 / Dockerfile / 系统依赖变更。
+大致思路: 看一下我们这次改了一些什么东西。寻找一些可验证的点, 比如新增了一个文件。那么就可以去镜像里面看一下这个文件是不是存在。总之，灵活安排。
+
+执行壳子 (改 vN, 检查内容随每次 push 变):
+```bash
+az acr login -n acrlingxi${ENV}
+docker pull acrlingxi${ENV}.azurecr.io/hermes:v11
+docker run --rm acrlingxi${ENV}.azurecr.io/hermes:v11 bash -c '
+  # ★ 这一段按这次 push 的 diff 现写, 每次都不一样
+'
+```
+Mac arm64 拉 amd64 会走 QEMU 模拟, 慢但够用。**任一项不通过 → 回到改代码, 不要继续 rollout**。
+
+> **历史踩坑 (2026-06-16)**: 推过一版 `hermes:latest` (那次还违反 Tag 规范, 没打 vN), Dockerfile 里 `RUN cat > /etc/profile.d/lingxi.sh <<EOF` heredoc 在 ACR Build 上没生效, 产物是 0 字节空文件, login shell PATH 救不回来, AI agent 跑 `pnpm add -g` 一直警告 PATH 缺失。当时**跳过了阶段 C**, 直接信任 push 成功, 三个用户 ACA 都中招。这次改动的 diff 里 `RUN cat > .../lingxi.sh` 是新增 RUN, 按上面的思路本该专门 `wc -c /etc/profile.d/lingxi.sh` 验一下产物非空 — 这种**针对本次 diff 设计的检查**正是阶段 C 的意义。
+
+#### 阶段 D: 对存量用户 ACA rollout
+ACA revision 不可变, push 新镜像后**现有用户实例不会自动跟随**, 必须显式 update 触发新 revision。
+```bash
+ENV=dev ./scripts/rollout-hermes.sh v11
+# 默认并发 10, 每个 ACA 跑 az containerapp update --image .../hermes:v11
+# 失败不中断其他, 结尾给出 success/failed 汇总, 失败 ACA 列名字
+# 可加 DRY_RUN=1 先看目标列表, PARALLEL=20 调并发
+```
+
+**如果要回滚**: 再跑一遍, tag 换成上一版即可: `ENV=dev ./scripts/rollout-hermes.sh v10`。
+
+### 特点
+- 不在本地 build (Mac arm64 与 Azure amd64 不兼容, QEMU 模拟太慢)
+- 上传 build context (几十 KB) 而非镜像 (~1GB)
+- gateway 通过 App Service env `HERMES_IMAGE_TAG=hermes:latest` 给**新注册用户**自动用最新镜像; 存量用户必须走阶段 D 才会跟上
+
+**何时改**: Hermes 源码 / Dockerfile / 系统依赖变更。
 
 ---
 
@@ -73,7 +119,7 @@ ACR_NAME=<acr-name> IMAGE_TAG=v1.2.0 ./build-and-push.sh
 
 **工具**:`scripts/build-deploy.sh` 打包 → `az webapp deploy --type zip` (Kudu Zip Deploy) 推到 App Service。
 
-**构建策略**:`build-deploy.sh` 用 vite lib mode 把 gateway TS + `@lingxi/*` workspace 包一起打包成单文件 `index.mjs`, 产出目录只含 `package.json` + `package-lock.json`（精确版本, 无 workspace:* 协议）+ 静态资源。zip 上传后 App Service Oryx 在 Linux 环境下自动 `npm install`——保证 native 依赖与运行平台一致, 无跨平台问题。
+**构建策略**:`build-deploy.sh` 用 vite lib mode 把 gateway TS + `@lingxi/*` workspace 包一起打包成单文件 `index.mjs`, 然后从 pnpm-lock 抽精确版本生成扁平 `package.json` + `package-lock.json`(无 workspace:* 协议),**本地** `npm install --omit=dev` 把 node_modules 也打进 zip。bicep 设 `SCM_DO_BUILD_DURING_DEPLOYMENT=false` 让 Oryx 完全旁路, App Service 解压 zip 后直接用包内 node_modules 起 Node。运行时依赖 (express / drizzle-orm 等) 都是纯 JS, 没有 native binding, Mac arm64 装出来的 node_modules 在 Linux Node 22 下直接能跑。
 
 **部署分两阶段**: build (产物) 和 deploy (推到 Azure)。两者解耦——build 是确定性的纯本地动作, 可以反复跑、本地 smoke test、对比产物; deploy 是有副作用的 Azure 操作, 需要明确意图触发。
 
@@ -90,8 +136,8 @@ ACR_NAME=<acr-name> IMAGE_TAG=v1.2.0 ./build-and-push.sh
 #        index.mjs / index.mjs.map     ← gateway 单文件 (~52KB)
 #        web-dist/                     ← 前端静态资源
 #        package.json                  ← 从 pnpm-lock 取精确版本, 无 workspace:* 协议, 无 devDeps
-#        package-lock.json             ← 供云端 Oryx npm install 用
-#   (不在本地装 node_modules — 云端 Oryx 自动 install, 保证 Linux 兼容)
+#        package-lock.json             ← 锁定运行时依赖版本
+#   4. cd app-service-deploy && npm install --omit=dev (产扁平真目录 node_modules)
 ```
 
 可选本地 smoke test (用真 env, 真起来):
@@ -111,7 +157,7 @@ az webapp deploy \
 curl https://app-lingxi-${ENV}-gateway.azurewebsites.net/healthz
 ```
 
-**App Service 设置**:Linux Node 22, Always On, WebSocket on, HTTPS only, `SCM_DO_BUILD_DURING_DEPLOYMENT=true` (云端 Oryx 自动 npm install)。全套 env 由 Bicep 声明 (敏感值走 Key Vault reference)。
+**App Service 设置**:Linux Node 22, Always On, WebSocket on, HTTPS only, `SCM_DO_BUILD_DURING_DEPLOYMENT=false` (Oryx 旁路, 直接用 zip 内自带的 node_modules)。全套 env 由 Bicep 声明 (敏感值走 Key Vault reference)。
 
 **何时改**:日常业务代码变更。
 
@@ -185,9 +231,9 @@ flowchart TB
 
     subgraph External["🟡 Azure 外的依赖"]
         direction LR
-        SUPA["🗄️ Supabase Postgres<br/>(Drizzle ORM 直连)<br/><i>users / threads / messages / agent_loops</i>"]
+        SUPA["🗄️ PostgreSQL<br/>(Supabase Cloud 托管, Drizzle 直连)<br/><i>users / threads / messages / agent_loops</i>"]
         GOOG["🔑 Google OAuth<br/><i>登录身份提供方</i>"]
-        DASH["🤖 DashScope<br/><i>阿里百炼 qwen-plus</i>"]
+        DASH["🤖 DashScope<br/><i>阿里百炼 (qwen3-coder-plus 等)</i>"]
     end
 
     APP -.Drizzle 直连.-> SUPA
@@ -220,7 +266,7 @@ flowchart TB
 | **Storage Account · Premium FileStorage (NFS)** | `stnfslingxidev` | 专门给 Hermes home 用。`kind=FileStorage` + `Premium_LRS`, 禁 HTTPS-only / 禁 account key, 鉴权完全靠 VNet ACL | 否 (共享, 内部一个 share + subPath 分用户) |
 | **VNet + subnet** | `vnet-lingxi-dev` / `cae-subnet` (`10.20.0.0/23`) | CAE 专用子网, delegate 给 `Microsoft.App/environments`, Service Endpoint 给 `Microsoft.Storage`。NFS account 的 networkAcls 只放行这个子网。**创建时绑定不可改** | 否 (共享) |
 | **Container Apps Environment** | `cae-lingxi-dev` | 每用户 ACA 的运行环境, `infrastructureSubnetId` 绑上面那个子网, 接 Log Analytics | 否 (共享, 内部按用户分 ACA) |
-| **Key Vault** | `kv-lingxi-dev` | secret: session / gateway / database-url / google-id / google-secret / hermes-api-key / dashscope-api-key 等。RBAC 模式, 7 天 soft delete | 否 (共享) |
+| **Key Vault** | `kv-lingxi-dev` | secret: session / gateway / database-url / google-id / google-secret / hermes-api-key + 邮件三件套。RBAC 模式, 7 天 soft delete | 否 (共享) |
 | **App Service Plan** | `asp-lingxi-dev` | Linux B1, 跑 App Service 的计算资源 | 否 (共享) |
 | **App Service** | `app-lingxi-dev-gateway` | Gateway + Web 同进程跑这里, system identity 持有创资源所需的全部 role | 否 (单实例) |
 | **Role Assignments** (8) | — | 给 App Service identity 授权: ① KV Secrets User; ② Storage Account Contributor × 2 (云盘 account + NFS account 各一份, 控制面建 share); ③ **Storage Blob Data Owner (数据面签 User Delegation Key, 云盘必需)**; ④ CAE Contributor; ⑤ RG Contributor (建每用户 ACA); ⑥ ACR Pull。另有条件部署的 KV Secrets Officer 授给部署者本人 | 否 |
@@ -259,9 +305,9 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 
 | 资源 | 角色 | 凭据存放 |
 |---|---|---|
-| **Supabase Postgres** | Drizzle ORM 直连, 存 users / threads / messages / agent_loops / container_mapping / wechat_binding 等业务数据 | KV: `database-url` |
+| **PostgreSQL** | Drizzle ORM 直连 (无 supabase-js client), 存 users / threads / messages / agent_loops / container_mapping / wechat_binding 等业务数据。当前 prod 跑在 Supabase Cloud, 长期可换 Azure DB for PG (改 `DATABASE_URL` 即可) | KV: `database-url` |
 | **Google OAuth** | 登录身份提供方, 唯一启用的 OAuth provider | KV: `google-client-id` + `google-client-secret` |
-| **DashScope (阿里百炼)** | LLM provider, hermes 容器内通过 OpenAI 兼容端点调 qwen-plus | KV: `dashscope-api-key`, 通过 ACA env 注入 |
+| **DashScope (阿里百炼)** | LLM provider, hermes 容器内通过 OpenAI 兼容端点调用 | KV: `hermes-api-key` (一身二用: gateway↔hermes token + LLM provider key) |
 
 ### 资源管理速查
 

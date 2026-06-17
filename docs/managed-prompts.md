@@ -133,7 +133,7 @@ apps/gateway/prompts/
 |---|---|---|
 | 主载体用 cached 类机制 | ✅ SOUL.md 走 cached; system-prompt.md 走 ephemeral 但同样 cache 友好 | 2026-06-04 |
 | 不用 prefill_messages 做主方案 | ✅ 那是 few-shot 用的 | 2026-06-04 |
-| Prompt 内容存 git, 不存 supabase | ✅ | 2026-06-04 |
+| Prompt 内容存 git, 不存 DB | ✅ | 2026-06-04 |
 | Manifest push (inline env) vs Pull (HTTP) | ✅ Pull (作为整个 runtime-config pull 的一部分) | 2026-06-05 |
 | 多 .md 文件分层管理 | ⚠️ hermes 原生不支持 append-all; 当前接受单 SOUL.md + 单 system-prompt.md | 2026-06-05 修正 |
 | `LAIFU_USER_TOKEN` 鉴权 content endpoint | ✅ | 2026-06-04 |

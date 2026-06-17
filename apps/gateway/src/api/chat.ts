@@ -11,8 +11,36 @@ import {
   HARD_DEADLINE_MS,
 } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
+import { classifyMessage, runIntercept, type SlashAction } from '../lib/slash-filter.js';
 
 const SSE_HEARTBEAT_MS = 10_000; // gateway→web 心跳间隔（独立于 ACA→gateway 的 2 分钟心跳）
+
+/**
+ * 网关拦截到的 slash 命令直接给"inline 回复",**不入库、不计费、不调 Hermes**。
+ *
+ * 前端拿到 `{ kind: 'inline', reply }` 后把当前 pending 气泡替换成 reply 文本即可。
+ * 用户原文也是前端临时显示的(已在 onSend 里 push 进 msgs 但不会持久化) —
+ * 刷新页面整段对话即消失,符合 "slash 命令是 transient" 的语义。
+ */
+const replyInterceptedSlash = async (
+  res: Response,
+  ctx: {
+    userId: string;
+    threadId: string;
+    action: Extract<SlashAction, { kind: 'intercept' }>;
+  },
+): Promise<Response> => {
+  const reply = await runIntercept(ctx.action, { userId: ctx.userId, threadId: ctx.threadId });
+  log.info({
+    event: 'chat.slash.intercepted',
+    user_id: ctx.userId,
+    thread_id: ctx.threadId,
+    cmd: ctx.action.cmd,
+    log_tag: ctx.action.logTag,
+  });
+  const body: WebChatResponse = { kind: 'inline', reply };
+  return res.json(body);
+};
 
 export const buildChatRouter = (
   sessionMw: RequestHandler,
@@ -29,6 +57,15 @@ export const buildChatRouter = (
     // 1. 验证 thread 属于该用户
     const thread = await dao.threads.getByIdAndUser(thread_id, userId);
     if (!thread) return res.status(404).json({ error: 'thread not found' });
+
+    // 1.5 Hermes slash 命令拦截 (详见 lib/slash-filter.ts)
+    //   - 拒绝类(/new /reset /model …):网关给静态文案,不调容器,不计费
+    //   - 网关自答(/help /version /usage /status):网关查 DB 给确定回复
+    //   - 透传(其余 /<word>):落入下方原流程喂给 Hermes
+    const slash = classifyMessage(message);
+    if (slash.kind === 'intercept') {
+      return await replyInterceptedSlash(res, { userId, threadId: thread_id, action: slash });
+    }
 
     // 2. 取该用户的 container url
     const mapping = dao.cache.get(userId);
@@ -104,7 +141,7 @@ export const buildChatRouter = (
       return res.status(502).json({ error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
     }
 
-    const body: WebChatResponse = { user_msg_id: userMsgId, loop_id: loopId };
+    const body: WebChatResponse = { kind: 'dispatched', user_msg_id: userMsgId, loop_id: loopId };
     res.json(body);
   });
 

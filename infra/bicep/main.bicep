@@ -405,14 +405,12 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
     HERMES_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=hermes-api-key)'
-    ANTHROPIC_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=anthropic-api-key)'
-    DASHSCOPE_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=dashscope-api-key)'
 
-    // 邮件能力 (子项 B)。prod 暂留 fake;
-    // MVP 就绪后(laifu.uncagedai.org 子域挂 CF Email Routing + Resend 验子域)把 EMAIL_PROVIDER 改 'resend'
-    // + EMAIL_DOMAIN 改 'laifu.uncagedai.org' + 填 resend-api-key & inbound-webhook-secret 两个 KV secret。
-    EMAIL_PROVIDER: 'fake'
-    EMAIL_DOMAIN: 'mail.localhost'
+    // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
+    // 子域 laifu.uncagedai.org 已在 CF / Resend 验过 DKIM+SPF+Return-Path。
+    // RESEND_API_KEY 真值在 KV(下方 reference);改 key 后需 `az webapp config appsettings set KV_REFRESH_TRIGGER=...` 触发 re-resolve。
+    EMAIL_PROVIDER: 'resend'
+    EMAIL_DOMAIN: 'laifu.uncagedai.org'
     EMAIL_FROM_DEFAULT_NAME: '灵犀助理'
     POSTMARK_INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-inbound-webhook-secret)'
     POSTMARK_SERVER_TOKEN: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-server-token)'

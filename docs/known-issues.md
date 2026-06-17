@@ -102,20 +102,20 @@ gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通
 
 ### #7 `ContainerMappingCache` 是进程内 Map, 没有 TTL / 失效机制
 
-- **现象**: 在 supabase 里手动清掉 `container_mapping` 行 (例如 dev 环境清理孤儿数据), gateway 仍然认为容器存在 — 下游 `/api/entitlements/cloud/enable` 等接口拿陈旧的 `container_name` 去 ACA 找不到, 返回 500 `ResourceNotFound`。
+- **现象**: 在 PG 里手动清掉 `container_mapping` 行 (例如 dev 环境清理孤儿数据), gateway 仍然认为容器存在 — 下游 `/api/entitlements/cloud/enable` 等接口拿陈旧的 `container_name` 去 ACA 找不到, 返回 500 `ResourceNotFound`。
 - **原因**: `apps/gateway/src/db/cache.ts:ContainerMappingCache` 启动时 `loadAll()` 把整张表读进内存 Map, 之后只在 `purchase` / `provisioning` 路径主动 `set()`. 没有任何机制把外部数据库改动同步回缓存。
 - **应对** (运维侧):
   - dev 环境清完 DB, **重启 App Service** (`az webapp stop && az webapp start`, 注意 `restart` 不一定真重启 worker) 让 gateway 重读
   - 生产应避免手动改 DB; 用 admin 接口去删
-- **何时根治**: 加监听 (Supabase realtime) 或定时 reload 才能彻底; 目前用户量小, 不值当。
+- **何时根治**: 加 LISTEN/NOTIFY 监听或定时 reload 才能彻底; 目前用户量小, 不值当。
 
 ### #9 App Service Key Vault reference cache 启动失败后不会自动重 resolve
 
-- **现象**: 新 KV 刚创建时 secret 还没灌, 但 App Service 已经先部署 — gateway 启动时所有 KV reference 状态 `SecretNotFound`, node 进程 exit 1 (`Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` 这类错), App Service stuck 在 startup failure 循环。后来灌好 secret + `az webapp restart` 仍**不会**触发重 resolve, 状态依然 `SecretNotFound`。
+- **现象**: 新 KV 刚创建时 secret 还没灌, 但 App Service 已经先部署 — gateway 启动时所有 KV reference 状态 `SecretNotFound`, node 进程 exit 1 (`error: connect ECONNREFUSED` 之类 PG 连不上的错), App Service stuck 在 startup failure 循环。后来灌好 secret + `az webapp restart` 仍**不会**触发重 resolve, 状态依然 `SecretNotFound`。
 - **原因**: App Service 那层有自己的 KV reference cache, restart 只是重启 worker, 不刷 cache。Cache 只在 **app settings 实际变更**时刷新, 普通 restart 不触发。
 - **正确顺序 (新环境首次部署)**:
   1. `./deploy.sh dev` 建好 KV + role assignment
-  2. **回灌 8 个 secret** (灌到 KV)
+  2. **回灌 9 个 secret** (灌到 KV; 真实清单见 [deployment-azure-first-run.md](./deployment-azure-first-run.md) §"下次部署 prod 环境")
   3. 再 `az webapp deploy --src-path deploy.zip` 部署代码
 - **已发生的灾难恢复手势**:
   ```bash
@@ -202,7 +202,7 @@ az acr repository delete -n acrlingxidev --image hermes:v3 --yes
 改了 `apps/gateway/src/provisioning/azure.ts` 里给 ACA 注入的 env / image / secret 后, **存量用户不会自动跟着切**, 只有新注册用户用新模板。`ContainerMappingCache` 也是进程内 Map 无 TTL (CLAUDE.md 提到)。
 
 **何时做**: 每次切 LLM provider / 升级 hermes 镜像 / 加新 env。
-**怎么做**: 遍历 supabase `container_mapping` 表 → 对每个 ACA `az containerapp update --image ... --replace-env-vars ...`。当前用户少 (1 个) 手动改, 多了写脚本。
+**怎么做**: 遍历 PG `container_mapping` 表 → 对每个 ACA `az containerapp update --image ... --replace-env-vars ...`。镜像 rollout 已封装 `scripts/rollout-hermes.sh`, env 变更目前手动跑 `az containerapp update`, 多了写脚本。
 
 ### M3 NFS share quota — 按需扩容
 
@@ -308,7 +308,7 @@ SQLite 在打开数据库时就会用 `fcntl(F_SETLK)` 尝试拿 reserved/exclus
 |------|----------|------|---------|------|
 | A. `state.db` 走容器本地盘 + 定期导出回 Azure Files | $0 | 小 (改 entrypoint + server/) | ⚠️ **只解 hermes 一家**, pip/npm/playwright/用户项目仍踩雷 | 早期文档里以为是首选, 现已降级 |
 | **B. Azure Files 切到 Premium FileStorage + NFS 4.1 协议** | **~$16/月/用户** (实际部署 Provisioned v1, 100 GiB share × $0.16; 早期文档错把 v2 单价 $3.2 当成 v1, 已校正; v2 切换列入 [nfs.md §十](./nfs.md#十-未来优化-v1--v2-切换-todo-高优先级) 高优先 TODO) | 当前无存量用户场景下**小** (destroy-recreate dev/prod, 见 [nfs.md](./nfs.md)) | ✅ **全面根治**, 救活所有 SQLite 用户 | 已选定。VNet 走 Service Endpoint 即可, 不必上 Private Endpoint, 无 €2/天费用 |
-| C. gateway 把消息历史改写到 Supabase 当权威源 | $0 (走现有 Supabase) | 大 (动 gateway + 数据模型 + 重做 prompt 组装) | ⚠️ **只解 hermes 一家**, pip/npm/playwright 仍踩雷 | 解决的是 hermes 这一家的 db 问题, 不解决 SMB 整体不能 host sqlite 的根本矛盾 |
+| C. gateway 把消息历史改写到 PG 当权威源 | $0 (走现有 PG) | 大 (动 gateway + 数据模型 + 重做 prompt 组装) | ⚠️ **只解 hermes 一家**, pip/npm/playwright 仍踩雷 | 解决的是 hermes 这一家的 db 问题, 不解决 SMB 整体不能 host sqlite 的根本矛盾 |
 | D. 只在 `server/state-db.ts` 加 `mode=ro` 只读 + retry | $0 | 极小 | ❌ **已实证无效** | 写入会失败, 多轮 context 问题不解决; 而且 SMB 上连读路径也是先拿锁, 仍会 `database is locked` |
 
 不可行的方案 (已实证或权威排除):
@@ -318,7 +318,7 @@ SQLite 在打开数据库时就会用 `fcntl(F_SETLK)` 尝试拿 reserved/exclus
 - **CIFS mount 加 `nobrl` 关掉字节范围锁**：ACA/App Service 的 CIFS mount 选项由平台后端控制, **用户不能改**, 此路不通 (Microsoft 官方答复)
 - **`PRAGMA journal_mode=wal` / `locking_mode=EXCLUSIVE`**: 已在 `hermes-8a599ed4` 容器内 probe 实证, 在 SMB 路径上**单连接零竞争**都失败, 切 PRAGMA 这一步本身就报锁错
 - **任意 SQLite 客户端侧调参 (timeout、busy_handler、unix-dotfile VFS 等)**: 同上, 问题在"打开数据库时拿初始锁"这一步, 客户端怎么调都绕不开
-- **让 hermes 把 session 存到非 SQLite 后端 (Postgres/Supabase)**: 已查 hermes 源码 (`hermes_state.py`), `SessionDB` 直接 `sqlite3.connect()` 写死, 无 DSN/plugin 抽象。第三方 `elhenro/hermes-pg` 只替换 memory 不碰 session
+- **让 hermes 把 session 存到非 SQLite 后端 (PG)**: 已查 hermes 源码 (`hermes_state.py`), `SessionDB` 直接 `sqlite3.connect()` 写死, 无 DSN/plugin 抽象。第三方 `elhenro/hermes-pg` 只替换 memory 不碰 session
 
 #### 当前决策
 

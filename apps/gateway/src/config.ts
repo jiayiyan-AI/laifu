@@ -35,8 +35,8 @@ export const config = {
   },
 
   // 数据库直连 (Drizzle + node-postgres)。库切换全靠这里的值，不靠代码分支。见 docs/drizzle.md。
-  //   本地:   postgres://postgres:postgres@localhost:54422/postgres (直连 supabase CLI 的 PG 容器, 绕 Kong)
-  //   云 dev/prod: Supabase 真实库直连串 (direct :5432 / session pooler, 不用 transaction pooler :6543)
+  //   本地:   postgres://postgres:postgres@localhost:54422/postgres (./scripts/dev-db.sh start 起的 PG 容器)
+  //   云 dev/prod: 云上 Postgres 直连 (当前 Supabase Cloud, direct :5432 / session pooler, 不用 transaction pooler :6543)
   //   (长期可能迁 Azure DB for PostgreSQL, 届时只改这个 URL, 代码不动)
   db: {
     url: process.env['DATABASE_URL'] ?? '',

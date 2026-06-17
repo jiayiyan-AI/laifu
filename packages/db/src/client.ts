@@ -13,7 +13,7 @@ export type Db = NodePgDatabase<typeof schema>;
 export interface DbConfig {
   /** postgres://user:pwd@host:5432/db */
   url: string;
-  /** 云库强制 TLS (Supabase / Azure PG 都是); 本地 :54422 不需。SSL 走参数对象而非 URL ?sslmode= (pg URL ssl 有坑)。 */
+  /** 云库强制 TLS (Supabase Cloud / Azure PG 都是); 本地 :54422 不需。SSL 走参数对象而非 URL ?sslmode= (pg URL ssl 有坑)。 */
   ssl?: boolean;
   /** 连接池上限 (App Service B1 单进程 10~20 足够)。默认 10。 */
   poolMax?: number;

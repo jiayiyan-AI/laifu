@@ -1,9 +1,9 @@
 /**
  * Drizzle schema — 数据访问层的类型权威源。
  *
- * 对应 infra/supabase/migrations/0001~0008。迁移期 (见 docs/drizzle.md §六) schema 变更
- * 仍由 supabase migration 落库，本文件保持与之一致；收口后 schema.ts 成为唯一权威源、
- * 由 drizzle-kit 生成迁移。
+ * Schema.ts 是 DDL 的唯一权威源, 所有表/视图定义都在这里; drizzle-kit 据此 generate
+ * SQL 迁移文件 (`packages/db/drizzle/*.sql`)。本地用 `pnpm db:push` 增量同步, 云上用
+ * `db:generate` + `db:migrate` 两步走。详见 packages/db/README.md。
  *
  * 约定: JS 属性名用 snake_case，与 @lingxi/shared 的 DB row 类型 + 现有 DAO 行形状一致，
  * 避免迁移期大面积改 key。列名 = 属性名，故第一个参数省略也可，这里显式写出便于对照 SQL。

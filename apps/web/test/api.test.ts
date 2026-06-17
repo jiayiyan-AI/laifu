@@ -43,12 +43,24 @@ describe('api client', () => {
     expect(res[0]!.id).toBe('thr_1');
   });
 
-  it('sendChat returns user_msg_id and loop_id', async () => {
+  it('sendChat returns dispatched payload with user_msg_id and loop_id', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ user_msg_id: 'msg_abc', loop_id: 'loop_xyz' })),
+      new Response(JSON.stringify({ kind: 'dispatched', user_msg_id: 'msg_abc', loop_id: 'loop_xyz' })),
     );
     const res = await api.sendChat({ thread_id: 'thr_1', message: 'hi' });
+    expect(res.kind).toBe('dispatched');
+    if (res.kind !== 'dispatched') throw new Error('expected dispatched');
     expect(res.user_msg_id).toBe('msg_abc');
     expect(res.loop_id).toBe('loop_xyz');
+  });
+
+  it('sendChat returns inline reply for intercepted slash commands', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ kind: 'inline', reply: '请使用新对话按钮' })),
+    );
+    const res = await api.sendChat({ thread_id: 'thr_1', message: '/new' });
+    expect(res.kind).toBe('inline');
+    if (res.kind !== 'inline') throw new Error('expected inline');
+    expect(res.reply).toBe('请使用新对话按钮');
   });
 });
