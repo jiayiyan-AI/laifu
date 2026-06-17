@@ -74,6 +74,8 @@ export const makeUsersDao = (db: Db): UsersDao => {
     async createPasswordUser({ email, nickname, hash }) {
       const rows = await db.insert(u).values({
         provider: 'password',
+        // external_id 是小写化的查找键(复用 provider+external_id 唯一索引);
+        // email 列保留用户输入的原始大小写用于展示。全局唯一性由 lower(email) 索引保证。
         external_id: email.toLowerCase(),
         email,
         nickname,
