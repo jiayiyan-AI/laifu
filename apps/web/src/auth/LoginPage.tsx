@@ -39,7 +39,8 @@ export const LoginPage = () => {
       }
       await actions.refresh();
       nav('/desktop', { replace: true });
-    } catch {
+    } catch (e) {
+      console.error('[LoginPage] auth failed:', e);
       setError(mode === 'login' ? '邮箱或密码错误' : '注册失败,请检查邮箱是否已注册');
     } finally {
       setBusy(false);
@@ -88,16 +89,17 @@ export const LoginPage = () => {
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {mode === 'register' && (
             <input
-              placeholder="你的称呼" value={nickname}
+              placeholder="你的称呼" value={nickname} autoComplete="nickname"
               onChange={(e) => setNickname(e.target.value)} style={inputStyle}
             />
           )}
           <input
-            placeholder="邮箱" type="email" value={email}
+            placeholder="邮箱" type="email" value={email} autoComplete="email"
             onChange={(e) => setEmail(e.target.value)} style={inputStyle}
           />
           <input
             placeholder="密码" type="password" value={password}
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             onChange={(e) => setPassword(e.target.value)} style={inputStyle}
           />
           {error && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{error}</div>}
