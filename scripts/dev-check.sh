@@ -24,7 +24,7 @@ fi
 
 echo ""
 echo "[端口空闲]"
-for p in 8080 9000 3000 54422; do
+for p in 9001 9000 3000 54422; do
   pid=$(lsof -ti :$p 2>/dev/null || true)
   if [ -z "$pid" ]; then
     case $p in

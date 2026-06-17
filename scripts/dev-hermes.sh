@@ -72,7 +72,7 @@ trap cleanup EXIT INT TERM
 # 把日志直接打到当前 stdout (concurrently 会接收并加前缀)
 exec docker run --rm \
   --name "$CONTAINER_NAME" \
-  -p 8080:8080 \
+  -p 9001:8080 \
   -v "$HOME_VOL":/home/hermes \
   --add-host=host.docker.internal:host-gateway \
   -e GATEWAY_BASE_URL=http://host.docker.internal:9000 \
