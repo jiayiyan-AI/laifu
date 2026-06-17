@@ -42,6 +42,20 @@ export GATEWAY_BASE_URL
 # 任何子步骤失败都不致命, bootstrap 自己吞错继续往下走, 让 hermes server 仍能起来。
 bun "$SCRIPTS/bootstrap.ts" || echo "[entrypoint] bootstrap errored, continuing to start hermes anyway"
 
+# ============ Step 2.5: token 回灌 env ============
+# dev 经 dev-hermes.sh 启动时不传 LAIFU_USER_TOKEN env, 令牌只落文件
+# (~/.hermes/.laifu_user_token, 由 provisioning/local + refresh-token 维护);
+# prod 由 azure.ts 以容器 env/secret 注入。而 email/cloud 等技能 CLI 只认
+# LAIFU_USER_TOKEN env (os.environ, 无文件兜底) → dev 下 agent 调用必报
+# "LAIFU_USER_TOKEN environment variable not set"。
+# env 为空就从文件回灌一份, 让 agent 子进程 (及其 bash -l 子命令) 能认证;
+# prod env 非空则跳过。放在 bootstrap 之后 → 拿到 refresh-token 续签后的最新值。
+# 令牌每次变化都伴随容器重启 (entitlement 改→重签→restart), 故启动快照不会 stale。
+if [ -z "${LAIFU_USER_TOKEN:-}" ] && [ -f "$HOME_DIR/.hermes/.laifu_user_token" ]; then
+  export LAIFU_USER_TOKEN="$(cat "$HOME_DIR/.hermes/.laifu_user_token")"
+  echo "[entrypoint] loaded LAIFU_USER_TOKEN from token file (env was empty)"
+fi
+
 # source runtime env (provider/model) 供 server.ts 读取
 if [ -f "$HOME_DIR/.hermes/.runtime_env" ]; then
   set -a
