@@ -12,6 +12,8 @@ export const createMockDao = () => ({
     getById: vi.fn(async () => null),
     getTokenVersion: vi.fn(async () => 0),
     upsertByProvider: vi.fn(async () => null),
+    createPasswordUser: vi.fn(async () => ({ id: 'u_new' })),
+    getPasswordUserByEmail: vi.fn(async () => null),
   },
   containerMapping: {
     insert: vi.fn(async () => {}),

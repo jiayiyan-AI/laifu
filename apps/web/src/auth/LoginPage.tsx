@@ -1,20 +1,71 @@
+import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
 import { authAtom } from '../states/auth.atom.js';
+import * as api from '../lib/api.js';
+
+type Mode = 'login' | 'register';
 
 /**
- * 登录页:目前只接 Google OAuth。
- * 加新 provider 在这里加一个 <a href="/api/auth/<provider>/start"> 按钮即可。
+ * 登录页:账号密码为主(登录/注册 tab),Google OAuth 作为下方次要入口。
+ * 将来微信登录接通后,排在 Google 下面形成次要入口栈。
  */
 export const LoginPage = () => {
-  const [state] = authAtom.use();
+  const [state, actions] = authAtom.use();
   const nav = useNavigate();
+
+  const [mode, setMode] = useState<Mode>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   if (state.status === 'authenticated') {
     nav('/desktop', { replace: true });
     return null;
   }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      if (mode === 'login') {
+        await api.login({ email, password });
+      } else {
+        await api.register({ email, password, nickname });
+      }
+      await actions.refresh();
+      nav('/desktop', { replace: true });
+    } catch (e) {
+      console.error('[LoginPage] auth failed:', e);
+      setError(mode === 'login' ? '邮箱或密码错误' : '注册失败,请检查邮箱是否已注册');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const segBtn = (m: Mode, label: string) => (
+    <button
+      type="button"
+      onClick={() => { setMode(m); setError(''); }}
+      style={{
+        flex: 1, padding: '7px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+        border: 'none', borderRadius: 8,
+        background: mode === m ? '#fff' : 'transparent',
+        color: mode === m ? '#1b1c20' : 'var(--dim, #6b7280)',
+        boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+      }}
+    >{label}</button>
+  );
+
+  const inputStyle = {
+    width: '100%', padding: '10px 12px', fontSize: 14,
+    border: '1px solid var(--border)', borderRadius: 10, outline: 'none',
+    boxSizing: 'border-box' as const,
+  };
 
   return (
     <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
@@ -28,6 +79,44 @@ export const LoginPage = () => {
             <div style={{ fontSize: 17, fontWeight: 650 }}>灵犀</div>
             <div className="dim" style={{ fontSize: 12 }}>数字员工平台</div>
           </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 4, padding: 4, background: 'rgba(0,0,0,0.04)', borderRadius: 10, marginBottom: 16 }}>
+          {segBtn('login', '账号登录')}
+          {segBtn('register', '注册')}
+        </div>
+
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {mode === 'register' && (
+            <input
+              placeholder="你的称呼" value={nickname} autoComplete="nickname"
+              onChange={(e) => setNickname(e.target.value)} style={inputStyle}
+            />
+          )}
+          <input
+            placeholder="邮箱" type="email" value={email} autoComplete="email"
+            onChange={(e) => setEmail(e.target.value)} style={inputStyle}
+          />
+          <input
+            placeholder="密码" type="password" value={password}
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            onChange={(e) => setPassword(e.target.value)} style={inputStyle}
+          />
+          {error && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{error}</div>}
+          <button
+            type="submit" disabled={busy}
+            style={{
+              width: '100%', padding: 11, marginTop: 8, fontSize: 14, fontWeight: 600,
+              border: 'none', borderRadius: 10, cursor: busy ? 'default' : 'pointer',
+              background: '#7c3aed', color: '#fff', opacity: busy ? 0.6 : 1,
+            }}
+          >{mode === 'login' ? '登录' : '注册并进入'}</button>
+        </form>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0' }}>
+          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+          <span className="dim" style={{ fontSize: 11 }}>或</span>
+          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
         </div>
 
         <a

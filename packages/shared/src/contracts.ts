@@ -89,6 +89,19 @@ export interface AuthMeResponse {
   avatar_url: string | null;
 }
 
+/** 账号密码登录请求 */
+export interface PasswordLoginRequest {
+  email: string;
+  password: string;
+}
+
+/** 账号密码注册请求 */
+export interface PasswordRegisterRequest {
+  email: string;
+  password: string;
+  nickname: string;
+}
+
 // === Threads 契约 ===
 
 export interface ThreadCreateRequest {

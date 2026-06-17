@@ -23,6 +23,7 @@ export const users = pgTable('users', {
   nickname: text('nickname'),
   avatar_url: text('avatar_url'),
   token_version: integer('token_version').notNull().default(0),
+  password_hash: text('password_hash'),   // 仅 provider='password' 用户有值;OAuth 用户为 null
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   uniqueIndex('users_provider_external_id_unique').on(t.provider, t.external_id),

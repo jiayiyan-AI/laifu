@@ -5,7 +5,7 @@
  */
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import { requireSession } from './middleware.js';
-import type { AuthMeResponse } from '@lingxi/shared';
+import { toMeResponse } from './user-view.js';
 import { dao } from '../db/index.js';
 
 export interface SessionRoutesOpts {
@@ -13,15 +13,6 @@ export interface SessionRoutesOpts {
   cookieName: string;
   ttlHours: number;
 }
-
-const toMeResponse = (row: { id: string; provider: string; external_id: string; email: string | null; nickname: string | null; avatar_url: string | null }): AuthMeResponse => ({
-  user_id: row.id,
-  provider: row.provider,
-  external_id: row.external_id,
-  email: row.email,
-  nickname: row.nickname,
-  avatar_url: row.avatar_url,
-});
 
 export const buildSessionRoutes = (opts: SessionRoutesOpts): RouterType => {
   const r = Router();

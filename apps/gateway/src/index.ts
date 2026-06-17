@@ -37,6 +37,7 @@ import {
 import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
+import { buildPasswordRoutes } from './auth/password-routes.js';
 import { providers } from './auth/providers/index.js';
 import { buildWechatBindRouter } from './api/wechat-bind.js';
 import { PollManager } from './wechat-ilink/poll-manager.js';
@@ -121,6 +122,12 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
+      sessionSecret: config.session.secret,
+      cookieName: config.session.cookieName,
+      ttlHours: config.session.ttlHours,
+    }));
+    // 账号密码登录路由(主要登录方式)
+    app.use(buildPasswordRoutes({
       sessionSecret: config.session.secret,
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,

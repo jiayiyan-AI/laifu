@@ -18,6 +18,7 @@
     "@azure/storage-blob": "^12.20.0",
     "@lingxi/db": "workspace:*",
     "@lingxi/shared": "workspace:*",
+    "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "drizzle-orm": "^0.45.2",
     "express": "^4.19.0",
