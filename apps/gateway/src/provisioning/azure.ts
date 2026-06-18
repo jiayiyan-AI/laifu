@@ -1,8 +1,12 @@
 import { DefaultAzureCredential } from '@azure/identity';
-import { ContainerAppsAPIClient } from '@azure/arm-appcontainers';
+import { ContainerAppsAPIClient, type ContainerApp } from '@azure/arm-appcontainers';
 import { StorageManagementClient } from '@azure/arm-storage';
+import { createHash } from 'node:crypto';
 import { config } from '../config.js';
+import { dao } from '../db/index.js';
 import { signLaifuUserToken } from '../lib/gateway-token.js';
+import { type KvSecretName } from '../kv-secrets.js';
+import { containerNameFor, shareNameFor } from './naming.js';
 
 const credential = new DefaultAzureCredential();
 let _containerApps: ContainerAppsAPIClient | null = null;
@@ -22,9 +26,13 @@ const getStorage = (): StorageManagementClient => {
   return _storage;
 };
 
-// Container App 命名必须 ≤ 32 char, 所以 purchase 路由用 user_id 前 8 位 hex 而非完整 uuid;
-// 这里的下游函数必须 mirror 同样的命名算法。Source of truth: apps/gateway/src/api/purchase.ts shortHash。
-const appNameFor = (userId: string): string => `hermes-${userId.replace(/-/g, '').slice(0, 8)}`;
+/**
+ * 拼 ACA secrets[].keyVaultUrl 用的 KV secret 完整 URL。
+ * Azure 规范 kv.properties.vaultUri 末尾带 '/', 但容忍手工配置漏掉。
+ * 用 KvSecretName 而非 string 入参, 把 secret 名笔误挡在编译期。
+ */
+const kvSecretUrl = (name: KvSecretName): string =>
+  `${config.azure.hermesKvUri.replace(/\/$/, '')}/secrets/${name}`;
 
 /**
  * 拿 Storage Account 的访问 key,用于注册 env storage binding。
@@ -39,24 +47,6 @@ const getStorageKey = async (): Promise<string> => {
   const key = keys.keys?.[0]?.value;
   if (!key) throw new Error('no storage key returned');
   return key;
-};
-
-/**
- * 拿 ACR 的 admin 凭据。
- * (Phase 1.5 应改用 Container App 的 Managed Identity + AcrPull RBAC,去掉 admin user)
- */
-const getAcrCredentials = async (): Promise<{ username: string; password: string }> => {
-  const token = await credential.getToken('https://management.azure.com/.default');
-  const url = `https://management.azure.com/subscriptions/${config.azure.subscriptionId}/resourceGroups/${config.azure.resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${config.azure.acrName}/listCredentials?api-version=2023-07-01`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token!.token}` },
-  });
-  if (!resp.ok) throw new Error(`ACR listCredentials failed: ${resp.status}`);
-  const data = (await resp.json()) as { username: string; passwords: { value: string }[] };
-  const pwd = data.passwords[0]?.value;
-  if (!pwd) throw new Error('ACR credentials missing password');
-  return { username: data.username, password: pwd };
 };
 
 /**
@@ -117,126 +107,135 @@ const ensureSharedBinding = async (): Promise<void> => {
 };
 
 /**
- * 创建 Container App。一次到位:ingress + ACR 凭据 + LLM key secret + volume 挂载。
- * 返回 https://<fqdn>。
+ * 单一事实源 (dynamic-update-aca.md §四)。buildSpec 是唯一拼 ACA spec 的地方,
+ * create / reconcile / 算哈希三处共用 —— 加个 env / 调 resources 只改这一处, 无影子结构。
  *
- * 注意调用顺序:
- *   先 createFileShare(shareName)        — 幂等确保共享 share 存在
- *   再 createContainerApp({containerName, shareName})
- *     内部调 ensureSharedBinding() 注册共享 binding (幂等)
- *     然后 volumeMounts.subPath=shareName 让该容器只看到 share 内的 /shareName 子目录
- *
- * shareName 在这里不再是独立 share 的名字, 而是"该用户在共享 share 内的子目录名"
- * (例如 'user-8a599ed4')。subPath 不存在时 ACA 自动 mkdir, 不需要预创建。
+ * 镜像拉取走 ACA 绑的 user-assigned identity (AcrPull RBAC), 没有 admin password secret,
+ * 故不存在凭据 staleness; ACR 不再需要 gateway 走网络拉 listCredentials。
+ * 唯一易变字段 token 由调用方传入: apply 时传现签 token, 算哈希时传哨兵空值 (排除)。
  */
-export const createContainerApp = async (params: {
-  containerName: string;
-  shareName: string;
-}): Promise<string> => {
+export const buildSpec = (userId: string, token: string): ContainerApp => {
+  const subPath = shareNameFor(userId);
+  const HERMES_API_KEY: KvSecretName = 'hermes-api-key';
+  const GATEWAY_SECRET: KvSecretName = 'gateway-secret';
+  return {
+    location: config.azure.location,
+    managedEnvironmentId: `/subscriptions/${config.azure.subscriptionId}/resourceGroups/${config.azure.resourceGroup}/providers/Microsoft.App/managedEnvironments/${config.azure.containerAppsEnv}`,
+    identity: {
+      type: 'UserAssigned',
+      userAssignedIdentities: { [config.azure.hermesAcaIdentityResourceId]: {} },
+    },
+    configuration: {
+      ingress: { external: true, targetPort: 8080, allowInsecure: false, transport: 'auto' },
+      registries: [
+        // 走 hermes user-assigned identity + AcrPull RBAC 拉镜像 (bicep acrRoleAssignment 授权),
+        // 不用 admin password secret。identity = ACA 已绑的 user-assigned identity resourceId。
+        { server: config.azure.acrLoginServer, identity: config.azure.hermesAcaIdentityResourceId },
+      ],
+      // 整份 spec 同时供 beginCreateOrUpdate (PUT) 与 beginUpdateAndWait (PATCH)。
+      // hermes-api-key (LLM key) + gateway-secret (LAIFU_USER_TOKEN 签发密钥) 两个 KV reference secret,
+      // ACA 控制面凭 identity 自动从 KV 拉。
+      secrets: [
+        { name: HERMES_API_KEY, keyVaultUrl: kvSecretUrl(HERMES_API_KEY), identity: config.azure.hermesAcaIdentityResourceId },
+        { name: GATEWAY_SECRET, keyVaultUrl: kvSecretUrl(GATEWAY_SECRET), identity: config.azure.hermesAcaIdentityResourceId },
+      ],
+    },
+    template: {
+      // initContainers: 以 root 跑一遍 chown, 修正 ACA 自动创建的 subPath 子目录 owner。
+      // 原因: ACA 容器默认带 no_new_privs=true 禁 sudo, hermes image 又 USER hermes, 主容器没办法自己 chown。
+      //   ACA BaseContainer 没有 securityContext/runAsUser, 不能 override hermes image 的 USER。
+      //   故用 mcr.microsoft.com/cbl-mariner/busybox (默认 root, 公网可拉, ~2MB) 跑一行 chown。
+      //   ACA 保证 initContainers 全部 exit 0 后才启动主容器。
+      initContainers: [
+        {
+          name: 'init-chown',
+          image: 'mcr.microsoft.com/cbl-mariner/busybox:2.0',
+          resources: { cpu: 0.25, memory: '0.5Gi' },
+          command: ['/bin/sh', '-c'],
+          args: ['chown 1000:1000 /home/hermes && chmod 755 /home/hermes'],
+          volumeMounts: [{ volumeName: 'hermes-home', mountPath: '/home/hermes', subPath }],
+        },
+      ],
+      containers: [
+        {
+          name: 'hermes',
+          image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
+          resources: { cpu: 1, memory: '2Gi' },
+          // 创建时一次性快照的 env (其余动态配置走 /api/me/runtime-config pull):
+          //   HERMES_API_KEY: ACA secret (KV reference), 容器内做 LLM 鉴权
+          //   GATEWAY_BASE_URL: 容器 entrypoint 拉 runtime-config / entitlements / 续 token 的入口
+          //   LAIFU_USER_TOKEN: per-user 现签凭据, 算哈希时为哨兵空值 (排除), apply 时为真 token (reconcile 永不丢)。
+          //   GATEWAY_SECRET: gateway-secret (KV reference), 容器侧验签 LAIFU_USER_TOKEN 用;
+          env: [
+            { name: 'HERMES_API_KEY', secretRef: 'hermes-api-key' },
+            { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
+            { name: 'LAIFU_USER_TOKEN', value: token },
+            { name: 'GATEWAY_SECRET', secretRef: GATEWAY_SECRET },
+          ],
+          volumeMounts: [{ volumeName: 'hermes-home', mountPath: '/home/hermes', subPath }],
+        },
+      ],
+      volumes: [
+        { name: 'hermes-home', storageType: 'NfsAzureFile', storageName: SHARED_BINDING_NAME },
+      ],
+      scale: { minReplicas: 0, maxReplicas: 1 },
+    },
+  };
+};
+
+/**
+ * sorted-keys 递归序列化, 保证同一对象不同 key 顺序得到同一字符串 (哈希稳定, 否则重启即全员 reconcile)。
+ */
+const canonical = (v: unknown): string => {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`).join(',')}}`;
+};
+
+/**
+ * per-user policy 哈希: 用哨兵空 token 造一份 spec 再哈希 → 只反映 policy + per-user 派生字段 (subPath)。
+ * 同一进程内策略代码不变, 故 memo 进 Map, 热路径 O(1); 进程重启 (策略代码唯一可能变更的时机) 时
+ * Map 随之清空, 不留陈旧哈希。
+ *
+ * token 不进哈希 (真·易变, 随 token_version 轮转; 进哈希则一轮转就触发全员空 reconcile);
+ * 靠哨兵空值在哈希里退化成常量等价排除, 无需手写 exclude 列表。镜像拉取走 identity, 无 ACR 凭据需排除。
+ */
+const hashCache = new Map<string, string>();
+export const policyHashFor = (userId: string): string => {
+  let h = hashCache.get(userId);
+  if (h === undefined) {
+    h = createHash('sha256').update(canonical(buildSpec(userId, ''))).digest('hex');
+    hashCache.set(userId, h);
+  }
+  return h;
+};
+
+/** 现签该用户当前 token_version 的 LAIFU_USER_TOKEN (从 DB 读版本)。 */
+const signTokenFor = async (userId: string): Promise<string> => {
+  const version = (await dao.users.getTokenVersion(userId)) ?? 0;
+  return signLaifuUserToken({ userId, tokenVersion: version, secret: config.auth.gatewaySecret });
+};
+
+/** 组装该用户的完整 ACA spec (现签 token; 镜像拉取走 identity, 无需拉 ACR 凭据)。create / reconcile 共用。 */
+const buildContainerAppSpec = async (userId: string): Promise<ContainerApp> => {
+  const token = await signTokenFor(userId);
+  return buildSpec(userId, token);
+};
+
+/**
+ * 创建 Container App。一次到位:ingress + identity 拉镜像 + LLM key KV secret + volume 挂载。返回 https://<fqdn>。
+ * 内部调 ensureSharedBinding() 注册共享 binding (幂等), volumeMount.subPath 让该容器只看到自己的子目录。
+ * subPath 不存在时 ACA 自动 mkdir, 不需要预创建。
+ */
+export const createContainerApp = async (userId: string): Promise<string> => {
   await ensureSharedBinding();
-
-  const { username: acrUser, password: acrPwd } = await getAcrCredentials();
-  const envFqdn = `/subscriptions/${config.azure.subscriptionId}/resourceGroups/${config.azure.resourceGroup}/providers/Microsoft.App/managedEnvironments/${config.azure.containerAppsEnv}`;
-
-  // hermes-api-key 走 KV reference: ACA 绑 user-assigned identity, secrets[].keyVaultUrl
-  // 让 ACA 控制面自动从 KV 拉, 不再由 gateway 把明文写进 ACA secret。
-  // 三个 env 必须齐: identity resourceId / clientId / kvUri。dev local 模式
-  // 这些为空, 兜底走 inline secret (保留 hermesApiKey 那一支)。
-  const useKvRef = !!(
-    config.azure.hermesAcaIdentityResourceId &&
-    config.azure.hermesAcaIdentityClientId &&
-    config.azure.hermesKvUri
-  );
-  const hermesApiKeySecret = useKvRef
-    ? {
-        name: 'hermes-api-key',
-        // KV vaultUri 末尾带 '/'; 直接拼 secrets/<name> 即可
-        keyVaultUrl: `${config.azure.hermesKvUri.replace(/\/$/, '')}/secrets/hermes-api-key`,
-        identity: config.azure.hermesAcaIdentityResourceId,
-      }
-    : { name: 'hermes-api-key', value: config.azure.hermesApiKey };
-
+  const spec = await buildContainerAppSpec(userId);
   const poller = await getContainerApps().containerApps.beginCreateOrUpdate(
     config.azure.resourceGroup,
-    params.containerName,
-    {
-      location: config.azure.location,
-      managedEnvironmentId: envFqdn,
-      ...(useKvRef
-        ? {
-            identity: {
-              type: 'UserAssigned',
-              userAssignedIdentities: {
-                [config.azure.hermesAcaIdentityResourceId]: {},
-              },
-            },
-          }
-        : {}),
-      configuration: {
-        ingress: {
-          external: true,                    // Phase 1.2/1.3 用外部 ingress
-          targetPort: 8080,
-          allowInsecure: false,
-          transport: 'auto',
-        },
-        registries: [
-          { server: config.azure.acrLoginServer, username: acrUser, passwordSecretRef: 'acr-password' },
-        ],
-        secrets: [
-          { name: 'acr-password', value: acrPwd },
-          hermesApiKeySecret,
-        ],
-      },
-      template: {
-        // initContainers: 以 root 跑一遍 chown, 修正 ACA 自动创建的 subPath 子目录 owner。
-        // 原因: ACA 容器默认带 no_new_privs=true 禁 sudo, hermes image 又 USER hermes,
-        //   主容器没办法自己 chown。ACA BaseContainer 没有 securityContext/runAsUser 字段,
-        //   不能在 init container 里 override hermes image 的 USER。
-        //   所以用 mcr.microsoft.com/cbl-mariner/busybox (微软 Mariner busybox, 默认 root,
-        //   公网可拉, 镜像 ~2MB) 跑一行 chown。
-        //   ACA 保证 initContainers 全部 exit 0 后才启动主容器。
-        initContainers: [
-          {
-            name: 'init-chown',
-            image: 'mcr.microsoft.com/cbl-mariner/busybox:2.0',
-            resources: { cpu: 0.25, memory: '0.5Gi' },
-            command: ['/bin/sh', '-c'],
-            args: ['chown 1000:1000 /home/hermes && chmod 755 /home/hermes'],
-            volumeMounts: [{
-              volumeName: 'hermes-home',
-              mountPath: '/home/hermes',
-              subPath: params.shareName,
-            }],
-          },
-        ],
-        containers: [
-          {
-            name: 'hermes',
-            image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
-            resources: { cpu: 1, memory: '2Gi' },
-            env: [
-              // 创建时一次性快照的 env 只留 2 项 (其余动态配置走 /api/me/runtime-config pull):
-              //   - HERMES_API_KEY: ACA secret (KV reference 或 inline value), 容器内做 LLM 鉴权
-              //   - GATEWAY_BASE_URL: 容器 entrypoint 拉 runtime-config / entitlements / 续 token 的入口
-              // LAIFU_USER_TOKEN 由 signTokenAndInjectAzure 在容器创建后单独写入。
-              { name: 'HERMES_API_KEY', secretRef: 'hermes-api-key' },
-              { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
-            ],
-            // subPath: 该用户在共享 share 内的子目录, 容器看不到兄弟用户的目录。
-            //   ACA 挂载时若子目录不存在会自动创建, 不需要预 mkdir。
-            volumeMounts: [{
-              volumeName: 'hermes-home',
-              mountPath: '/home/hermes',
-              subPath: params.shareName,
-            }],
-          },
-        ],
-        volumes: [
-          { name: 'hermes-home', storageType: 'NfsAzureFile', storageName: SHARED_BINDING_NAME },
-        ],
-        scale: { minReplicas: 0, maxReplicas: 1 },
-      },
-    },
+    containerNameFor(userId),
+    spec,
     { updateIntervalInMs: 5000 },
   );
   const result = await poller.pollUntilDone();
@@ -260,49 +259,17 @@ export const getContainerAppState = async (
 };
 
 /**
- * 给指定用户的 Container App 注入新的 LAIFU_USER_TOKEN。
- * 调用方应已经 bump 过 token_version；本函数只负责 sign + write。
+ * 把该用户的 ACA 拉齐到当前声明的 spec (beginUpdateAndWait, PATCH 平滑切 revision)。
+ * buildContainerAppSpec 整体替换 template + configuration, 含现签 token, 故 token 永不丢失。
+ *
+ * 唯一的 update 原语, 两个触发源 (dynamic-update-aca.md §六/§八):
+ *   - policy 哈希 diff (镜像 / env / resources 改了) → checkAndReconcileACA / sweep 调。
+ *   - token_version bump (entitlements 改装) → entitlements 路由调; 注意 token 不进哈希,
+ *     故 bump 不会被哈希 diff 捕获, 必须由改装流程显式调一次。
  */
-export const signTokenAndInjectAzure = async (
-  userId: string,
-  tokenVersion: number,
-): Promise<void> => {
-  const token = signLaifuUserToken({
-    userId,
-    tokenVersion,
-    secret: config.auth.gatewaySecret,
-  });
-  const appName = appNameFor(userId);
-  const current = await getContainerApps().containerApps.get(
-    config.azure.resourceGroup, appName,
-  );
-  const containers = current.template?.containers ?? [];
-  if (containers.length === 0) {
-    throw new Error(`signTokenAndInjectAzure: no containers in ${appName}`);
-  }
-  const env = (containers[0]!.env ?? []).filter((e: { name?: string }) => e.name !== 'LAIFU_USER_TOKEN');
-  env.push({ name: 'LAIFU_USER_TOKEN', value: token });
-  containers[0]!.env = env;
+export const reconcileContainerAppAzure = async (userId: string): Promise<void> => {
+  const spec = await buildContainerAppSpec(userId);
   await getContainerApps().containerApps.beginUpdateAndWait(
-    config.azure.resourceGroup, appName,
-    { location: current.location, template: { containers } } as any,
-  );
-};
-
-/**
- * 触发 Container App 重启 (ACA restartRevision)。
- * 拉新 env 起容器,entrypoint 会读 LAIFU_USER_TOKEN + 拉 entitlements + 软链 skill。
- */
-export const restartContainerAppAzure = async (userId: string): Promise<void> => {
-  const appName = appNameFor(userId);
-  const app = await getContainerApps().containerApps.get(
-    config.azure.resourceGroup, appName,
-  );
-  const latestRevisionName = app.latestRevisionName;
-  if (!latestRevisionName) {
-    throw new Error(`restartContainerAppAzure: no revision for ${appName}`);
-  }
-  await getContainerApps().containerAppsRevisions.restartRevision(
-    config.azure.resourceGroup, appName, latestRevisionName,
+    config.azure.resourceGroup, containerNameFor(userId), spec,
   );
 };

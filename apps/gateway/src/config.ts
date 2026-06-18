@@ -53,25 +53,26 @@ export const config = {
     // SMB 上 SQLite 锁失败 (known-issues#6), 必须走 NFS。
     storageAccountNfs: process.env['AZURE_STORAGE_ACCOUNT_NFS'] ?? '',
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
-    acrName: process.env['AZURE_ACR_NAME'] ?? '',           // 用来拿 listCredentials
-    hermesImageTag: process.env['HERMES_IMAGE_TAG'] ?? 'hermes:v1',
+    // ⚠️ 镜像版本写死在代码里 (不走 env), 因为改 tag 本就必须连带部署 gateway 才能触发 reconcile
+    //   (gateway 启动算 policyHashFor 才会拉齐存量用户)。写死 → 进 git 可 review/revert、零跨文件漂移。
+    //   bump 镜像: 改这一行 hermes:vN (单调递增, 禁用 :latest) + 部署 gateway。详见 dynamic-update-aca.md §5.2。
+    hermesImageTag: 'hermes:v12',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
     //   HERMES_MODEL     具体模型名
-    //   HERMES_API_KEY   对应 provider 的 key (走 secret)
     //   HERMES_BASE_URL  alibaba 填 DashScope 国内 endpoint; anthropic/openai 留空; custom 必填
+    // LLM API key 不再走 gateway 进程: 真值常驻 KV (secret hermes-api-key), ACA 控制面
+    // 带 user-assigned identity 直接拉; gateway 自己根本不接触明文。
     hermesProvider: process.env['HERMES_PROVIDER'] ?? 'alibaba',
     hermesModel: process.env['HERMES_MODEL'] ?? 'qwen3-coder-plus',
-    hermesApiKey: process.env['HERMES_API_KEY'] ?? '',
     hermesBaseUrl: process.env['HERMES_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     // User-assigned identity bicep 提前建好, ACA 绑它来读 KV hermes-api-key。
-    //   resourceId: /subscriptions/.../userAssignedIdentities/id-hermes-<env>, 用于绑 identity
-    //   clientId:   identity 的 client GUID, 用于 secrets[].identity 字段
+    //   resourceId: /subscriptions/.../userAssignedIdentities/id-hermes-<env>
+    //               同时用于 ACA template.identity 绑定 + secrets[].identity 引用
     //   kvUri:      https://<kv-name>.vault.azure.net, 拼 keyVaultUrl
-    // 三者都从 bicep appSettings 注入, dev local 模式留空 (走 inline secret 兜底)。
+    // 两者都从 bicep appSettings 注入, validateConfig 在 prod 启动时强校验。
     hermesAcaIdentityResourceId: process.env['HERMES_ACA_IDENTITY_RESOURCE_ID'] ?? '',
-    hermesAcaIdentityClientId: process.env['HERMES_ACA_IDENTITY_CLIENT_ID'] ?? '',
     hermesKvUri: process.env['HERMES_KV_URI'] ?? '',
   },
 
@@ -120,16 +121,14 @@ export const validateConfig = () => {
     required('AZURE_STORAGE_ACCOUNT');
     required('AZURE_STORAGE_ACCOUNT_NFS');
     required('AZURE_ACR_LOGIN_SERVER');
-    required('AZURE_ACR_NAME');
     if (config.cloud.udkLifetimeSeconds > 7 * 24 * 3600) {
       throw new Error(
         `AZURE_STORAGE_UDK_LIFETIME_SECONDS=${config.cloud.udkLifetimeSeconds} exceeds Azure 7-day UDK max (604800)`,
       );
     }
-    // 任何 provider 都必须有 key
-    if (!config.azure.hermesApiKey) {
-      throw new Error(`HERMES_API_KEY 未设 (provider=${config.azure.hermesProvider} model=${config.azure.hermesModel})`);
-    }
+    // 用户 ACA 的 hermes-api-key secret 走 KV reference, 需要 identity + kv uri 全齐
+    required('HERMES_ACA_IDENTITY_RESOURCE_ID');
+    required('HERMES_KV_URI');
     if (config.azure.hermesProvider === 'custom' && !config.azure.hermesBaseUrl) {
       throw new Error(`HERMES_PROVIDER=custom 必须设 HERMES_BASE_URL`);
     }

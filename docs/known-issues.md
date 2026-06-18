@@ -197,12 +197,13 @@ az acr manifest list-metadata -r acrlingxidev -n hermes \
 az acr repository delete -n acrlingxidev --image hermes:v3 --yes
 ```
 
-### M2 存量用户 ACA env / image 升级 — 手动批量推
+### M2 存量用户 ACA env / image 升级 — ✅ 已自动化 (2026-06-18)
 
-改了 `apps/gateway/src/provisioning/azure.ts` 里给 ACA 注入的 env / image / secret 后, **存量用户不会自动跟着切**, 只有新注册用户用新模板。`ContainerMappingCache` 也是进程内 Map 无 TTL (CLAUDE.md 提到)。
+~~改了 ACA spec 后存量用户不会自动跟着切, 需手动批量推。~~ 已由 gateway 声明式 reconcile 取代 (见 `dynamic-update-aca.md`)。
 
-**何时做**: 每次切 LLM provider / 升级 hermes 镜像 / 加新 env。
-**怎么做**: 遍历 PG `container_mapping` 表 → 对每个 ACA `az containerapp update --image ... --replace-env-vars ...`。镜像 rollout 已封装 `scripts/rollout-hermes.sh`, env 变更目前手动跑 `az containerapp update`, 多了写脚本。
+`buildContainerAppSpec` 是 ACA spec 的唯一事实源; gateway 启动算 `policyHashFor` 常驻内存, 每个 `container_mapping` 行记录其 ACA 已应用的 `policy_hash`。改 spec 代码 (含写死的 `config.azure.hermesImageTag`) → 部署 gateway → boot sweep + lazy reconcile 自动把存量用户拉齐, `scripts/rollout-hermes.sh` 已删除。
+
+**现在的心智**: 改了任何 ACA spec 相关的东西 (镜像 / env 结构 / resources)? 改对应代码 (动镜像就 bump `config.azure.hermesImageTag = 'hermes:vN'`) + 部署 gateway。完事。
 
 ### M3 NFS share quota — 按需扩容
 

@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import { dao, getDb } from './db/index.js';
 import { healthzRouter } from './api/healthz.js';
 import { buildStatusRouter } from './api/status.js';
-import { buildPurchaseRouter, type ProvisionerFn } from './api/purchase.js';
+import { buildPurchaseRouter } from './api/purchase.js';
 import { buildThreadsRouter } from './api/threads.js';
 import { buildChatRouter } from './api/chat.js';
 import { buildCallbackRouter } from './api/internal-callback.js';
@@ -26,14 +26,9 @@ import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { loadPricing } from './lib/pricing.js';
 import { config, validateConfig } from './config.js';
-import { provisionContainer } from './provisioning/manager.js';
-import { provisionContainerLocal } from './provisioning/local.js';
 import { recoverProvisioning } from './provisioning/recovery.js';
+import { sweepReconcileAll } from './provisioning/reconcile.js';
 import * as azureModule from './provisioning/azure.js';
-import {
-  signTokenAndInjectLocal,
-  restartContainerAppLocal,
-} from './provisioning/local.js';
 import { requireSession } from './auth/middleware.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
@@ -46,7 +41,6 @@ import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
 import { loadPromptStore } from './lib/prompt-store.js';
 
 export interface CreateAppOptions {
-  provisioner?: ProvisionerFn;
   /**
    * 微信 iLink 长轮询管理器。本地启动时构造,测试里可省略 — 省了就不挂
    * /api/wechat/* 路由,其它端点不受影响。
@@ -60,35 +54,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   app.use(cookieParser());
 
   app.use(healthzRouter);
-
-  const defaultProvisioner: ProvisionerFn = async (args) => {
-    const signTokenAndRestart = async (userId: string, tokenVersion: number) => {
-      if (config.provisioner === 'azure') {
-        await azureModule.signTokenAndInjectAzure(userId, tokenVersion);
-        await azureModule.restartContainerAppAzure(userId);
-      } else {
-        await signTokenAndInjectLocal(userId, tokenVersion);
-        await restartContainerAppLocal(userId);
-      }
-    };
-
-    if (config.provisioner === 'local') {
-      await provisionContainerLocal({
-        userId: args.userId,
-        localContainerUrl: config.localContainerUrl,
-        signTokenAndRestart,
-      });
-    } else {
-      await provisionContainer({
-        ...args,
-        azure: azureModule,
-        signTokenAndRestart,
-      });
-    }
-  };
-
-  const provisioner = opts.provisioner ?? defaultProvisioner;
-
   const sessionMw = requireSession({
     secret: config.session.secret,
     cookieName: config.session.cookieName,
@@ -112,14 +77,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       ?? path.resolve(process.cwd(), 'prompts');
     const promptStore = loadPromptStore(promptsDir);
 
-    // P1 provisioner-aware helpers (real Azure or local mock)
-    const signAndInject = config.provisioner === 'azure'
-      ? azureModule.signTokenAndInjectAzure
-      : signTokenAndInjectLocal;
-    const restartContainer = config.provisioner === 'azure'
-      ? azureModule.restartContainerAppAzure
-      : restartContainerAppLocal;
-
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
       sessionSecret: config.session.secret,
@@ -141,7 +98,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       publicBaseUrl: config.auth.publicBaseUrl,
       frontendBaseUrl: config.auth.frontendBaseUrl,
     }));
-    app.use(buildPurchaseRouter(provisioner, sessionMw));
+    app.use(buildPurchaseRouter(sessionMw));
     app.use(buildThreadsRouter(sessionMw));
     app.use(buildChatRouter(sessionMw));
     app.use(buildMeUsageRouter(sessionMw));
@@ -180,8 +137,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
     // P1 routes (entitlements + container-side + token refresh)
     app.use(buildEntitlementsRouter({
-      restartContainer,
-      signTokenAndInject: signAndInject,
       sessionMw,
       onEnable: async (userId: string, feature: string) => {
         if (feature === 'email') {
@@ -292,6 +247,12 @@ export const start = async (): Promise<void> => {
   }
   console.log('[gateway] loading cache...');
   await dao.cache.loadAll();
+
+  // 部署带新 POLICY_HASH 的 gateway 后, 后台主动把存量 stale 用户的 ACA 拉齐 (不阻塞 listen)。
+  // 稳态 (全员命中) 零 ARM 调用; 没扫到的由 chat/inbound 入口的 lazy reconcile 兜底。
+  if (config.provisioner === 'azure') {
+    void sweepReconcileAll().catch((err) => console.error('[gateway] sweep error:', err));
+  }
 
   // 加载 pricing 表到内存 cache
   await loadPricing(getDb());

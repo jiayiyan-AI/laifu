@@ -20,6 +20,8 @@ export interface ContainerMappingDao {
   updateStep(userId: string, step: string, pct: number): Promise<void>;
   markReady(userId: string, url: string, step: string, pct: number): Promise<void>;
   markFailed(userId: string, errorMessage: string): Promise<void>;
+  /** 写回该用户 ACA 已应用的 POLICY_HASH (create 收尾 / reconcile 成功后)。 */
+  setPolicyHash(userId: string, policyHash: string): Promise<void>;
 }
 
 const toMapping = (r: typeof schema.containerMapping.$inferSelect): ContainerMapping => ({
@@ -33,6 +35,7 @@ const toMapping = (r: typeof schema.containerMapping.$inferSelect): ContainerMap
   azure_files_share: r.azure_files_share,
   created_at: r.created_at?.toISOString() ?? new Date().toISOString(),
   ready_at: r.ready_at?.toISOString() ?? null,
+  policy_hash: r.policy_hash ?? null,
 });
 
 export const makeContainerMappingDao = (db: Db): ContainerMappingDao => {
@@ -80,6 +83,10 @@ export const makeContainerMappingDao = (db: Db): ContainerMappingDao => {
         status: 'failed',
         error_message: errorMessage,
       }).where(eq(t.user_id, userId));
+    },
+
+    async setPolicyHash(userId, policyHash) {
+      await db.update(t).set({ policy_hash: policyHash }).where(eq(t.user_id, userId));
     },
   };
 };

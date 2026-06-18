@@ -20,6 +20,7 @@
  */
 import type { ContainerChatResponse, ContainerChatUsage } from '@lingxi/shared';
 import { log } from './logger.js';
+import { checkAndReconcileACA } from '../provisioning/reconcile.js';
 
 interface CallArgs {
   containerUrl: string;
@@ -45,6 +46,8 @@ const now = (): number => performance.now();
 export const callHermesChat = async (args: CallArgs): Promise<CallResult> => {
   const { containerUrl, userId, threadId, source, sessionId, message } = args;
   const fetcher = args.fetchImpl ?? fetch;
+  // 发往 ACA 前的统一触发点: spec 漂移则后台拉齐 (幂等去重, 非阻塞, 本次仍走老 revision)。
+  checkAndReconcileACA(userId);
 
   const chatStart = now();
   try {
@@ -126,6 +129,7 @@ export interface DispatchResult {
 export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchResult> => {
   const { containerUrl, userId, threadId, source, sessionId, message, loopId } = args;
   const fetcher = args.fetchImpl ?? fetch;
+  checkAndReconcileACA(userId);   // 见 callHermesChat: ACA 出口层统一触发 reconcile
   try {
     const resp = await fetcher(`${containerUrl}/chat`, {
       method: 'POST',
@@ -192,6 +196,7 @@ export interface DeleteSessionResult {
 export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<DeleteSessionResult> => {
   const { containerUrl, userId, threadId, source, sessionId } = args;
   const fetcher = args.fetchImpl ?? fetch;
+  checkAndReconcileACA(userId);   // 见 callHermesChat: ACA 出口层统一触发 reconcile
   try {
     const url = `${containerUrl}/session?session_id=${encodeURIComponent(sessionId)}`;
     const resp = await fetcher(url, { method: 'DELETE' });

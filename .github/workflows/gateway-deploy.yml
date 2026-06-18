@@ -55,6 +55,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # 提前拦截 KV secret 漂移: bicep 引用 / azure.ts 字符串 / kv-secrets.ts manifest
+      # 三方必须对齐, 否则就算 build/deploy 成功, App Service 启动会 SecretNotFound。
+      # 真相来源: apps/gateway/src/kv-secrets.ts。
+      - name: Install deps (for drift check + later builds)
+        run: pnpm install --frozen-lockfile
+
+      - name: KV secret drift check
+        run: pnpm --filter @lingxi/gateway exec tsx ../../scripts/check-kv-secret-drift.ts
+
       - name: Build deploy package
         run: ./scripts/build-deploy.sh
 

@@ -20,18 +20,12 @@ az account set -s <SUB_ID>
 ./deploy.sh dev
 # 输出: appServiceHost / acrLoginServer / keyVaultName / 等
 
-# 2. 在 Key Vault 里填 secret (名字必须与 main.bicep 里 SecretName 一致)
-KV=kv-lingxi-dev
-az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
-az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)"   # 容器 ↔ gateway JWT 签发密钥
-az keyvault secret set --vault-name $KV --name supabase-url --value "https://xxx.supabase.co"
-az keyvault secret set --vault-name $KV --name supabase-service-role-key --value "..."   # 必须 eyJ... JWT, 不是 sb_secret_*
-az keyvault secret set --vault-name $KV --name google-client-id --value "..."
-az keyvault secret set --vault-name $KV --name google-client-secret --value "..."
-az keyvault secret set --vault-name $KV --name anthropic-api-key --value "sk-..."
-az keyvault secret set --vault-name $KV --name dashscope-api-key --value "sk-..."   # 可填空字符串占位
-az keyvault secret set --vault-name $KV --name postmark-inbound-webhook-secret --value "$(openssl rand -hex 24)"  # 入站 webhook Basic-Auth; 与 Postmark inbound URL 内嵌密码一致
-az keyvault secret set --vault-name $KV --name postmark-server-token --value ""   # Postmark 发信 token; 暂 provider=fake 可填空占位, 切 postmark 时再填
+# 2. 在 Key Vault 里填 secret
+#    唯一真相来源: apps/gateway/src/kv-secrets.ts
+#    用脚本灌, 不要再照抄文档清单 (历史教训详见 docs/deployment-azure-first-run.md 注意 1)。
+#    flag / 行为 / 典型场景见 scripts/seed-kv-secrets.ts 头部。
+cd <repo root>
+pnpm --filter @lingxi/gateway exec tsx ../../scripts/seed-kv-secrets.ts dev
 
 # 3. App Service 重启拉取 KV reference
 az webapp restart -g rg-lingxi-dev -n app-lingxi-dev-gateway

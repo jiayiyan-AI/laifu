@@ -11,9 +11,6 @@ param location string = 'southeastasia'
 @description('App Service SKU. B1 是 Always On 最低档; 流量上来后升 P0v3+')
 param appServiceSku string = 'B1'
 
-@description('Hermes 镜像 tag, gateway 创建用户 Container App 时引用. 必须包含仓库名, 形如 hermes:v1 或 hermes:latest')
-param hermesImageTag string = 'hermes:latest'
-
 @description('LLM provider 名. Hermes 一等公民: alibaba / anthropic / openai / deepseek / xai; 自建端点用 custom')
 param hermesProvider string = 'alibaba'
 
@@ -51,6 +48,9 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
   sku: { name: 'Basic' }
+  // adminUserEnabled: gateway 已改走 Managed Identity (AcrPull) 拉镜像, 不再用 admin 凭据。
+  // 待所有存量 ACA 被 reconcile 到 identity 拉取后 (gateway 部署后 boot sweep 完成), 可改 false 收紧。
+  // 在此之前保持 true: 未被 sweep 到又冷启动的旧 spec ACA 仍可能用 admin password 拉。
   properties: { adminUserEnabled: true }
 }
 
@@ -327,12 +327,15 @@ resource rgRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
-// 给 App Service 在 ACR 拉镜像的权限 (ACA 创建时若走 managed identity 拉镜像需要)
+// 给 hermes user-assigned identity 在 ACR 拉镜像的权限 (AcrPull)。
+// 每个用户 ACA 绑这个 identity, registries[].identity 走它直接拉镜像, 不用 admin password secret。
+// 注意: principal 必须是 hermesIdentity (ACA 真正的拉取主体), 不是 App Service —— App Service 是
+//   NODE 代码部署, 不从 ACR 拉容器。
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: acr
-  name: guid(acr.id, appService.id, 'acr-pull')
+  name: guid(acr.id, hermesIdentity.id, 'acr-pull')
   properties: {
-    principalId: appService.identity.principalId
+    principalId: hermesIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     // AcrPull
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
@@ -379,17 +382,13 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     AZURE_STORAGE_CONTAINER: 'laifu-cloud'
     AZURE_STORAGE_BLOB_ENDPOINT: storage.properties.primaryEndpoints.blob
     AZURE_ACR_LOGIN_SERVER: acr.properties.loginServer
-    AZURE_ACR_NAME: acr.name
-    HERMES_IMAGE_TAG: hermesImageTag
     HERMES_PROVIDER: hermesProvider
     HERMES_MODEL: hermesModel
     HERMES_BASE_URL: hermesBaseUrl
 
     // 用户 ACA 绑这个 user-assigned identity, 让 ACA secrets[].keyVaultUrl 能去 KV 取值。
-    // azure.ts createContainerApp 需要这两个值: resourceId 绑 identity, clientId 用于
-    // secrets[].identity 字段引用。
+    // azure.ts createContainerApp 用 resourceId 同时绑 template.identity 和填 secrets[].identity。
     HERMES_ACA_IDENTITY_RESOURCE_ID: hermesIdentity.id
-    HERMES_ACA_IDENTITY_CLIENT_ID: hermesIdentity.properties.clientId
     // KV vault URI (https://<name>.vault.azure.net), 用于拼 secrets[].keyVaultUrl
     HERMES_KV_URI: kv.properties.vaultUri
 
@@ -404,7 +403,6 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     DATABASE_POOL_MAX: '10'
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
-    HERMES_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=hermes-api-key)'
 
     // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
     // 子域 laifu.uncagedai.org 已在 CF / Resend 验过 DKIM+SPF+Return-Path。

@@ -6,7 +6,6 @@
     "env": { "value": "dev" },
     "location": { "value": "southeastasia" },
     "appServiceSku": { "value": "B1" },
-    "hermesImageTag": { "value": "hermes:latest" },
     "hermesProvider": { "value": "alibaba" },
     "hermesModel": { "value": "qwen3.7-max" },
     "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" }
