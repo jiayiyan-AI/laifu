@@ -24,11 +24,10 @@ export interface LocalProvisionArgs {
   userId: string;
   localContainerUrl: string;
   stepDelayMs?: number;
-  signTokenAndRestart?: (userId: string, tokenVersion: number) => Promise<void>;
 }
 
 export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise<void> => {
-  const { userId, localContainerUrl, stepDelayMs = 800, signTokenAndRestart } = args;
+  const { userId, localContainerUrl, stepDelayMs = 800 } = args;
   try {
     for (let i = 0; i < STEPS.length - 1; i++) {
       const s = STEPS[i]!;
@@ -40,13 +39,14 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
 
     const ready = STEPS[5]!;
 
-    if (signTokenAndRestart) {
-      const tokenVersion = await dao.users.getTokenVersion(userId) ?? 0;
-      try {
-        await signTokenAndRestart(userId, tokenVersion);
-      } catch (err) {
-        console.warn(`[local-provisioning] signTokenAndRestart failed for ${userId}:`, err);
-      }
+    // 本地 dev 容器是 dev-hermes.sh 预起的, 不像 azure 在 create spec 里烤 token,
+    // 故这里现签 token 写盘 + docker restart 让 entrypoint 重跑 bootstrap (从源头直接调, 不再注入)。
+    const tokenVersion = await dao.users.getTokenVersion(userId) ?? 0;
+    try {
+      await signTokenAndInjectLocal(userId, tokenVersion);
+      await restartContainerAppLocal(userId);
+    } catch (err) {
+      console.warn(`[local-provisioning] token sign/restart failed for ${userId}:`, err);
     }
 
     await dao.containerMapping.markReady(userId, localContainerUrl, ready.step, ready.pct);

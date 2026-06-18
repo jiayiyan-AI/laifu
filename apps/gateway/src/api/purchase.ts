@@ -1,22 +1,18 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { PurchaseResponse } from '@lingxi/shared';
 import { dao } from '../db/index.js';
-
-export type ProvisionerFn = (args: { userId: string; containerName: string; shareName: string }) => Promise<void>;
-
-const shortHash = (userId: string): string => userId.replace(/-/g, '').slice(0, 8);
+import { containerNameFor, shareNameFor } from '../provisioning/naming.js';
+import { provisionUser } from '../provisioning/manager.js';
 
 export const buildPurchaseRouter = (
-  provisioner: ProvisionerFn,
   sessionMw: RequestHandler,
 ): RouterType => {
   const router = Router();
 
   router.post('/api/purchase', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
-    const hash = shortHash(userId);
-    const containerName = `hermes-${hash}`;
-    const shareName = `user-${hash}`;
+    const containerName = containerNameFor(userId);
+    const shareName = shareNameFor(userId);
 
     try {
       await dao.containerMapping.insert({
@@ -39,7 +35,7 @@ export const buildPurchaseRouter = (
     const data = await dao.containerMapping.getByUserId(userId);
     if (data) dao.cache.set(data);
 
-    provisioner({ userId, containerName, shareName }).catch((err) => {
+    provisionUser(userId).catch((err) => {
       console.error(`[purchase] provisioner error for ${userId}:`, err);
     });
 

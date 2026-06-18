@@ -12,6 +12,7 @@ const finalReadyRow = {
   user_id: 'u1',
   container_name: 'hermes-u1abc',
   azure_files_share: 'user-u1abc',
+  policy_hash: null,
   status: 'ready' as const,
   container_url: 'https://hermes-u1abc.example.com',
   provisioning_step: '灵犀助理上岗完成',
@@ -36,8 +37,6 @@ describe('provisionContainer', () => {
   it('updates provisioning_step through all phases and marks ready on success', async () => {
     await provisionContainer({
       userId: 'u1',
-      containerName: 'hermes-u1abc',
-      shareName: 'user-u1abc',
       azure: mockAzure,
     });
 
@@ -46,11 +45,9 @@ describe('provisionContainer', () => {
       'u1', 'https://hermes-u1abc.example.com', '灵犀助理上岗完成', 100,
     );
 
-    expect(mockAzure.createFileShare).toHaveBeenCalledWith('user-u1abc');
-    expect(mockAzure.createContainerApp).toHaveBeenCalledWith({
-      containerName: 'hermes-u1abc',
-      shareName: 'user-u1abc',
-    });
+    expect(mockAzure.createFileShare).toHaveBeenCalledWith('user-u1');
+    expect(mockAzure.createContainerApp).toHaveBeenCalledWith('u1');
+    expect(dao.containerMapping.setPolicyHash).toHaveBeenCalledWith('u1', expect.any(String));
 
     expect(dao.cache.set).toHaveBeenCalled();
   });
@@ -60,8 +57,6 @@ describe('provisionContainer', () => {
 
     await provisionContainer({
       userId: 'u1',
-      containerName: 'hermes-u1abc',
-      shareName: 'user-u1abc',
       azure: mockAzure,
     });
 

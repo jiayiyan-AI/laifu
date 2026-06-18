@@ -22,6 +22,7 @@ export const createMockDao = () => ({
     updateStep: vi.fn(async () => {}),
     markReady: vi.fn(async () => {}),
     markFailed: vi.fn(async () => {}),
+    setPolicyHash: vi.fn(async () => {}),
   },
   messages: {
     insert: vi.fn(async () => {}),
@@ -78,6 +79,7 @@ export const createMockDao = () => ({
     set: vi.fn(),
     delete: vi.fn(),
     loadAll: vi.fn(async () => {}),
+    entries: vi.fn(() => []),
   },
 });
 

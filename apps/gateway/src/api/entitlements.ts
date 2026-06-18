@@ -6,14 +6,9 @@ import { dao } from '../db/index.js';
 /** 允许通过此端点开关的能力。新增能力时在此追加(与前端 catalog 同步)。 */
 const ALLOWED_FEATURES = new Set<string>(MANAGEABLE_FEATURES);
 
+import { syncUserContainer } from '../provisioning/manager.js';
+
 export interface EntitlementsRouterDeps {
-  /** Trigger a container restart for the user (ACA restartRevision or local mock). */
-  restartContainer: (userId: string) => Promise<void>;
-  /**
-   * Sign a new LAIFU_USER_TOKEN using the new token_version, and write it
-   * to the container's env / secret store so the next start picks it up.
-   */
-  signTokenAndInject: (userId: string, tokenVersion: number) => Promise<void>;
   /** enable 成功后的可选副作用钩子(如 email 自动分配 handle)。失败不阻断装备。 */
   onEnable?: (userId: string, feature: string) => Promise<void>;
   sessionMw: RequestHandler;
@@ -34,14 +29,9 @@ export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterTyp
         ? await dao.entitlements.enable(userId, feature)
         : await dao.entitlements.disable(userId, feature);
 
-      let tokenVersion: number;
       if (changed) {
-        tokenVersion = await dao.entitlements.bumpTokenVersion(userId);
-      } else {
-        const current = await dao.entitlements.getTokenVersion(userId);
-        tokenVersion = current ?? 0;
+        await dao.entitlements.bumpTokenVersion(userId);
       }
-      await deps.signTokenAndInject(userId, tokenVersion);
       if (kind === 'enable' && deps.onEnable) {
         try {
           await deps.onEnable(userId, feature);
@@ -49,9 +39,12 @@ export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterTyp
           console.error(`[entitlements] onEnable hook failed for ${userId}/${feature}:`, err);
         }
       }
-      deps.restartContainer(userId).catch((err) => {
-        console.error(`[entitlements] restart failed for ${userId}:`, err);
-      });
+      // 把改装后的新 token 整份推进容器并重载 (azure 自滚新 revision / local 写盘+docker restart)。
+      // fire-and-forget: azure 分支是 beginUpdateAndWait (10-30s+ 控制面操作), 绝不阻塞 HTTP 响应 (§3.2)。
+      // DB 改装已提交, 前端轮询 /api/status 感知容器回归; 失败仅记录 (token 不进哈希, 无 hash 兜底, 靠用户重试)。
+      void syncUserContainer(userId).catch((err) =>
+        console.error(`[entitlements] syncUserContainer failed for ${userId}:`, err),
+      );
       const active = await dao.entitlements.listActive(userId);
       const body: EntitlementChangeResponse = { ok: true, entitlements: active, changed };
       res.json(body);

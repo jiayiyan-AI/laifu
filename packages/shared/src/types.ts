@@ -24,6 +24,7 @@ export interface ContainerMapping {
   azure_files_share: string | null;
   created_at: string;
   ready_at: string | null;
+  policy_hash: string | null;   // ACA 当前已应用的 POLICY_HASH; NULL = 从未 reconcile
 }
 
 export interface ContextToken {

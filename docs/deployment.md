@@ -44,14 +44,15 @@ cd infra/bicep
 
 ## ② Hermes 镜像 (docker/hermes/)
 
-**职责**: 构建用户实例运行的 Hermes Agent 容器镜像, 推到 ACR, **并把存量用户 ACA roll 到新镜像**。
+**职责**: 构建用户实例运行的 Hermes Agent 容器镜像, 推到 ACR。**存量用户 ACA 的镜像升级由 gateway 的声明式 reconcile 自动完成**, 不再有独立 rollout 脚本 (详见 `dynamic-update-aca.md`)。
 
-**工具**: ACR Build (`az acr build`) 云端构建 amd64 + `scripts/rollout-hermes.sh` 批量 update 用户 ACA。
+**工具**: ACR Build (`az acr build`) 云端构建 amd64。
 
 ### Tag 规范 (硬约束)
 
-- 镜像 tag 用 **`vN` 单调递增** (v9 → v10 → v11), N 是十进制整数。**禁止跳号、禁止只推 `:latest` 不带 vN、禁止重用旧 vN**。
-- 每次 build 同时打两个 tag: 显式版本 `vN` (用于 rollout pin 到具体版本, 可回滚) 和 `latest` (gateway provisioning 给新用户用)。`build-and-push.sh` 已经做了双 tag。
+- 镜像 tag 用 **`vN` 单调递增** (v9 → v10 → v11), N 是十进制整数。**禁止跳号、禁止重用旧 vN**。
+- gateway 用**代码常量** `config.azure.hermesImageTag = 'hermes:vN'` 决定所有用户 (新+存量) 跑哪个镜像 —— **不走 env**(改 tag 本就要连带部署 gateway 才能触发 reconcile,写死 → 进 git 可 review/revert、零跨文件漂移)。
+  **禁用 `:latest`** —— gateway 启动 (`validateConfig`) 直接拒绝, 因为哈希含 tag 字符串, `:latest` 不变会让镜像更新被静默跳过。`build-and-push.sh` 仍顺带打 `latest` tag 只为人工排查方便, gateway 不引用它。
 - **打 tag 前必须先查 ACR 当前最大 vN**, 下一个 = 最大 + 1:
   ```bash
   az acr repository show-tags -n acrlingxi${ENV} --repository hermes \
@@ -69,7 +70,7 @@ cd infra/bicep
 cd docker/hermes
 ACR_NAME=acrlingxi${ENV} IMAGE_TAG=v11 ./build-and-push.sh
 # 内部: az acr build --image hermes:v11 --image hermes:latest --platform linux/amd64 .
-# 同时打 v11 和 latest, 上下文几十 KB, 云端 amd64 构建, 单次 2-4 min。
+# 上下文几十 KB, 云端 amd64 构建, 单次 2-4 min。
 ```
 
 #### 阶段 C: 验证镜像 (这个灵活安排，不强制)
@@ -85,25 +86,22 @@ docker run --rm acrlingxi${ENV}.azurecr.io/hermes:v11 bash -c '
   # ★ 这一段按这次 push 的 diff 现写, 每次都不一样
 '
 ```
-Mac arm64 拉 amd64 会走 QEMU 模拟, 慢但够用。**任一项不通过 → 回到改代码, 不要继续 rollout**。
+Mac arm64 拉 amd64 会走 QEMU 模拟, 慢但够用。**任一项不通过 → 回到改代码, 不要继续部署**。
 
-> **历史踩坑 (2026-06-16)**: 推过一版 `hermes:latest` (那次还违反 Tag 规范, 没打 vN), Dockerfile 里 `RUN cat > /etc/profile.d/lingxi.sh <<EOF` heredoc 在 ACR Build 上没生效, 产物是 0 字节空文件, login shell PATH 救不回来, AI agent 跑 `pnpm add -g` 一直警告 PATH 缺失。当时**跳过了阶段 C**, 直接信任 push 成功, 三个用户 ACA 都中招。这次改动的 diff 里 `RUN cat > .../lingxi.sh` 是新增 RUN, 按上面的思路本该专门 `wc -c /etc/profile.d/lingxi.sh` 验一下产物非空 — 这种**针对本次 diff 设计的检查**正是阶段 C 的意义。
+> **历史踩坑 (2026-06-16)**: 推过一版 `hermes:latest` (那次还违反 Tag 规范, 没打 vN), Dockerfile 里 `RUN cat > /etc/profile.d/lingxi.sh <<EOF` heredoc 在 ACR Build 上没生效, 产物是 0 字节空文件, login shell PATH 救不回来, AI agent 跑 `pnpm add -g` 一直警告 PATH 缺失。当时**跳过了阶段 C**, 直接信任 push 成功, 三个用户 ACA 都中招。这种**针对本次 diff 设计的检查**正是阶段 C 的意义。
 
-#### 阶段 D: 对存量用户 ACA rollout
-ACA revision 不可变, push 新镜像后**现有用户实例不会自动跟随**, 必须显式 update 触发新 revision。
-```bash
-ENV=dev ./scripts/rollout-hermes.sh v11
-# 默认并发 10, 每个 ACA 跑 az containerapp update --image .../hermes:v11
-# 失败不中断其他, 结尾给出 success/failed 汇总, 失败 ACA 列名字
-# 可加 DRY_RUN=1 先看目标列表, PARALLEL=20 调并发
-```
+#### 阶段 D: 让存量用户 ACA 切到新镜像
+ACA revision 不可变, push 新镜像后现有用户实例不会自动跟随。**现在不再手动批量 update**:
 
-**如果要回滚**: 再跑一遍, tag 换成上一版即可: `ENV=dev ./scripts/rollout-hermes.sh v10`。
+1. 改代码常量 `config.azure.hermesImageTag = 'hermes:v11'`(`apps/gateway/src/config.ts`)。
+2. 部署 gateway (阶段 ③)。gateway 启动算出新的 `POLICY_HASH`, boot sweep 后台把所有存量 ACA 拉齐到 v11 (有界并发, 平滑切 revision); sweep 没扫到的用户在下次活跃时由 lazy reconcile 兜底。
+
+**回滚**: 把 `config.azure.hermesImageTag` 改回上一版 `hermes:v10` 重新部署 gateway 即可, 同一条 reconcile 路径反向拉齐。
 
 ### 特点
 - 不在本地 build (Mac arm64 与 Azure amd64 不兼容, QEMU 模拟太慢)
 - 上传 build context (几十 KB) 而非镜像 (~1GB)
-- gateway 通过 App Service env `HERMES_IMAGE_TAG=hermes:latest` 给**新注册用户**自动用最新镜像; 存量用户必须走阶段 D 才会跟上
+- 新用户与存量用户**走同一份 spec** (gateway `buildContainerAppSpec`), 不再有两套逻辑
 
 **何时改**: Hermes 源码 / Dockerfile / 系统依赖变更。
 
@@ -331,7 +329,7 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 |---|---|---|
 | Bicep 输出 | `acrLoginServer` / `storageAccountName` (云盘) / `storageNfsAccountName` (Hermes home) / `containerAppsEnvName` / `appServiceHost` | App Service appsettings (bicep 自动写入), gateway 读 env (`AZURE_STORAGE_ACCOUNT` / `AZURE_STORAGE_ACCOUNT_NFS` / `AZURE_CONTAINER_APPS_ENV`) 创建用户实例 |
 | Key Vault | 8 个 secret | App Service appsettings 通过 `@Microsoft.KeyVault(...)` reference 注入 |
-| 手动 / CI | `HERMES_IMAGE_TAG` | gateway 创建用户 ACA 时引用的镜像 tag |
+| 代码常量 | `config.azure.hermesImageTag` | gateway 所有用户 ACA 引用的镜像 tag (写死, 非 env) |
 
 详细对照见上面"Azure 资源全景图"章节。
 

@@ -8,21 +8,27 @@
 
 ---
 
-## 注意 1: KV secret 名单跟着 bicep 走, 别照抄历史命令
+## 注意 1: KV secret 清单跟着 manifest 走, 用 seed 脚本灌
 
-**现象**: 拿旧版 README / 文档里的 `az keyvault secret set` 列表灌 KV, gateway 部署后 `/healthz` 200 但业务路由 500, 或者 KV 里多出一堆没人读的孤儿 secret。
+**现象**: 拿旧版 README / 文档里散落的 `az keyvault secret set` 列表灌 KV, gateway 部署后 `/healthz` 200 但业务路由 500, 或者 KV 里多出一堆没人读的孤儿 secret。
 
-**原因**: KV secret 清单是跟着 `infra/bicep/main.bicep` 里 `appSettings` 块的 `@Microsoft.KeyVault(...)` reference 走的, 不是跟着文档走。历史变更:
-- 早期用 `@supabase/supabase-js` + RLS, 引用 `supabase-url` / `supabase-service-role-key`; 后来切 Drizzle + node-postgres 直连, 改成 `database-url`。前两个变成孤儿。
-- 早期 App Service env 注入 `ANTHROPIC_API_KEY` / `DASHSCOPE_API_KEY` 给 gateway, 实测 gateway 源码 0 处读取——hermes 容器自己用 `HERMES_API_KEY` 通过 `pull-runtime-config.ts` 映射成 provider-specific 名字。两个 env 已从 bicep 删除。
+**原因**: 历史上 KV secret 清单只在文档里维护, 没绑代码, 改 bicep / 改 azure.ts 时清单不会自动跟着改, 慢慢就漂了。例:
+- 早期用 `@supabase/supabase-js` + RLS, 引用 `supabase-url` / `supabase-service-role-key`; 后来切 Drizzle 直连, 改成 `database-url`。前两个变成孤儿。
+- 早期 App Service env 注入 `ANTHROPIC_API_KEY` / `DASHSCOPE_API_KEY` 给 gateway, 实测源码 0 处读取——hermes 容器自己用 `HERMES_API_KEY` 拉 provider-specific 值。两个 env 已从 bicep 删除。
 
-**解决**: 灌 KV 前先用下面这条命令对照 bicep 当前真实引用:
+**解决**: 唯一真相来源是 `apps/gateway/src/kv-secrets.ts`。脚本头部 (见 `scripts/seed-kv-secrets.ts` /
+`scripts/check-kv-secret-drift.ts`) 有完整的"先决条件 / 跑法 / 行为"文档, 不要在本文重复:
 
 ```bash
-grep "@Microsoft.KeyVault" infra/bicep/main.bicep | sed -E 's/.*SecretName=([a-z-]+)\).*/\1/' | sort -u
+# 从 repo 根目录跑。详细 flag 与典型场景看脚本头部注释。
+pnpm --filter @lingxi/gateway exec tsx ../../scripts/seed-kv-secrets.ts <dev|prod>
+
+# 静态校验 manifest / bicep / azure.ts 三方一致 (CI 也跑这一条)
+pnpm --filter @lingxi/gateway exec tsx ../../scripts/check-kv-secret-drift.ts
 ```
 
-多出来的 KV secret 是孤儿, 可以 `az keyvault secret delete` 清理 (soft-delete 7 天后自动 purge)。少的就照本文末尾"下次部署 prod 环境"那段灌进去。
+加 / 改 / 删 KV secret 时, **先改 manifest**, 再改其他地方; 否则 azure.ts 编译会报
+`Type '...' is not assignable to type 'KvSecretName'`, drift check 会指出 bicep 没对齐。
 
 ---
 
@@ -122,20 +128,11 @@ cd infra/bicep
 #    后续灌 secret + az webapp restart 都救不回来, 因为 App Service KV reference cache 不会自动重 resolve。
 #    详见 docs/known-issues.md #9。
 #    应急手势 (顺序反了之后): `az webapp config appsettings set --settings "KV_REFRESH_TRIGGER=$(date +%s)"`
-KV=kv-lingxi-prod
-# 真实凭据 (4 个) — 必须填真值, 占位会让 gateway 启动后业务路由 500
-az keyvault secret set --vault-name $KV --name database-url --value "postgresql://..."         # Postgres 直连串 (Supabase / Azure PG 都行)
-az keyvault secret set --vault-name $KV --name google-client-id --value "..."
-az keyvault secret set --vault-name $KV --name google-client-secret --value "..."
-az keyvault secret set --vault-name $KV --name hermes-api-key --value "..."                    # 一身二用: gateway↔hermes 容器 token + LLM provider key (provider=alibaba 时填 DashScope key)
-# 自生成 (2 个) — 跟 prod 自己绑, 不需要从外面拿
-az keyvault secret set --vault-name $KV --name session-secret --value "$(openssl rand -hex 32)"
-az keyvault secret set --vault-name $KV --name gateway-secret --value "$(openssl rand -hex 32)" # 容器 ↔ gateway JWT 签发密钥, 必填
-# 邮件三件套 — bicep 已把 EMAIL_PROVIDER 默认设为 resend (出站), 入站走 CF Email Routing。
-# resend-api-key 必填真值, 否则 gateway 出站 401; 另两个 postmark-* 当前不读, 留占位即可。
-az keyvault secret set --vault-name $KV --name postmark-inbound-webhook-secret --value "placeholder-fake"
-az keyvault secret set --vault-name $KV --name postmark-server-token --value "placeholder-fake"
-az keyvault secret set --vault-name $KV --name resend-api-key --value "re_..."   # Resend 控制台 → API Keys, gitignored 来源
+#
+# 先决条件: az login + az account set --subscription <prod sub, 跟 deploy.sh 同一份>
+# 详细 flag / 行为见 scripts/seed-kv-secrets.ts 头部
+cd <repo root>                                 # 回到 monorepo 根目录 (与下面 step 5 用同一个)
+pnpm --filter @lingxi/gateway exec tsx ../../scripts/seed-kv-secrets.ts prod
 
 # 3. Drizzle migration 在 step 5 末尾跑 (App Service deploy 完才有部署单元拿来执行)
 #    drizzle/*.sql 文件随 packages/db 打进 zip; 部署单元里 migrate-deploy.mjs 是入口。
