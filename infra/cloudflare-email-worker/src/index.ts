@@ -3,6 +3,7 @@ import PostalMime from 'postal-mime';
 interface Env {
   GATEWAY_URL: string;
   INBOUND_WEBHOOK_SECRET: string;
+  ROUTES: KVNamespace; // 入站回调 override 表: localpart → gateway base URL(测试环境用,见 README)
 }
 
 /**
@@ -21,8 +22,11 @@ export default {
     try {
       const email = await PostalMime.parse(message.raw);
       const auth = 'Basic ' + btoa(`cf:${env.INBOUND_WEBHOOK_SECRET}`);
-      const base = env.GATEWAY_URL;
       const toLocalpart = (message.to.split('@')[0] || '').toLowerCase();
+      // 入站回调分发: KV 里若有该 localpart 的 override(测试/本地调试用),走它;否则走默认 GATEWAY_URL(线上)。
+      // 加/删 override 用 `wrangler kv key put/delete`(见 README),改完即时生效,无需重部署。
+      const override = await env.ROUTES.get(`to:${toLocalpart}`);
+      const base = override ?? env.GATEWAY_URL;
       const atts = email.attachments ?? [];
 
       let attachmentKeys: Array<{ key: string; filename: string; content_type: string; size: number }> = [];
