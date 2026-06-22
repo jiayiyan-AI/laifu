@@ -64,7 +64,7 @@ describe('POST /api/email/inbound', () => {
 
   it('正确 secret + 已知 localpart → 落库 200', async () => {
     const res = await request(makeApp()).post('/api/email/inbound')
-      .auth('postmark', SECRET)
+      .auth('cf', SECRET)
       .send({ to: 'sunco@mail.localhost', from: 'bob@supplier.com', subject: '报价', text: '请确认' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, id: 'eml_in' });
@@ -74,7 +74,7 @@ describe('POST /api/email/inbound', () => {
   it('未知 localpart → 202 丢弃, 不落库', async () => {
     vi.mocked(dao.email.findUserByLocalpart).mockResolvedValue(null);
     const res = await request(makeApp()).post('/api/email/inbound')
-      .auth('postmark', SECRET)
+      .auth('cf', SECRET)
       .send({ to: 'ghost@mail.localhost', from: 'b@x' });
     expect(res.status).toBe(202);
     expect(dao.email.insertInbound).not.toHaveBeenCalled();

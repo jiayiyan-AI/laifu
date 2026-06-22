@@ -162,7 +162,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     {
       const emailProvider = getEmailProvider({
         provider: config.email.provider,
-        postmarkServerToken: config.email.postmarkServerToken,
         resendApiKey: config.email.resendApiKey,
         domain: config.email.domain,
       });

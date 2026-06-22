@@ -94,16 +94,14 @@ export const config = {
   },
 
   email: {
-    // 'fake' (dev) | 'postmark' | 'resend' (MVP: 入站 CF Email Routing, 出站 Resend)。业务码不分支, 全靠 provider adapter。
-    provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'postmark' | 'resend',
+    // 'fake' (dev) | 'resend' (MVP: 入站 CF Email Routing, 出站 Resend)。业务码不分支, 全靠 provider adapter。
+    provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'resend',
     // 助手邮箱地址的域名, 如 'mail.lingxi.xxx'。dev fake 下随便填。
     domain: process.env['EMAIL_DOMAIN'] ?? 'mail.localhost',
     // 发信 From 缺省显示名
     fromDefaultName: process.env['EMAIL_FROM_DEFAULT_NAME'] ?? '灵犀助理',
-    // 入站 webhook 的 Basic-Auth 共享密钥 (Postmark inbound URL 内嵌 user:pass 里的 pass)
-    inboundWebhookSecret: process.env['POSTMARK_INBOUND_WEBHOOK_SECRET'] ?? 'dev-inbound-secret',
-    // Postmark 发信 server token (仅 provider=postmark 用)
-    postmarkServerToken: process.env['POSTMARK_SERVER_TOKEN'] ?? '',
+    // 入站 webhook 的 Basic-Auth 共享密钥 (CF Email Worker 与 gateway 共用; Worker 端同名 INBOUND_WEBHOOK_SECRET)
+    inboundWebhookSecret: process.env['INBOUND_WEBHOOK_SECRET'] ?? 'dev-inbound-secret',
     // Resend 发信 API key (仅 provider=resend 用)
     resendApiKey: process.env['RESEND_API_KEY'] ?? '',
     // 附件专用 Blob 容器(与云盘 laifu-cloud 分开)

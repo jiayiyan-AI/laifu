@@ -17,7 +17,7 @@ export interface SendResult {
 }
 
 /**
- * 邮件服务商适配器。fake (dev) / postmark (prod) 各实现一份, 业务码只依赖此接口。
+ * 邮件服务商适配器。fake (dev) / resend (prod) 各实现一份, 业务码只依赖此接口。
  */
 export interface EmailProvider {
   /**

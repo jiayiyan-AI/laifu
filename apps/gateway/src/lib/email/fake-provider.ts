@@ -8,7 +8,7 @@ const asArray = (v: unknown): string[] =>
 /**
  * Dev fake: 入站吃一个简单 JSON {to, from, subject, text, ...}; 出站不真发,
  * 合成一个 Message-ID 返回 (由 send 调用方落 outbound 行)。
- * 让本地不依赖 Postmark/域名/DNS 就能跑通整条收发链路。
+ * 让本地不依赖真实邮件服务商/域名/DNS 就能跑通整条收发链路。
  */
 export const makeFakeProvider = (): EmailProvider => ({
   parseInbound(body: unknown): ParsedInboundEmail {
