@@ -6,8 +6,8 @@
     "env": { "value": "prod" },
     "location": { "value": "southeastasia" },
     "appServiceSku": { "value": "B1" },
-    "hermesProvider": { "value": "custom" },
-    "hermesModel": { "value": "qwen3-coder-plus" },
+    "hermesProvider": { "value": "alibaba" },
+    "hermesModel": { "value": "qwen3.7-max" },
     "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" }
   }
 }
