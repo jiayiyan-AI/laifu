@@ -94,33 +94,12 @@
 
 **校验**：CF Email Routing 里 `mail.laifu.uncagedai.org` 的 catch-all 状态为 active 且指向 `lingxi-email-worker`。
 
-### 2.2 出站：Resend 验证新域 `mail.laifu.uncagedai.org`
-> ⚠️ **不要**照抄旧 `laifu.uncagedai.org` 的 DKIM 值——每个域的 DKIM 公钥是 Resend 现生成的，新域有**新值**。一切以 Resend 为新域返回的记录为准。
-
-1. **在 Resend 建新域**（拿到新 domain id + 它要求的 DNS 记录）：
-   ```bash
-   # 建域
-   curl -s -X POST -H "Authorization: Bearer $RESEND_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"mail.laifu.uncagedai.org","region":"us-east-1"}' \
-     https://api.resend.com/domains
-   # 返回里有 id 和 records[]（type/name/value/priority）。记下 id=<NEW_DID>
-   ```
-2. **把 Resend 返回的 records 逐条加进 CF**（zone `uncagedai.org`，全部 **DNS only**）。典型是 3 类（具体名称/值以返回为准）：
-   - **DKIM**：`TXT`，名约 `resend._domainkey.mail.laifu`，值 = 返回的 `p=...` 公钥。
-   - **SPF return-path**：`MX`（约 `send.mail.laifu` → `feedback-smtp.us-east-1.amazonses.com`，优先级 10）+ `TXT`（约 `send.mail.laifu` → `v=spf1 include:amazonses.com ~all`）。
-   - **DMARC**：`TXT`，名约 `_dmarc.mail.laifu`，值约 `v=DMARC1; p=none; rua=mailto:dmarc@mail.laifu.uncagedai.org; fo=1; adkim=r; aspf=r`。
-   - ⚠️ **冲突调和**：2.1 步 CF Email Routing 可能也在 `mail.laifu` 或 `_dmarc.mail.laifu` 上放了 SPF/DMARC。**同名 SPF/DMARC 只能各留一条有效记录**——若撞了，保留一条合法的（DMARC `p=none` 即可；SPF 确保含 `include:amazonses.com`）。Resend 的 SPF 在 `send.mail.laifu` 子子域，一般和 CF 的不撞。
-3. **触发验证 + 轮询直到 verified**：
-   ```bash
-   curl -s -X POST -H "Authorization: Bearer $RESEND_API_KEY" https://api.resend.com/domains/<NEW_DID>/verify
-   curl -s -H "Authorization: Bearer $RESEND_API_KEY" https://api.resend.com/domains/<NEW_DID>   # 等 status=verified
-   ```
-
-**校验**：`GET /domains/<NEW_DID>` 返回 `status: "verified"`。
+### 2.2 出站：Resend —— 不在本文范围（owner 手动配）
+> 出站发信（Resend 验证 `mail.laifu.uncagedai.org`）由 **owner 手动配置，执行者不用碰 Resend**。
+> 仅当 owner 把 Resend 生成的 DKIM/SPF/DMARC 记录值发给你时，按「全部 **DNS only / 灰云**」加进 CF；否则本步跳过。
 
 ### 2.3 🔔 交接给 Azure 运维
-- 回报：「`mail.laifu.uncagedai.org` 入站 catch-all 已指向 `lingxi-email-worker`；Resend 新域 `mail.laifu.uncagedai.org` 已 verified，新 domain id = `<NEW_DID>`」。
+- 回报：「`mail.laifu.uncagedai.org` 入站 catch-all 已指向 `lingxi-email-worker`」（出站 Resend 由 owner 另行确认）。
 - Azure 运维随后会做（**不是你做**）：重部署 bicep 让 `EMAIL_DOMAIN=mail.laifu.uncagedai.org` 生效；把 `lingxi-email-worker` 的 `GATEWAY_URL` 指向 prod gateway；对齐 `inbound-webhook-secret`。
 
 ---
@@ -136,7 +115,7 @@
 ```
 Track 1 (web)                         Track 2 (email, 长线先启动)
   1.1 删 laifu 的 MX/路由                2.1 CF 加 mail.laifu 子域 + catch-all → lingxi-email-worker
-  1.2 加 CNAME laifu → app...(灰云)       2.2 Resend 建 mail.laifu 域 + 加返回的 DNS 记录 + verify
+  1.2 加 CNAME laifu → app...(灰云)       2.2 (Resend 出站 = owner 手动, 不在本文)
   1.3 (可选) asuid TXT
   └─ 交接① → Azure: 绑域+证书+重部署       └─ 交接② → Azure: 重部署(EMAIL_DOMAIN)+worker指prod
                                   最后(Azure 运维 + 你无关): Google OAuth 回调加 https://laifu.uncagedai.org/api/auth/google/callback
