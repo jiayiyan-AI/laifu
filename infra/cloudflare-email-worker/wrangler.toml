@@ -2,15 +2,38 @@ name = "lingxi-email-worker"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 
-# GATEWAY_URL = 入站回调的 URL 前缀。Worker 会 POST 到 `${GATEWAY_URL}/api/email/inbound`。
-# 三种配置方式(按场景挑):
-#   1. 本地全量测(wrangler dev,Worker 跑本机):放 .dev.vars → GATEWAY_URL=http://localhost:9000
-#   2. 部署后指向 ngrok(真入站测,Worker 在 CF):wrangler deploy --var GATEWAY_URL:https://xxx.ngrok-free.app
-#   3. 固定环境:直接改下面这行
+# GATEWAY_URL = 入站回调的【默认】URL 前缀(线上)。Worker POST 到 `${GATEWAY_URL}/api/email/inbound`。
+# 个别测试收件人想改投到别处(如某人本地 ngrok)→ 不动这里,往 KV 加一条 override(见下)。
 [vars]
-GATEWAY_URL = "https://REPLACE-ME.example.com"
+GATEWAY_URL = "https://laifu.uncagedai.org"
+
+# ROUTES(可选)= 入站回调 override 表。**不绑也能部署** —— worker 代码对 ROUTES 缺省做空处理,一律走 GATEWAY_URL。
+# 想启用「按收件人改投」(测试/本地调试)再绑:
+#   1. npx wrangler kv namespace create ROUTES        → 拿到 id
+#   2. 取消下面三行注释, 填 id, 重新 deploy
+#   3. npx wrangler kv key put --binding=ROUTES "to:devtest1" "https://你的.ngrok-free.app"  (删=delete, 列=list)
+# 改 KV 即时生效, 无需重部署; 本地地址各人各填, 不进 git。
+# [[kv_namespaces]]
+# binding = "ROUTES"
+# id = "<namespace id>"
 
 # INBOUND_WEBHOOK_SECRET 是机密,不写这里:
-#   - 部署:wrangler secret put INBOUND_WEBHOOK_SECRET
+#   - 部署:wrangler secret put INBOUND_WEBHOOK_SECRET [--env test]
 #   - 本地 wrangler dev:写进 .dev.vars(见 .dev.vars.example)
 # 值 = gateway 的 POSTMARK_INBOUND_WEBHOOK_SECRET(Basic-Auth 的 pass)
+
+# ─────────────────────────────────────────────────────────────
+# test 环境:收 test.laifu.uncagedai.org 的入站,投到测试 gateway。
+# 独立 worker 脚本 lingxi-email-worker-test,不影响顶层(laifu.uncagedai.org)那个。
+# 命名环境不继承顶层 vars/kv,故下面各自声明。
+# 测试 gateway 是临时地址、易变 → 不写死,部署时用 --var 覆盖:
+#   npx wrangler deploy --env test --var GATEWAY_URL:https://你的临时地址
+# ─────────────────────────────────────────────────────────────
+[env.test]
+name = "lingxi-email-worker-test"
+vars = { GATEWAY_URL = "https://REPLACE-临时测试地址" }   # 兜底值;实际以 --var 为准
+
+# (可选) test 环境的 ROUTES override, 同样不绑也能部署:
+# [[env.test.kv_namespaces]]
+# binding = "ROUTES"
+# id = "<npx wrangler kv namespace create ROUTES --env test 后的 id>"

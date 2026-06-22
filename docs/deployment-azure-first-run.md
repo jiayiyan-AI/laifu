@@ -134,10 +134,9 @@ cd infra/bicep
 cd <repo root>                                 # 回到 monorepo 根目录 (与下面 step 5 用同一个)
 pnpm --filter @lingxi/gateway exec tsx ../../scripts/seed-kv-secrets.ts prod
 
-# 3. Drizzle migration 在 step 5 末尾跑 (App Service deploy 完才有部署单元拿来执行)
-#    drizzle/*.sql 文件随 packages/db 打进 zip; 部署单元里 migrate-deploy.mjs 是入口。
-#    本地预先验证可在 step 5 之前: DATABASE_URL=<prod database-url> DATABASE_SSL=true \
-#      node packages/db/migrate-deploy.mjs
+# 3. Drizzle migration (step 5 之后跑; 也可提前在这里跑一次把 schema 建好)
+#    用 drizzle-kit 应用 packages/db/drizzle/*.sql:
+#      DATABASE_URL=<prod database-url> DATABASE_SSL=true pnpm --filter @lingxi/db db:migrate
 #    详见 packages/db/README.md §部署。
 
 # 4. 推 Hermes 镜像
@@ -154,9 +153,10 @@ az webapp deploy -g rg-lingxi-prod -n app-lingxi-prod-gateway \
   --src-path deploy.zip --type zip
 
 # 5b. 跑 Drizzle migration (从本地用 prod database-url 跑最快, 不用 ssh 进 worker)
+#     ⚠️ 必跑! 漏了 → gateway 启动 cache.loadAll() 查不到表 → exit 1 起不来 (healthz 503)。
 DATABASE_URL=$(az keyvault secret show --vault-name kv-lingxi-prod --name database-url --query value -o tsv) \
   DATABASE_SSL=true \
-  node packages/db/migrate-deploy.mjs
+  pnpm --filter @lingxi/db db:migrate
 
 # 6. Google OAuth Console 加 prod redirect URI
 #    https://app-lingxi-prod-gateway.azurewebsites.net/api/auth/google/callback

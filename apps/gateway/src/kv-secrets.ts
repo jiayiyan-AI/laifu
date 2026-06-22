@@ -84,19 +84,12 @@ export const KV_SECRETS = {
     consumers: ['gateway.env.RESEND_API_KEY'],
     seed: { kind: 'prompt', hint: 're_...' },
   },
-  'postmark-inbound-webhook-secret': {
+  'inbound-webhook-secret': {
     description:
-      '(当前 EMAIL_PROVIDER=resend, 未使用) Postmark inbound webhook Basic-Auth',
-    source: '自生成 / placeholder',
-    consumers: ['gateway.env.POSTMARK_INBOUND_WEBHOOK_SECRET'],
-    seed: { kind: 'placeholder', value: 'placeholder-fake' },
-  },
-  'postmark-server-token': {
-    description:
-      '(当前 EMAIL_PROVIDER=resend, 未使用) Postmark 发信 server token',
-    source: 'Postmark 控制台 / placeholder',
-    consumers: ['gateway.env.POSTMARK_SERVER_TOKEN'],
-    seed: { kind: 'placeholder', value: 'placeholder-fake' },
+      '入站 webhook Basic-Auth 共享密钥 (CF Email Worker ↔ gateway /api/email/inbound)',
+    source: '自生成',
+    consumers: ['gateway.env.INBOUND_WEBHOOK_SECRET'],
+    seed: { kind: 'generate', cmd: 'openssl rand -hex 32' },
   },
 } as const satisfies Record<string, KvSecretSpec>;
 

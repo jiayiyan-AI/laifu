@@ -22,14 +22,32 @@ Email Routing 规则/Worker/destination 都是账号级资源,不支持跨账号
 npx wrangler whoami     # 必须能看到 uncagedai.org;若是别的账号(如测试号)先 wrangler login 切过去
 ```
 
-## 1. 配 GATEWAY_URL(入站回调的 URL 前缀,可配)
+## 1. 回调地址:默认走线上 +(可选)按收件人 override(KV)
 
-Worker POST 的完整地址 = `${GATEWAY_URL}/api/email/inbound`。由项目方提供 `GATEWAY_URL` 值
-(本地测=ngrok 隧道地址;固定环境=对应 gateway 域名)。设置方式三选一:
+Worker POST 的完整地址 = `${base}/api/email/inbound`,`base` 怎么定:
 
-- 部署时覆盖:`npx wrangler deploy --var GATEWAY_URL:https://xxx.ngrok-free.app`
-- 或改 `wrangler.toml` 里 `[vars] GATEWAY_URL`
-- 本地 `wrangler dev`:复制 `.dev.vars.example` → `.dev.vars` 填 `GATEWAY_URL`(可直接 `http://localhost:9000`)
+1. **默认 = 线上**:`wrangler.toml` 的 `[vars] GATEWAY_URL`(当前 = 云 dev gateway)。绝大多数收件人走这条。
+2. **(可选)个别测试收件人改投别处**:绑 KV 表 `ROUTES`,加一条 `to:<localpart> → 你的地址`。Worker 每封信先查 KV,**命中就走 override,否则走默认**。改 KV 即时生效,**不用重部署**,本地地址(ngrok 等)各人各填、不进 git。
+
+> **KV 是可选的**:不绑 ROUTES 也能正常部署(代码对缺省做空处理,一律走 `GATEWAY_URL`)。只有要用「按收件人改投」时才需要下面这步。
+
+```bash
+# 启用 override:建 KV namespace,把返回的 id 填进 wrangler.toml(取消 [[kv_namespaces]] 注释)后重新 deploy
+npx wrangler kv namespace create ROUTES
+
+# 把发给 devtest1@laifu.uncagedai.org 的信改投到你本地(ngrok 隧道→localhost:9000):
+npx wrangler kv key put --binding=ROUTES "to:devtest1" "https://你的.ngrok-free.app"
+# 撤回(该收件人恢复走线上):
+npx wrangler kv key delete --binding=ROUTES "to:devtest1"
+# 查看当前所有 override:
+npx wrangler kv key list --binding=ROUTES
+```
+
+> ⚠️ 注意两点:
+> - **用专属测试 localpart**(如 `devtest1`),别拿真用户邮箱名 —— override 期间那个真用户的信会被劫到你本地。
+> - 这些测试 localpart 得是**目标 gateway(你本地)DB 里真实存在的用户**(gateway 按 localpart 找人),本地先开通对应用户。
+>
+> 本地 `wrangler dev` 时 KV 走本地模拟(无需 namespace id);只在**部署版** worker 上 KV override 才作用于真入站。
 
 ## 2. 部署 Worker
 
@@ -38,7 +56,7 @@ cd infra/cloudflare-email-worker
 npm install
 # 入站密钥(值由项目方给,= gateway 的 inbound 密钥):
 echo '<INBOUND_WEBHOOK_SECRET>' | npx wrangler secret put INBOUND_WEBHOOK_SECRET
-npx wrangler deploy        # 或带 --var GATEWAY_URL:... (见上)
+npx wrangler deploy
 ```
 
 ## 3. Cloudflare Email Routing(子域 laifu.uncagedai.org)
