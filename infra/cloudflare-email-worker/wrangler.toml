@@ -5,7 +5,7 @@ compatibility_date = "2026-01-01"
 # GATEWAY_URL = 入站回调的【默认】URL 前缀(线上)。Worker POST 到 `${GATEWAY_URL}/api/email/inbound`。
 # 个别测试收件人想改投到别处(如某人本地 ngrok)→ 不动这里,往 KV 加一条 override(见下)。
 [vars]
-GATEWAY_URL = "https://app-lingxi-dev-gateway.azurewebsites.net"
+GATEWAY_URL = "https://laifu.uncagedai.org"
 
 # ROUTES(可选)= 入站回调 override 表。**不绑也能部署** —— worker 代码对 ROUTES 缺省做空处理,一律走 GATEWAY_URL。
 # 想启用「按收件人改投」(测试/本地调试)再绑:
