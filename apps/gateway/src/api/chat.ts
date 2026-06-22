@@ -8,8 +8,10 @@ import {
   subscribeLoop,
   unsubscribeLoop,
   emitLoopEvent,
+  waitLoopTerminal,
   HARD_DEADLINE_MS,
 } from '../lib/pending-loops.js';
+import { tryReserveThread, releaseThread } from '../lib/thread-inflight.js';
 import { log } from '../lib/logger.js';
 import { classifyMessage, runIntercept, type SlashAction } from '../lib/slash-filter.js';
 
@@ -92,20 +94,30 @@ export const buildChatRouter = (
       });
     }
 
+    // 2.6 web 并发兜底: 同 thread 已有 loop 在跑 → 拒(reject-not-queue, 详见 lib/thread-inflight.ts)。
+    //     前端 disabled 只挡单标签; 这里兜多标签/多设备/直连 API/reload 竞态。
+    if (!tryReserveThread(thread_id)) {
+      return res.status(409).json({ error: 'busy', message: '正在处理上一条消息，请稍候。' });
+    }
+
     // 3. 插入 user 消息 + 创建 agent loop
     const userMsgId = genId.message;
     const loopId = genId.agentLoop;
-
-    await dao.messages.insert({
-      id: userMsgId,
-      thread_id,
-      role: 'user',
-      content_type: 'text',
-      content: message,
-      source: thread.source as 'web' | 'wechat',
-    });
-
-    await dao.agentLoops.create({ id: loopId, thread_id, message_id: userMsgId });
+    try {
+      await dao.messages.insert({
+        id: userMsgId,
+        thread_id,
+        role: 'user',
+        content_type: 'text',
+        content: message,
+        source: thread.source as 'web' | 'wechat',
+      });
+      await dao.agentLoops.create({ id: loopId, thread_id, message_id: userMsgId });
+    } catch (e) {
+      // insert/create 抛错时 loop 尚未注册(storePendingLoop 在后), 无终态信号 → 显式释放占用。
+      releaseThread(thread_id);
+      throw e;
+    }
 
     // 4. 异步 dispatch（只等 202 ack）
     const sessionId = `${thread.source}:${thread_id}`;
@@ -124,6 +136,9 @@ export const buildChatRouter = (
         },
       },
     );
+    // loop 终态(成功 / dispatch-fail emit / deadline)统一释放 thread 占用。必须在 storePendingLoop
+    // 之后订阅: 此前 loop 未注册, subscribeLoop 会返回已关闭流而立即误释放。
+    void waitLoopTerminal(loopId).then(() => releaseThread(thread_id));
     const dispatch = await dispatchHermesChat({
       containerUrl: mapping.container_url,
       userId,

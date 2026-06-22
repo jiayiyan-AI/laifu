@@ -133,7 +133,12 @@ export const Conversation = ({ threadId }: Props) => {
         connectLoop(resp.loop_id);
       }
     } catch (err) {
-      if (err instanceof api.QuotaError) {
+      if (err instanceof api.BusyError) {
+        // 服务端拒(同 thread 已有 loop 在跑, 多标签/直连竞态)。撤回这条未被接纳的消息(user+pending),
+        // 提示稍候; 用户可在当前轮结束后重发。
+        setMsgs((m) => m.slice(0, -2));
+        setErrorBanner(err.message);
+      } else if (err instanceof api.QuotaError) {
         setQuotaError(true);
         setMsgs((m) => m.slice(0, -2));
         refreshUsage();

@@ -1,11 +1,14 @@
 // http.ts — HTTP 路由 handler (Request → Response, Bun.serve 形态)
 //
 // 暴露一个 `handle(req)` 给 index.ts 装到 Bun.serve.fetch 上。
-// 内部按 method + pathname 分发到 4 个子 handler:
-//   GET    /health   → 200 {status:"ok"}
-//   GET    /history  → 200 {messages:[{role,content,ts}]}
-//   POST   /chat     → 同步: 200 + reply / 异步: 202 + 后台跑
-//   DELETE /session  → 200 {ok, deleted, hermes_session_id?} (清掉 hermes state.db 里的 session)
+// 内部按 method + pathname 分发到 5 个子 handler:
+//   GET    /health      → 200 {status:"ok"}  (ACA probe 用, 不校 Bearer)
+//   GET    /history     → 200 {messages:[{role,content,ts}]}
+//   POST   /chat        → 同步: 200 + reply / 异步: 202 + 后台跑
+//   POST   /inbox/image → 200 {path, size, content_type}  (streaming 收微信图片, 见 inbox.ts)
+//   DELETE /session     → 200 {ok, deleted, hermes_session_id?} (清掉 hermes state.db 里的 session)
+//
+// 除 /health 外, 4 个业务端点统一过 requireBearer (auth.ts) 校验 LAIFU_USER_TOKEN。
 //
 // /history 和 /session 直接组合 session-map + state-db / hermes-proc,
 // 不在 state-db 里耦合; state-db 保持纯 SQLite。
@@ -21,8 +24,10 @@ import {
 } from './config.ts';
 import { getHermesId, delHermesId } from './session-map.ts';
 import { loadMessagesByUuid } from './state-db.ts';
-import { cleanReply, runHermes } from './hermes-proc.ts';
+import { cleanReply, runHermes, hermesSubprocessBaseEnv } from './hermes-proc.ts';
 import { callHermes, asyncChatAndCallback } from './chat.ts';
+import { requireBearer } from './auth.ts';
+import { handleInboxImage } from './inbox.ts';
 
 // `hermes sessions delete` 是纯 SQLite 操作 (state.db 里 sessions/messages 几条 UPDATE),
 // 正常 < 1s; 15s 上限只防 state.db 被 hermes writer 长锁的极端情况。
@@ -31,8 +36,14 @@ const SESSION_DELETE_TIMEOUT_MS = 15_000;
 export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
   if (req.method === 'GET' && url.pathname === '/health') return handleHealth();
+
+  // 业务端点统一 Bearer 校验 (/health 留给 ACA probe 不校, 见 auth.ts)
+  const denied = requireBearer(req);
+  if (denied) return denied;
+
   if (req.method === 'GET' && url.pathname === '/history') return handleHistory(url);
   if (req.method === 'POST' && url.pathname === '/chat') return handleChat(req);
+  if (req.method === 'POST' && url.pathname === '/inbox/image') return handleInboxImage(req);
   if (req.method === 'DELETE' && url.pathname === '/session') return handleDeleteSession(url);
   return Response.json({ error: 'not found' }, { status: 404 });
 }
@@ -134,11 +145,11 @@ async function handleDeleteSession(url: URL): Promise<Response> {
 
   try {
     // `hermes sessions delete <id> --yes` — 跟 chat 同走 runHermes (detached + 进程组),
-    // 操作很轻量但用同一条路径方便日志/超时一致。无需 buildSubprocessEnv (那是给 chat
-    // 准备 yolo / dynamic prompt 的, 跟 sessions 子命令无关)。
+    // 操作很轻量但用同一条路径方便日志/超时一致。env 用 hermesSubprocessBaseEnv (抹掉
+    // GATEWAY_SECRET); 无需 buildSubprocessEnv 那套 yolo / provider 映射 (跟 sessions 子命令无关)。
     const { exitCode, stderr, timedOut } = await runHermes(
       ['sessions', 'delete', uuid, '--yes'],
-      process.env,
+      hermesSubprocessBaseEnv(),
       SESSION_DELETE_TIMEOUT_MS,
     );
     if (timedOut) {

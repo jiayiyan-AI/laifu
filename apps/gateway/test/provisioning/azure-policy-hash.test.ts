@@ -50,3 +50,32 @@ describe('buildSpec gateway-secret 注入', () => {
     expect(env?.secretRef).toBe('gateway-secret');
   });
 });
+
+// provider/model/base_url 统一从 ACA spec env 注入 (单一事实源), 容器 renderConfigYaml +
+// buildSubprocessEnv 直接读, 不再走 runtime-config HTTP / .runtime_env 中转。
+describe('buildSpec 通用 LLM env 注入 (provider/model/base_url)', () => {
+  const USER = '11111111-2222-3333-4444-555555555555';
+  const envOf = (name: string) =>
+    buildSpec(USER, 'tok').template?.containers?.[0]?.env?.find((e) => e.name === name);
+
+  it('HERMES_PROVIDER / HERMES_MODEL / HERMES_BASE_URL / HERMES_VISION_MODEL 以明文 value 注入 (非 secret)', () => {
+    for (const name of ['HERMES_PROVIDER', 'HERMES_MODEL', 'HERMES_BASE_URL', 'HERMES_VISION_MODEL']) {
+      const env = envOf(name);
+      expect(env, `${name} 应注入`).toBeDefined();
+      expect(typeof env?.value).toBe('string');
+      expect(env?.value!.length).toBeGreaterThan(0);
+      expect(env?.secretRef).toBeUndefined();
+    }
+  });
+
+  it('HERMES_API_KEY 仍走 secretRef (key 不落明文 / 不写 NFS)', () => {
+    const env = envOf('HERMES_API_KEY');
+    expect(env?.secretRef).toBe('hermes-api-key');
+    expect(env?.value).toBeUndefined();
+  });
+
+  it('是 policy 字段: 哨兵空 token 下仍注入 (进哈希 → 部署后存量用户 reconcile)', () => {
+    const env = buildSpec(USER, '').template?.containers?.[0]?.env?.find((e) => e.name === 'HERMES_PROVIDER');
+    expect(env?.value).toBeDefined();
+  });
+});

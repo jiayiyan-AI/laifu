@@ -7,6 +7,7 @@
 #      - refresh-token.ts        LAIFU_USER_TOKEN 续签 (<7d 才换)
 #      - pull-runtime-config.ts  拉 /api/me/runtime-config 渲染 config.yaml
 #      - sync-entitlements.ts    拉 /api/me/entitlements 软链 skill + 上报 observed
+#      - sweep-cache.ts          清 ~/.hermes/cache 里 7 天前的微信附件 + 空目录
 #   3. PID-1 handoff: exec "$@" 把进程让给 bun /app/server/index.ts (来自 Dockerfile CMD)
 #
 # 注: ACA no_new_privs=true 禁 sudo, 主容器用不了 root; subPath 子目录 owner
@@ -54,13 +55,6 @@ bun "$SCRIPTS/bootstrap.ts" || echo "[entrypoint] bootstrap errored, continuing 
 if [ -z "${LAIFU_USER_TOKEN:-}" ] && [ -f "$HOME_DIR/.hermes/.laifu_user_token" ]; then
   export LAIFU_USER_TOKEN="$(cat "$HOME_DIR/.hermes/.laifu_user_token")"
   echo "[entrypoint] loaded LAIFU_USER_TOKEN from token file (env was empty)"
-fi
-
-# source runtime env (provider/model) 供 server.ts 读取
-if [ -f "$HOME_DIR/.hermes/.runtime_env" ]; then
-  set -a
-  . "$HOME_DIR/.hermes/.runtime_env"
-  set +a
 fi
 
 # ============ Step 3: 启动主进程 ============

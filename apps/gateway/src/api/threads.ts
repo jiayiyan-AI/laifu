@@ -6,7 +6,6 @@ import { log } from '../lib/logger.js';
 
 export const buildThreadsRouter = (
   sessionMw: RequestHandler,
-  fetchImpl?: typeof fetch,
 ): RouterType => {
   const r = Router();
 
@@ -66,7 +65,6 @@ export const buildThreadsRouter = (
         threadId,
         source: thread.source,
         sessionId,
-        fetchImpl,
       });
       if (!result.ok) {
         // 不阻断: 让 DB 删继续, 容器侧残留交后台兜底 / 下次 thread 重建时自然覆盖。

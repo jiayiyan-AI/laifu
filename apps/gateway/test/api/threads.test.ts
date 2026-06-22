@@ -33,12 +33,12 @@ describe('threads CRUD', () => {
     vi.mocked(dao.cache.get).mockReturnValue(null);
   });
 
-  const makeApp = (fetchImpl?: typeof fetch) => {
+  const makeApp = () => {
     const app = express();
     app.use(cookieParser());
     app.use(express.json());
     const mw = requireSession({ secret: SECRET, cookieName: COOKIE_NAME });
-    app.use(buildThreadsRouter(mw, fetchImpl));
+    app.use(buildThreadsRouter(mw));
     return app;
   };
 
@@ -116,7 +116,8 @@ describe('threads CRUD', () => {
       vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
       vi.mocked(dao.cache.get).mockReturnValue({ ...readyMapping, status: 'provisioning' });
       const fetchSpy = vi.fn();
-      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+      vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+      const res = await request(makeApp())
         .delete('/api/threads/thr_1')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);
@@ -131,7 +132,8 @@ describe('threads CRUD', () => {
         JSON.stringify({ ok: true, deleted: true, hermes_session_id: 'sess_xyz' }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       ));
-      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+      vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+      const res = await request(makeApp())
         .delete('/api/threads/thr_1')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);
@@ -146,7 +148,8 @@ describe('threads CRUD', () => {
       vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue(ownedThread);
       vi.mocked(dao.cache.get).mockReturnValue(readyMapping);
       const fetchSpy = vi.fn(async () => { throw new Error('econnrefused'); });
-      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+      vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+      const res = await request(makeApp())
         .delete('/api/threads/thr_1')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);
@@ -160,7 +163,8 @@ describe('threads CRUD', () => {
         JSON.stringify({ error: 'hermes sessions delete exit 1' }),
         { status: 500, headers: { 'content-type': 'application/json' } },
       ));
-      const res = await request(makeApp(fetchSpy as unknown as typeof fetch))
+      vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+      const res = await request(makeApp())
         .delete('/api/threads/thr_1')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);

@@ -56,7 +56,7 @@ export const config = {
     // ⚠️ 镜像版本写死在代码里 (不走 env), 因为改 tag 本就必须连带部署 gateway 才能触发 reconcile
     //   (gateway 启动算 policyHashFor 才会拉齐存量用户)。写死 → 进 git 可 review/revert、零跨文件漂移。
     //   bump 镜像: 改这一行 hermes:vN (单调递增, 禁用 :latest) + 部署 gateway。详见 dynamic-update-aca.md §5.2。
-    hermesImageTag: 'hermes:v12',
+    hermesImageTag: 'hermes:v18',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
@@ -65,8 +65,14 @@ export const config = {
     // LLM API key 不再走 gateway 进程: 真值常驻 KV (secret hermes-api-key), ACA 控制面
     // 带 user-assigned identity 直接拉; gateway 自己根本不接触明文。
     hermesProvider: process.env['HERMES_PROVIDER'] ?? 'alibaba',
-    hermesModel: process.env['HERMES_MODEL'] ?? 'qwen3-coder-plus',
+    hermesModel: process.env['HERMES_MODEL'] ?? 'qwen3.7-max',
     hermesBaseUrl: process.env['HERMES_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    // HERMES_VISION_MODEL: 主模型不吃原生图时, auxiliary.vision 走的专用 VL 模型名 (alibaba=qwen-vl-max)。
+    //   容器 renderConfigYaml 把它写进 config.yaml auxiliary.vision.model; 端点+key 仍由 env
+    //   DASHSCOPE_BASE_URL/DASHSCOPE_API_KEY 提供 (绝不写 base_url, 否则被强制 custom→401)。
+    //   改 VL 模型只需改这里 + 重部署 gateway, 不必 rebuild hermes 镜像 (旧硬编码映射已从容器删)。
+    //   置空 = 不配 auxiliary.vision (主模型本身吃图的 provider 走 native)。
+    hermesVisionModel: process.env['HERMES_VISION_MODEL'] ?? 'qwen-vl-max',
     // User-assigned identity bicep 提前建好, ACA 绑它来读 KV hermes-api-key。
     //   resourceId: /subscriptions/.../userAssignedIdentities/id-hermes-<env>
     //               同时用于 ACA template.identity 绑定 + secrets[].identity 引用

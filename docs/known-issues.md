@@ -59,6 +59,7 @@ gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通
 #### 不要做的
 
 - 在 `aca-call.ts` 里调 `/chat` 前先打 `/health` probe 预热 — 让所有请求多一次 RTT, 得不偿失。之前试过又回滚, 冷启动判断改成 join `ContainerAppSystemLogs_CL` 的 scaler 事件, 见 `docs/observability.md`。
+  - **例外 (2026-06, 微信图片附件)**: files 链路 (`container-warm-cache.ts` 的 `ensureContainerWarm`) **有图时**会先 `GET /health` 唤醒再开 streaming pipeline。原因不同于上面的"省 RTT": files 把 CDN 连接挂在冷启动窗口里, 微信 CDN ~30-60s idle timeout 必 RST 整张图作废, 所以必须先唤醒。text `/chat` 路径**仍不加 probe**, 本条结论不变。详见 `docs/todo/weichat-file-impl.md` §3.7。
 
 
 ---

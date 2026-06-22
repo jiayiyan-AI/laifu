@@ -161,13 +161,21 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
           name: 'hermes',
           image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
           resources: { cpu: 1, memory: '2Gi' },
-          // 创建时一次性快照的 env (其余动态配置走 /api/me/runtime-config pull):
-          //   HERMES_API_KEY: ACA secret (KV reference), 容器内做 LLM 鉴权
-          //   GATEWAY_BASE_URL: 容器 entrypoint 拉 runtime-config / entitlements / 续 token 的入口
+          // 创建时一次性快照的 env —— provider/model/base_url + LLM key 的单一事实源:
+          //   HERMES_API_KEY:  ACA secret (KV reference), 容器内做 LLM 鉴权; 全程 secretRef 不落盘。
+          //   HERMES_PROVIDER/HERMES_MODEL/HERMES_BASE_URL/HERMES_VISION_MODEL: 通用名。容器 renderConfigYaml
+          //     读它们写 config.yaml (VISION_MODEL→auxiliary.vision.model); buildSubprocessEnv 读前三个派生
+          //     hermes 专属名 (alibaba→DASHSCOPE_* 等)。dev 由 dev-hermes.sh --env-file 注同名 → prod/dev
+          //     注入对称, generic→专属映射只在容器一处; 改 VL 模型只动 gateway, 不必 rebuild 镜像。
+          //   GATEWAY_BASE_URL: 容器 entrypoint 拉 entitlements / 续 token / prompts 的入口。
           //   LAIFU_USER_TOKEN: per-user 现签凭据, 算哈希时为哨兵空值 (排除), apply 时为真 token (reconcile 永不丢)。
-          //   GATEWAY_SECRET: gateway-secret (KV reference), 容器侧验签 LAIFU_USER_TOKEN 用;
+          //   GATEWAY_SECRET: gateway-secret (KV reference), 容器侧验签 LAIFU_USER_TOKEN 用 (不下放给 hermes 子进程, 见 hermes-proc.ts)。
           env: [
             { name: 'HERMES_API_KEY', secretRef: 'hermes-api-key' },
+            { name: 'HERMES_PROVIDER', value: config.azure.hermesProvider },
+            { name: 'HERMES_MODEL', value: config.azure.hermesModel },
+            { name: 'HERMES_BASE_URL', value: config.azure.hermesBaseUrl },
+            { name: 'HERMES_VISION_MODEL', value: config.azure.hermesVisionModel },
             { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
             { name: 'LAIFU_USER_TOKEN', value: token },
             { name: 'GATEWAY_SECRET', secretRef: GATEWAY_SECRET },

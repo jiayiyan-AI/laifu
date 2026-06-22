@@ -13,6 +13,7 @@ import type { HermesCallbackPayload, HermesCallbackResult } from '@lingxi/shared
 import { genId } from '@lingxi/db';
 import { dao } from '../db/index.js';
 import { touchHeartbeat, consumePendingLoop, emitLoopEvent } from '../lib/pending-loops.js';
+import { keepContainerWarm } from '../lib/container-warm-cache.js';
 import { log } from '../lib/logger.js';
 
 export interface CallbackRouterDeps {
@@ -42,6 +43,13 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     if (body.type === 'heartbeat') {
       touchHeartbeat(body.loop_id);
       emitLoopEvent(body.loop_id, { type: 'heartbeat' });
+      // 保活: 回敲容器 /health 产生一次入站流量, 重置 ACA scale-to-zero 冷却 (cooldown 300s >
+      // 心跳 120s)。否则长任务 (vision) 后台跑超 300s 时副本会被 KEDA SIGTERM, agent 半路夭折。
+      // fire-and-forget, 不阻塞心跳 ack。容器侧零改动。url 取内存缓存 (零 DB 查询)。
+      const mapping = dao.cache.get(userId);
+      if (mapping?.status === 'ready' && mapping.container_url) {
+        keepContainerWarm(userId, mapping.container_url);
+      }
       return res.json({ ok: true });
     }
 

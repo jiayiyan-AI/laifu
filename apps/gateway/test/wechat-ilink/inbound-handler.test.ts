@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('../../src/db/index.js', async () => {
   const { mockDaoModule } = await import('../helpers/mock-dao.js');
@@ -9,6 +9,21 @@ import { dao } from '../../src/db/index.js';
 import { makeHandleInbound, wechatReplyContexts } from '../../src/wechat-ilink/inbound-handler.js';
 import type { WechatBinding } from '../../src/db/wechat-binding-dao.js';
 import type { IlinkClient } from '../../src/wechat-ilink/client.js';
+import {
+  __whenDispatchedForTests,
+  __resetThreadSerializerForTests,
+} from '../../src/lib/thread-serializer.js';
+import {
+  __whenAggregatedForTests,
+  __resetThreadAggregatorForTests,
+} from '../../src/wechat-ilink/thread-aggregator.js';
+import { emitLoopEvent, __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
+
+/** 聚合层 + 串行车道两段 drain: 先 flush 窗口(→onFlush 进车道), 再等车道派发结算。 */
+const settle = async (): Promise<void> => {
+  await __whenAggregatedForTests();
+  await __whenDispatchedForTests();
+};
 
 const mockBinding = (overrides: Partial<WechatBinding> = {}): WechatBinding => ({
   id: 'bind_1',
@@ -37,6 +52,13 @@ const mockClient = (): IlinkClient => ({
   sendText: vi.fn(async () => {}),
 });
 
+// 装 mock fetch 到全局 (vitest unstubGlobals:true 每个测试后自动还原), 返回 spy 供断言。
+const stubFetch = (impl?: () => Promise<Response>): ReturnType<typeof vi.fn> => {
+  const f = vi.fn(impl);
+  vi.stubGlobal('fetch', f as unknown as typeof fetch);
+  return f;
+};
+
 describe('handleInbound', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,12 +76,19 @@ describe('handleInbound', () => {
     });
   });
 
+  afterEach(() => {
+    __resetThreadAggregatorForTests();
+    __resetThreadSerializerForTests();
+    __resetPendingLoopsForTests();
+  });
+
   it('happy path: 解析 → 建 thread → 插消息 → 创建 loop → dispatch 202', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const client = mockClient();
-    const handle = makeHandleInbound({ fetchImpl })(mockBinding(), client);
+    const handle = makeHandleInbound()(mockBinding(), client);
 
     await handle(validInbound('hello'));
+    await settle();
 
     // 建了 wechat thread
     expect(dao.threads.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -100,11 +129,12 @@ describe('handleInbound', () => {
   });
 
   it('binding.thread_id 已存在 → 复用,不建新 thread', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const binding = mockBinding({ thread_id: 'thr_existing' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound());
+    await makeHandleInbound()(binding, client)(validInbound());
+    await settle();
 
     expect(dao.threads.create).not.toHaveBeenCalled();
     expect(dao.wechatBindings.bindThread).not.toHaveBeenCalled();
@@ -114,13 +144,17 @@ describe('handleInbound', () => {
   });
 
   it('第二条消息复用 thread_id (in-memory 更新)', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const binding = mockBinding();
     const client = mockClient();
-    const handle = makeHandleInbound({ fetchImpl })(binding, client);
+    const handle = makeHandleInbound()(binding, client);
 
     await handle(validInbound('one'));
+    await settle();
+    const loop1 = vi.mocked(dao.agentLoops.create).mock.calls[0]![0].id;
+    emitLoopEvent(loop1, { type: 'done', reply: 'x', completion: 'success' });
     await handle(validInbound('two'));
+    await settle();
 
     expect(dao.threads.create).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -128,9 +162,9 @@ describe('handleInbound', () => {
   });
 
   it('parseInbound 返 null → 静默 return,不调 dispatch', async () => {
-    const fetchImpl = vi.fn();
+    const fetchImpl = stubFetch();
     const client = mockClient();
-    const handle = makeHandleInbound({ fetchImpl })(mockBinding(), client);
+    const handle = makeHandleInbound()(mockBinding(), client);
 
     await handle({ ...validInbound(), message_type: 2 });
 
@@ -140,11 +174,12 @@ describe('handleInbound', () => {
 
   it('容器没 ready → 发兜底文案 + 不调 dispatch', async () => {
     vi.mocked(dao.cache.get).mockReturnValue(null);
-    const fetchImpl = vi.fn();
+    const fetchImpl = stubFetch();
     const client = mockClient();
-    const handle = makeHandleInbound({ fetchImpl })(mockBinding(), client);
+    const handle = makeHandleInbound()(mockBinding(), client);
 
     await handle(validInbound());
+    await settle();
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
@@ -153,10 +188,11 @@ describe('handleInbound', () => {
   });
 
   it('dispatch 返非 202 → complete loop fail + 发兜底文案', async () => {
-    const fetchImpl = vi.fn(async () => new Response('err', { status: 500 }));
+    const fetchImpl = stubFetch(async () => new Response('err', { status: 500 }));
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(mockBinding(), client)(validInbound());
+    await makeHandleInbound()(mockBinding(), client)(validInbound());
+    await settle();
 
     expect(dao.agentLoops.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
     expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
@@ -165,11 +201,11 @@ describe('handleInbound', () => {
   });
 
   it('/new without args: creates fresh thread + bindThread + ack, no Hermes call', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const binding = mockBinding({ thread_id: 'thr_old' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/new'));
+    await makeHandleInbound()(binding, client)(validInbound('/new'));
 
     // 建了新 thread + bind 到 binding
     expect(dao.threads.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -189,11 +225,12 @@ describe('handleInbound', () => {
   });
 
   it('/new with args: creates fresh thread + dispatches args as first message', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const binding = mockBinding({ thread_id: 'thr_old' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/new 顺便问一下天气'));
+    await makeHandleInbound()(binding, client)(validInbound('/new 顺便问一下天气'));
+    await settle();
 
     // 建了新 thread
     expect(dao.threads.create).toHaveBeenCalled();
@@ -216,11 +253,11 @@ describe('handleInbound', () => {
   });
 
   it('non-/new intercept (e.g. /help): replies with gateway text, no Hermes', async () => {
-    const fetchImpl = vi.fn();
+    const fetchImpl = stubFetch();
     const binding = mockBinding({ thread_id: 'thr_x' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/help'));
+    await makeHandleInbound()(binding, client)(validInbound('/help'));
 
     expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringMatching(/灵犀可用指令/),
@@ -231,11 +268,11 @@ describe('handleInbound', () => {
   });
 
   it('non-/new reject (e.g. /model): replies with reject text, no Hermes', async () => {
-    const fetchImpl = vi.fn();
+    const fetchImpl = stubFetch();
     const binding = mockBinding({ thread_id: 'thr_x' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/model claude'));
+    await makeHandleInbound()(binding, client)(validInbound('/model claude'));
 
     expect(client.sendText).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringMatching(/模型由后端/),
@@ -245,11 +282,12 @@ describe('handleInbound', () => {
   });
 
   it('forward (unknown /<word>): falls through to normal dispatch', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    const fetchImpl = stubFetch(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     const binding = mockBinding({ thread_id: 'thr_x' });
     const client = mockClient();
 
-    await makeHandleInbound({ fetchImpl })(binding, client)(validInbound('/some-unknown-skill arg'));
+    await makeHandleInbound()(binding, client)(validInbound('/some-unknown-skill arg'));
+    await settle();
 
     // 走原流程 — 不建 thread (已有), 插 user msg (原文), 调 Hermes
     expect(dao.threads.create).not.toHaveBeenCalled();
@@ -261,13 +299,14 @@ describe('handleInbound', () => {
   });
 
   it('sendText 失败 → console.error 不抛 (循环不杀)', async () => {
-    const fetchImpl = vi.fn(async () => new Response('err', { status: 500 }));
+    const fetchImpl = stubFetch(async () => new Response('err', { status: 500 }));
     const client = {
       ...mockClient(),
       sendText: vi.fn(async () => { throw new Error('iLink down'); }),
     };
-    await expect(makeHandleInbound({ fetchImpl })(mockBinding(), client as any)(validInbound()))
+    await expect(makeHandleInbound()(mockBinding(), client as any)(validInbound()))
       .resolves.toBeUndefined();
+    await settle();
   });
 });
 

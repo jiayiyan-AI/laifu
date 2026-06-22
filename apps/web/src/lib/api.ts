@@ -42,6 +42,13 @@ export class QuotaError extends Error {
   }
 }
 
+export class BusyError extends Error {
+  constructor(message: string) {
+    super(message || '正在处理上一条消息，请稍候。');
+    this.name = 'BusyError';
+  }
+}
+
 const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
   const resp = await fetch(path, {
     credentials: 'include',
@@ -52,6 +59,10 @@ const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
   if (resp.status === 402) {
     const body = await resp.json().catch(() => ({}));
     throw new QuotaError(body);
+  }
+  if (resp.status === 409) {
+    const body = await resp.json().catch(() => ({}));
+    throw new BusyError((body as { message?: string }).message ?? '');
   }
   if (!resp.ok) throw new Error(`${path} → ${resp.status}`);
   return resp.json() as Promise<T>;

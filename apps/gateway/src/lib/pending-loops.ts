@@ -158,6 +158,23 @@ export const unsubscribeLoop = (loopId: string, stream: Stream<LoopEvent>): void
 };
 
 /**
+ * 等到某 loop 出终态 (done/fail)。复用 per-loop SSE 订阅做完成信号:
+ * 订阅时 loop 已终态 → subscribeLoop 返回已关闭 stream → for-await 立即结束 → 立即 resolve。
+ * deadline 兜底也会 emitLoopEvent('fail') 关流, 故绝不会永久挂起。
+ * 串行车道 (占道直到 loop 完成) 与 web/聚合 的 in-flight 释放都复用它。
+ */
+export const waitLoopTerminal = async (loopId: string): Promise<void> => {
+  const stream = subscribeLoop(loopId);
+  try {
+    for await (const ev of stream) {
+      if (ev.type === 'done' || ev.type === 'fail') return;
+    }
+  } finally {
+    unsubscribeLoop(loopId, stream);
+  }
+};
+
+/**
  * 向指定 loop 的所有订阅者推送事件。终态 (done/fail) 由 registry 在这里 dispose + 删 entry。
  */
 export const emitLoopEvent = (loopId: string, event: LoopEvent): void => {

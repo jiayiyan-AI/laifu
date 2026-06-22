@@ -75,13 +75,13 @@ cd docker/hermes && ACR_NAME=acrlingxi${ENV} IMAGE_TAG=vX ./build-and-push.sh
 
 ## 红线
 
+- 如果没有我的明示，做任何云上的部署，构建动作前，必须先征求我的同意
 - 不要把 `/home/hermes` 拆成多个挂载点 — Agent 用任意 CLI，逐个枚举挂不完。整盘挂是设计。
 - 不要给 ACA Environment 配 VNet / Private Endpoint，会产生 ~€2/天基础设施费。默认配置无此费用。
 - 不要在 hermes `server/*.ts` 里写阻塞 event loop 的同步重计算 — 单 event loop 模型, 长 CPU 任务会拖死 /health probe, 5 次失败被强杀。
 - App Service `Always On` 必须开，防 polling 进程被空闲回收。
 - 改 storage account 不能事后加 `isHnsEnabled`，是创建时一次性 flag，必须删 RG + purge KV 重建（dev 才能这么干）。
 - gateway system identity 必须同时拿 `Storage Account Contributor`（建 File Share）**和** `Storage Blob Data Owner`（签 User Delegation Key，云盘必需）。
-- Supabase 用的是**旧版 `service_role` JWT** (`eyJ...`)，不是新版 `sb_secret_*`。
 
 ## 语言
 
