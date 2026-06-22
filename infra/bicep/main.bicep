@@ -23,6 +23,12 @@ param hermesBaseUrl string = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 @description('部署执行者的 AAD Object ID (az ad signed-in-user show --query id -o tsv). 留空则跳过, 部署完得手动给自己授 Key Vault Secrets Officer.')
 param deployerObjectId string = ''
 
+@description('web 对外基础 URL (OAuth redirect / 前端链接). 留空=用 App Service 默认 *.azurewebsites.net 域名; prod 自定义域填 https://laifu.uncagedai.org')
+param webBaseUrl string = ''
+
+@description('邮件域 (助手邮箱 + Resend 出站 + CF 入站 catch-all). 默认 laifu.uncagedai.org; prod 用 mail.laifu.uncagedai.org')
+param emailDomain string = 'laifu.uncagedai.org'
+
 // ─────────── 资源命名 ───────────
 var rgSuffix = '${namePrefix}-${env}'
 var caeName = 'cae-${rgSuffix}'
@@ -369,8 +375,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     PORT: '8080'
     WEB_DIST_PATH: '/home/site/wwwroot/web-dist'
     PROMPTS_DIR: '/home/site/wwwroot/prompts'
-    PUBLIC_BASE_URL: 'https://${appService.properties.defaultHostName}'
-    FRONTEND_BASE_URL: 'https://${appService.properties.defaultHostName}'
+    PUBLIC_BASE_URL: empty(webBaseUrl) ? 'https://${appService.properties.defaultHostName}' : webBaseUrl
+    FRONTEND_BASE_URL: empty(webBaseUrl) ? 'https://${appService.properties.defaultHostName}' : webBaseUrl
 
     PROVISIONER: 'azure'
     AZURE_SUBSCRIPTION_ID: subscription().subscriptionId
@@ -405,10 +411,10 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
 
     // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
-    // 子域 laifu.uncagedai.org 已在 CF / Resend 验过 DKIM+SPF+Return-Path。
+    // 邮件域 = emailDomain 参数 (prod=mail.laifu.uncagedai.org), 需在 CF Email Routing + Resend 验过 DKIM+SPF+DMARC。
     // RESEND_API_KEY 真值在 KV(下方 reference);改 key 后需 `az webapp config appsettings set KV_REFRESH_TRIGGER=...` 触发 re-resolve。
     EMAIL_PROVIDER: 'resend'
-    EMAIL_DOMAIN: 'laifu.uncagedai.org'
+    EMAIL_DOMAIN: emailDomain
     EMAIL_FROM_DEFAULT_NAME: '灵犀助理'
     // 入站 webhook 共享密钥 (CF Email Worker 与 gateway 共用)。
     INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=inbound-webhook-secret)'
