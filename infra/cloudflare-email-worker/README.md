@@ -22,15 +22,17 @@ Email Routing 规则/Worker/destination 都是账号级资源,不支持跨账号
 npx wrangler whoami     # 必须能看到 uncagedai.org;若是别的账号(如测试号)先 wrangler login 切过去
 ```
 
-## 1. 回调地址:默认走线上 + 按收件人 override(KV)
+## 1. 回调地址:默认走线上 +(可选)按收件人 override(KV)
 
 Worker POST 的完整地址 = `${base}/api/email/inbound`,`base` 怎么定:
 
 1. **默认 = 线上**:`wrangler.toml` 的 `[vars] GATEWAY_URL`(当前 = 云 dev gateway)。绝大多数收件人走这条。
-2. **个别测试收件人改投别处**:往 KV 表 `ROUTES` 加一条 `to:<localpart> → 你的地址`。Worker 每封信先查 KV,**命中就走 override,否则走默认**。改 KV 即时生效,**不用重部署**,本地地址(ngrok 等)各人各填、不进 git。
+2. **(可选)个别测试收件人改投别处**:绑 KV 表 `ROUTES`,加一条 `to:<localpart> → 你的地址`。Worker 每封信先查 KV,**命中就走 override,否则走默认**。改 KV 即时生效,**不用重部署**,本地地址(ngrok 等)各人各填、不进 git。
+
+> **KV 是可选的**:不绑 ROUTES 也能正常部署(代码对缺省做空处理,一律走 `GATEWAY_URL`)。只有要用「按收件人改投」时才需要下面这步。
 
 ```bash
-# 首次:建 KV namespace,把返回的 id 填进 wrangler.toml 的 [[kv_namespaces]] id=
+# 启用 override:建 KV namespace,把返回的 id 填进 wrangler.toml(取消 [[kv_namespaces]] 注释)后重新 deploy
 npx wrangler kv namespace create ROUTES
 
 # 把发给 devtest1@laifu.uncagedai.org 的信改投到你本地(ngrok 隧道→localhost:9000):

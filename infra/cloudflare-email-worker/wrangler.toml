@@ -7,16 +7,15 @@ compatibility_date = "2026-01-01"
 [vars]
 GATEWAY_URL = "https://app-lingxi-dev-gateway.azurewebsites.net"
 
-# ROUTES = 入站回调 override 表。key = `to:<localpart>`,value = 该收件人专用的 gateway base URL。
-# Worker 每封信先查 KV:命中 → 走 override(测试/本地调试);未命中 → 走上面的 GATEWAY_URL。
-# 改 KV 即时生效,无需重部署;本地地址各人各填,不进 git。
-#   首次创建: npx wrangler kv namespace create ROUTES  → 把返回的 id 填到下面 id=
-#   加:       npx wrangler kv key put --binding=ROUTES "to:devtest1" "https://你的.ngrok-free.app"
-#   删:       npx wrangler kv key delete --binding=ROUTES "to:devtest1"
-#   列:       npx wrangler kv key list --binding=ROUTES
-[[kv_namespaces]]
-binding = "ROUTES"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+# ROUTES(可选)= 入站回调 override 表。**不绑也能部署** —— worker 代码对 ROUTES 缺省做空处理,一律走 GATEWAY_URL。
+# 想启用「按收件人改投」(测试/本地调试)再绑:
+#   1. npx wrangler kv namespace create ROUTES        → 拿到 id
+#   2. 取消下面三行注释, 填 id, 重新 deploy
+#   3. npx wrangler kv key put --binding=ROUTES "to:devtest1" "https://你的.ngrok-free.app"  (删=delete, 列=list)
+# 改 KV 即时生效, 无需重部署; 本地地址各人各填, 不进 git。
+# [[kv_namespaces]]
+# binding = "ROUTES"
+# id = "<namespace id>"
 
 # INBOUND_WEBHOOK_SECRET 是机密,不写这里:
 #   - 部署:wrangler secret put INBOUND_WEBHOOK_SECRET [--env test]
@@ -34,6 +33,7 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 name = "lingxi-email-worker-test"
 vars = { GATEWAY_URL = "https://REPLACE-临时测试地址" }   # 兜底值;实际以 --var 为准
 
-[[env.test.kv_namespaces]]
-binding = "ROUTES"
-id = "REPLACE_WITH_TEST_KV_ID"   # npx wrangler kv namespace create ROUTES --env test 后填
+# (可选) test 环境的 ROUTES override, 同样不绑也能部署:
+# [[env.test.kv_namespaces]]
+# binding = "ROUTES"
+# id = "<npx wrangler kv namespace create ROUTES --env test 后的 id>"
