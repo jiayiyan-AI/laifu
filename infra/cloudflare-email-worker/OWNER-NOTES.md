@@ -19,7 +19,7 @@
 | `EMAIL_PROVIDER` | `resend` ✅已配 | `resend` |
 | `EMAIL_DOMAIN` | `laifu.uncagedai.org` ✅已配 | `laifu.uncagedai.org` |
 | `RESEND_API_KEY` | 待填 | KV `resend-api-key` |
-| `POSTMARK_INBOUND_WEBHOOK_SECRET` | ✅已配(= Worker 的 INBOUND_WEBHOOK_SECRET) | KV `postmark-inbound-webhook-secret` |
+| `INBOUND_WEBHOOK_SECRET` | ✅已配(= Worker 的 INBOUND_WEBHOOK_SECRET) | KV `inbound-webhook-secret` |
 
 prod:改 `infra/bicep/main.bicep` 三值 + `az keyvault secret set resend-api-key` + 重启 App Service。
 

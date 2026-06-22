@@ -410,8 +410,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     EMAIL_PROVIDER: 'resend'
     EMAIL_DOMAIN: 'laifu.uncagedai.org'
     EMAIL_FROM_DEFAULT_NAME: '灵犀助理'
-    // 入站 webhook 共享密钥 (CF Email Worker 与 gateway 共用)。KV secret 名沿用历史命名, 值未变。
-    INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=postmark-inbound-webhook-secret)'
+    // 入站 webhook 共享密钥 (CF Email Worker 与 gateway 共用)。
+    INBOUND_WEBHOOK_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=inbound-webhook-secret)'
     RESEND_API_KEY: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=resend-api-key)'
     EMAIL_ATTACHMENT_CONTAINER: 'email-attachments'
   }
