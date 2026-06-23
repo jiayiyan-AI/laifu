@@ -14,6 +14,7 @@ import { FilesApp } from '../apps/files/FilesApp.js';
 import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
 import { useAssistantName } from '../states/assistant.atom.js';
+import { ToastHost } from './ToastHost.js';
 
 type AppId = DockAppId | 'im';
 
@@ -86,6 +87,7 @@ export const Desktop = () => {
     return (
       <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
         <Wallpaper />
+        <ToastHost />
         <Menubar />
         <div style={{ position: 'absolute', left: 0, right: 0, top: 26, bottom: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: 600, height: 480, background: 'rgba(255,255,255,0.95)', borderRadius: 12, overflow: 'hidden', boxShadow: '0 30px 80px rgba(0,0,0,0.34), 0 0 0 1px rgba(0,0,0,0.09)' }}>
@@ -99,6 +101,7 @@ export const Desktop = () => {
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
       <Wallpaper />
+      <ToastHost />
       <Menubar />
       <div style={{ position: 'absolute', left: 0, right: 0, top: 26, bottom: 0, zIndex: 10 }}>
         {openApps.map((id, i) => {
