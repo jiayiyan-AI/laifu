@@ -63,7 +63,7 @@ export const contextTokens = pgTable('context_tokens', {
 export const threads = pgTable('threads', {
   id: text('id').primaryKey(),
   user_id: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  source: text('source').notNull(), // 'web' | 'wechat'
+  source: text('source').notNull(), // 'web' | 'wechat' | 'feishu'
   title: text('title'),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
@@ -85,6 +85,23 @@ export const wechatBindings = pgTable('wechat_bindings', {
   bound_at: timestamp('bound_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index('idx_wechat_bindings_active').on(t.is_active).where(sql`is_active = true`),
+]);
+
+// ── feishu_bindings ─────────────────────────────────────────────────────
+// 每用户 1 自建飞书 app(owner=该用户)。app_secret 明存,对齐 wechat_bindings.bot_token。
+export const feishuBindings = pgTable('feishu_bindings', {
+  id:            uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  user_id:       uuid('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
+  app_id:        text('app_id').notNull().unique(),
+  app_secret:    text('app_secret').notNull(),
+  domain:        text('domain').notNull().default('feishu'),
+  owner_open_id: text('owner_open_id').notNull(),
+  thread_id:     text('thread_id').references(() => threads.id, { onDelete: 'set null' }),
+  status:        text('status').notNull().default('pending_approval'),
+  is_active:     boolean('is_active').notNull().default(true),
+  bound_at:      timestamp('bound_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('idx_feishu_bindings_active').on(t.is_active).where(sql`is_active = true`),
 ]);
 
 // ── user_entitlements (0006) ────────────────────────────────────────────
@@ -199,7 +216,7 @@ export const userBalance = pgTable('user_balance', {
 // ── enums ──────────────────────────────────────────────────────────────────
 export const messageRoleEnum = pgEnum('message_role', ['user', 'assistant']);
 export const messageContentTypeEnum = pgEnum('message_content_type', ['text', 'json']);
-export const messageSourceEnum = pgEnum('message_source', ['web', 'wechat']);
+export const messageSourceEnum = pgEnum('message_source', ['web', 'wechat', 'feishu']);
 export const agentLoopCompletionEnum = pgEnum('agent_loop_completion', ['success', 'fail', 'limit']);
 
 // ── messages (chat 消息) ──────────────────────────────────────────────
