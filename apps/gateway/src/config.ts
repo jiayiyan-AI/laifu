@@ -99,6 +99,13 @@ export const config = {
     readSasTtlSeconds: parseInt(process.env['AZURE_STORAGE_READ_SAS_TTL_SECONDS'] ?? '300', 10),     // 5min
   },
 
+  feishu: {
+    // 总开关, off 时 gateway 不起飞书连接/不挂飞书路由。
+    enabled: process.env['FEISHU_ENABLED'] === 'true',
+    // 'feishu' | 'lark' — 决定 API endpoint 域名前缀。
+    domain: (process.env['FEISHU_DOMAIN'] ?? 'feishu') as 'feishu' | 'lark',
+  },
+
   email: {
     // 'fake' (dev) | 'resend' (MVP: 入站 CF Email Routing, 出站 Resend)。业务码不分支, 全靠 provider adapter。
     provider: (process.env['EMAIL_PROVIDER'] ?? 'fake') as 'fake' | 'resend',

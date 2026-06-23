@@ -414,6 +414,11 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
 
+    // 飞书渠道: 默认关闭。FEISHU_ENABLED=true 时 gateway 为每个 active 飞书绑定起一条 WS 长连接。
+    // 非敏感, 明文写死 (appid/secret 等敏感值后续再加 KV reference)。
+    FEISHU_ENABLED: 'false'
+    FEISHU_DOMAIN: 'feishu'
+
     // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
     // 邮件域 = emailDomain 参数 (prod=mail.laifu.uncagedai.org), 需在 CF Email Routing + Resend 验过 DKIM+SPF+DMARC。
     // RESEND_API_KEY 真值在 KV(下方 reference);改 key 后需 `az webapp config appsettings set KV_REFRESH_TRIGGER=...` 触发 re-resolve。
