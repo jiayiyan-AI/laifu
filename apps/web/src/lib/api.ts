@@ -21,6 +21,11 @@ import type {
   WechatQrPollResponse,
   WechatBindingInfoResponse,
   WechatUnbindResponse,
+  FeishuScanStartResponse,
+  FeishuScanPollResponse,
+  FeishuActivateResponse,
+  FeishuBindingInfoResponse,
+  FeishuUnbindResponse,
 } from '@lingxi/shared';
 
 export class AuthError extends Error {
@@ -199,6 +204,22 @@ export const getMyWechatBind = (): Promise<WechatBindingInfoResponse> =>
 
 export const unbindWechat = (): Promise<WechatUnbindResponse> =>
   json('/api/wechat/bind', { method: 'DELETE' });
+
+// === 飞书扫码绑定 ===
+export const feishuScanStart = (): Promise<FeishuScanStartResponse> =>
+  json('/api/feishu/bind/scan-start', { method: 'POST' });
+
+export const feishuScanPoll = (deviceCode: string): Promise<FeishuScanPollResponse> =>
+  json('/api/feishu/bind/scan-poll', { method: 'POST', body: JSON.stringify({ deviceCode }) });
+
+export const feishuActivate = (): Promise<FeishuActivateResponse> =>
+  json('/api/feishu/bind/activate', { method: 'POST' });
+
+export const getMyFeishuBind = (): Promise<FeishuBindingInfoResponse> =>
+  json('/api/feishu/bind');
+
+export const unbindFeishu = (): Promise<FeishuUnbindResponse> =>
+  json('/api/feishu/bind/unbind', { method: 'POST' });
 
 // === Cloud Drive (P4+P5) ===
 
