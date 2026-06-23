@@ -183,6 +183,42 @@ describe('storePendingLoop — hard deadline timer', () => {
   });
 });
 
+describe('POST /internal/hermes-callback — feishuReplier', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetPendingLoopsForTests();
+    vi.mocked(dao.agentLoops.recordResult).mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    __resetPendingLoopsForTests();
+  });
+
+  it('source=feishu 时调用 feishuReplier(threadId, reply)', async () => {
+    const feishuReplier = vi.fn(async () => {});
+    const app = express();
+    app.use(express.json());
+    app.use(buildCallbackRouter({ containerAuth: stubAuth, feishuReplier }));
+
+    storePendingLoop(
+      { loopId: 'lp_feishu', threadId: 'thr_feishu', userId: 'u1', source: 'feishu' },
+      { hardDeadlineMs: 60_000, onDeadline: async () => {} },
+    );
+
+    const res = await request(app)
+      .post('/internal/hermes-callback')
+      .set('x-test-user', 'u1')
+      .send(resultBody('lp_feishu', '飞书回复内容'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    // 给 fire-and-forget 一个 tick
+    await new Promise((r) => setTimeout(r, 10));
+    expect(feishuReplier).toHaveBeenCalledTimes(1);
+    expect(feishuReplier).toHaveBeenCalledWith('thr_feishu', '飞书回复内容');
+  });
+});
+
 describe('POST /internal/hermes-callback — 心跳保活回敲 /health', () => {
   beforeEach(() => {
     __resetPendingLoopsForTests();
