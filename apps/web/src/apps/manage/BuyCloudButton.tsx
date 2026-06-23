@@ -42,8 +42,7 @@ export const BuyCloudButton = ({ onReady }: { onReady: () => void }) => {
         cleanup();
         setPhase('timeout');
       }, EQUIP_TIMEOUT_MS);
-      // 首次 refetch 延一帧, 让 polling 弹窗先渲染(测试 fake timer 友好)
-      window.setTimeout(() => void refetch(), 0);
+      void refetch();
     } catch (err) {
       setPhase('failed');
       setErrorMsg(err instanceof Error ? err.message : String(err));

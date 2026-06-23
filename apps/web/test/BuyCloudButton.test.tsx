@@ -26,13 +26,16 @@ describe('BuyCloudButton', () => {
   it('confirm → polling shows blocking copy → observed flips → ✓ 已装备', async () => {
     vi.mocked(api.enableCloud).mockResolvedValue({ ok: true, entitlements: ['cloud'], changed: true });
     vi.mocked(api.status)
-      .mockResolvedValueOnce(statusWith([]))
-      .mockResolvedValue(statusWith(['cloud']));
+      .mockResolvedValueOnce(statusWith([]))   // 初始加载
+      .mockResolvedValueOnce(statusWith([]))   // handleEnable 后首次即时 refetch
+      .mockResolvedValue(statusWith(['cloud'])); // 轮询命中
 
     render(<WithStore><BuyCloudButton onReady={() => {}} /></WithStore>);
     fireEvent.click(screen.getByText('购买并装备'));
     await waitFor(() => expect(screen.getByText('确认购买并装备')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('确认购买并装备'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('确认购买并装备'));
+    });
 
     await waitFor(() => expect(screen.getByText(/正在装备到助理/)).toBeInTheDocument());
     expect(screen.getByText(/约需 1 分钟/)).toBeInTheDocument();
@@ -48,7 +51,9 @@ describe('BuyCloudButton', () => {
     render(<WithStore><BuyCloudButton onReady={() => {}} /></WithStore>);
     fireEvent.click(screen.getByText('购买并装备'));
     await waitFor(() => expect(screen.getByText('确认购买并装备')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('确认购买并装备'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('确认购买并装备'));
+    });
     await waitFor(() => expect(screen.getByText(/正在装备到助理/)).toBeInTheDocument());
 
     // 30s 时仍在装备 (旧的 30s 判死已删)

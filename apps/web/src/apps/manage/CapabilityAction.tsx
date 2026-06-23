@@ -51,8 +51,7 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
       setPhase('polling');
       intervalRef.current = window.setInterval(() => { void refetch(); }, POLL_INTERVAL_MS);
       timeoutRef.current = window.setTimeout(() => { cleanup(); setPhase('timeout'); }, EQUIP_TIMEOUT_MS);
-      // 首次 refetch 延一帧, 让 polling 弹窗先渲染
-      window.setTimeout(() => void refetch(), 0);
+      void refetch();
     } catch (err) {
       setPhase('failed');
       setErrorMsg(err instanceof Error ? err.message : String(err));
