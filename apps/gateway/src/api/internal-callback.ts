@@ -58,7 +58,7 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
 
     // 优先从内存取上下文（零查询），fallback 查 DB
     let threadId: string;
-    let source: 'web' | 'wechat';
+    let source: 'web' | 'wechat' | 'feishu';
     const cached = consumePendingLoop(body.loop_id);
 
     if (cached) {
@@ -79,7 +79,7 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
         return res.status(403).json({ error: 'thread ownership mismatch' });
       }
       threadId = loop.thread_id;
-      source = thread.source as 'web' | 'wechat';
+      source = thread.source as 'web' | 'wechat' | 'feishu';
     }
 
     // 确定 completion

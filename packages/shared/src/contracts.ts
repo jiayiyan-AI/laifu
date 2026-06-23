@@ -4,7 +4,7 @@
 export interface ContainerChatRequest {
   message: string;
   session_id: string;          // e.g. "web:thr_abc123" / "wechat:main"
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
   /** 带此字段 → 容器走异步 202 模式；不带 → 保留同步模式（向后兼容 + 测试） */
   callback?: { loop_id: string };
 }
@@ -184,7 +184,7 @@ export interface MessageRow {
   role: 'user' | 'assistant';
   content_type: 'text' | 'json';
   content: unknown;
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
   created_at: string;
 }
 

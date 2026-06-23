@@ -14,7 +14,7 @@ export interface MessageDao {
     role: 'user' | 'assistant';
     content_type?: 'text' | 'json';
     content: unknown;
-    source: 'web' | 'wechat';
+    source: 'web' | 'wechat' | 'feishu';
   }): Promise<void>;
   listByThread(threadId: string): Promise<MessageRow[]>;
 }

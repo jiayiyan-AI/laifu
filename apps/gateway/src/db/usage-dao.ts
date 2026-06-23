@@ -22,7 +22,7 @@ import { config } from '../config.js';
 export interface UsageInsertArgs {
   userId: string;
   threadId: string | null;
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
   usage: ContainerChatUsage;
 }
 
