@@ -32,7 +32,7 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
       try {
         const s = await api.status();
         if (!s) { setView({ mode: 'not-purchased' }); return; }
-        if (s.status === 'ready') { setView({ mode: 'ready' }); onReady(); return; }
+        if (s.status === 'ready') { setView({ mode: 'ready' }); void assistantActions.refresh(); onReady(); return; }
         if (s.status === 'failed') { setView({ mode: 'failed', err: s.error_message ?? '未知错误' }); return; }
         setView({ mode: 'provisioning', step: s.provisioning_step ?? '准备中…', pct: s.progress_pct });
       } catch (e) {
@@ -47,7 +47,7 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
       try {
         const s = await api.status();
         if (!s) return;
-        if (s.status === 'ready') { onReady(); setView({ mode: 'ready' }); return; }
+        if (s.status === 'ready') { void assistantActions.refresh(); onReady(); setView({ mode: 'ready' }); return; }
         if (s.status === 'failed') { setView({ mode: 'failed', err: s.error_message ?? '失败' }); return; }
         setView({ mode: 'provisioning', step: s.provisioning_step ?? '准备中…', pct: s.progress_pct });
       } catch { /* ignore tick errors */ }

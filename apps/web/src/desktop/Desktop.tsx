@@ -13,7 +13,7 @@ import { IMHub } from '../apps/im/IMHub.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
 import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
-import { useAssistantName } from '../states/assistant.atom.js';
+import { useAssistantName, DEFAULT_ASSISTANT_NAME } from '../states/assistant.atom.js';
 import { ToastHost } from './ToastHost.js';
 
 type AppId = DockAppId | 'im';
@@ -27,7 +27,7 @@ const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
 };
 
 const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: number }> = {
-  chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
+  chat:   { title: DEFAULT_ASSISTANT_NAME, icon: <IconSpark size={14} />,   w: 900, h: 600 },
   manage: { title: '我的助理', icon: <IconGrid size={14} />,    w: 780, h: 580 },
   im:     { title: 'IM 绑定', icon: <IconMessage size={14} />, w: 600, h: 480 },
   files:  { title: '文件',     icon: <IconFolder size={14} />,  w: 900, h: 600 },

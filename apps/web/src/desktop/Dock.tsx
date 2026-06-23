@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
 import { IconSpark, IconGrid, IconFolder } from '../lib/icons.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
-import { useAssistantName } from '../states/assistant.atom.js';
+import { useAssistantName, DEFAULT_ASSISTANT_NAME } from '../states/assistant.atom.js';
 
 export type DockAppId = 'chat' | 'manage' | 'files';
 
 interface AppDef { id: DockAppId; name: string; icon: ReactNode; c1: string; c2: string }
 
 const baseApps: AppDef[] = [
-  { id: 'chat',   name: '灵犀助理', icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
+  { id: 'chat',   name: DEFAULT_ASSISTANT_NAME, icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
   { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,  c1: '#3b82f6', c2: '#1d4ed8' },
 ];
 
