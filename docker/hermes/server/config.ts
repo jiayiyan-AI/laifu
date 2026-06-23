@@ -20,10 +20,22 @@ export const PORT: number = parseInt(process.env.PORT ?? '8080', 10);
 
 export const GATEWAY_BASE_URL: string = process.env.GATEWAY_BASE_URL ?? '';
 
+// 容器侧 Bearer 验签密钥 (gateway buildSpec 以 KV reference 注入)。
+// 空 = dev / 未注入 → http.ts requireBearer 放行 (见 auth.ts)。
+export const GATEWAY_SECRET: string = (process.env.GATEWAY_SECRET ?? '').trim();
+
+// 微信附件缓存 TTL (天)。entrypoint sweep + /inbox 落盘后 best-effort sweep 共用。
+export const INBOX_CACHE_TTL_DAYS: number = parseInt(process.env.INBOX_CACHE_TTL_DAYS ?? '7', 10);
+
 const HOME_DIR = process.env.HOME ?? '/home/hermes';
 export const SESSION_MAP_FILE = `${HOME_DIR}/.hermes/_gateway_session_map.json`;
 export const STATE_DB_PATH = `${HOME_DIR}/.hermes/state.db`;
 export const DYN_SYSTEM_PROMPT_FILE = `${HOME_DIR}/dynamic_prompts/system-prompt.md`;
+// 入站附件 (微信图片等) 落在 laifu-inbox/ —— 我们独占的子目录, 故意**不**复用 hermes
+// 自己的 cache/images (那里 vision 工具会丢下载图/生成图, 共享会被 TTL sweep 误杀)。
+// sweep 只扫 laifu-inbox/ 子树, 绝不碰 cache 其余部分。P2 的 file/voice/video 同级铺开。
+export const INBOX_ROOT_DIR = `${HOME_DIR}/.hermes/cache/laifu-inbox`;
+export const IMAGE_CACHE_DIR = `${INBOX_ROOT_DIR}/images`;
 const TOKEN_FILE = `${HOME_DIR}/.hermes/.laifu_user_token`;
 
 export const CALLBACK_MAX_RETRIES = 3;

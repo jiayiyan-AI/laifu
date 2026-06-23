@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseInbound } from '../../src/wechat-ilink/inbound.js';
 
-const baseMsg = (overrides: Record<string, any> = {}) => ({
+const baseMsg = (overrides: Record<string, unknown> = {}) => ({
   message_id: 'm1',
   message_type: 1,     // 1=user, 2=bot
   message_state: 0,    // 1=generating
@@ -11,14 +11,24 @@ const baseMsg = (overrides: Record<string, any> = {}) => ({
   ...overrides,
 });
 
+const imageItem = (over: Record<string, unknown> = {}) => ({
+  type: 2,
+  image_item: {
+    aeskey: '87e0b2320ddbb8dee3804ec8b48203e1',   // 32 hex chars = 16B
+    media: { full_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1' },
+    ...over,
+  },
+});
+
 describe('parseInbound', () => {
-  it('parses a normal text message', () => {
+  it('parses a normal text message into a text part', () => {
     const r = parseInbound(baseMsg());
     expect(r).toEqual({
       message_id: 'm1',
       from_user_id: 'wxid_friend',
       context_token: 'ctx_xyz',
-      text: '你好',
+      parts: [{ kind: 'text', text: '你好' }],
+      unsupported_hints: [],
     });
   });
 
@@ -35,35 +45,87 @@ describe('parseInbound', () => {
     expect(parseInbound(baseMsg({ item_list: [] }))).toBeNull();
   });
 
-  it('returns null when no text items (only voice/image/file)', () => {
-    expect(parseInbound(baseMsg({ item_list: [{ type: 3 }, { type: 4 }] }))).toBeNull();
+  it('parses an image item into an image part', () => {
+    const r = parseInbound(baseMsg({
+      item_list: [{
+        type: 2,
+        image_item: {
+          aeskey: '87e0b2320ddbb8dee3804ec8b48203e1',
+          media: {
+            full_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1',
+            content_type: 'image/png',
+          },
+          hd_size: 12345,
+        },
+      }],
+    }));
+    expect(r?.parts).toEqual([
+      {
+        kind: 'image',
+        aes_key_hex: '87e0b2320ddbb8dee3804ec8b48203e1',
+        download_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1',
+        content_type_hint: 'image/png',
+        size_hint: 12345,
+      },
+    ]);
+    expect(r?.unsupported_hints).toEqual([]);
   });
 
-  it('concats multiple text items', () => {
+  it('skips an image item missing aeskey or full_url', () => {
+    // 缺 full_url → 该 image 跳过, 只剩 text part
+    const r = parseInbound(baseMsg({
+      item_list: [
+        { type: 1, text_item: { text: 'hi' } },
+        { type: 2, image_item: { aeskey: '87e0b2320ddbb8dee3804ec8b48203e1', media: {} } },
+      ],
+    }));
+    expect(r?.parts).toEqual([{ kind: 'text', text: 'hi' }]);
+  });
+
+  it('keeps both text and image parts in a mixed message', () => {
+    const r = parseInbound(baseMsg({
+      item_list: [
+        { type: 1, text_item: { text: 'hello' } },
+        imageItem(),
+      ],
+    }));
+    expect(r?.parts.map((p) => p.kind)).toEqual(['text', 'image']);
+  });
+
+  it('concats multiple text items into separate parts', () => {
     const r = parseInbound(baseMsg({
       item_list: [
         { type: 1, text_item: { text: '第一段' } },
         { type: 1, text_item: { text: '第二段' } },
       ],
     }));
-    expect(r?.text).toBe('第一段第二段');
+    expect(r?.parts).toEqual([
+      { kind: 'text', text: '第一段' },
+      { kind: 'text', text: '第二段' },
+    ]);
   });
 
-  it('picks only text items when mixed with image', () => {
-    const r = parseInbound(baseMsg({
-      item_list: [
-        { type: 1, text_item: { text: 'hello' } },
-        { type: 2, image_item: { media: {} } },     // image, ignored MVP
-      ],
-    }));
-    expect(r?.text).toBe('hello');
+  it('records unsupported hints for voice/file/video and returns non-null', () => {
+    const r = parseInbound(baseMsg({ item_list: [{ type: 3 }, { type: 5 }] }));
+    expect(r?.parts).toEqual([]);
+    expect(r?.unsupported_hints).toEqual([
+      '语音消息暂不支持，请用文字描述。',
+      '视频消息暂不支持，目前仅支持图片。',
+    ]);
   });
 
-  it('returns null when all text items are empty strings', () => {
+  it('dedupes repeated unsupported hints', () => {
+    const r = parseInbound(baseMsg({ item_list: [{ type: 3 }, { type: 3 }] }));
+    expect(r?.unsupported_hints).toEqual(['语音消息暂不支持，请用文字描述。']);
+  });
+
+  it('returns null when all items yield nothing actionable', () => {
+    // empty text items + an unparseable image (no media) → no parts, no hints
     expect(parseInbound(baseMsg({
       item_list: [
         { type: 1, text_item: { text: '' } },
         { type: 1, text_item: {} },
+        { type: 2, image_item: {} },
       ],
     }))).toBeNull();
   });
@@ -77,7 +139,7 @@ describe('parseInbound', () => {
     expect(parseInbound(baseMsg({ from_user_id: '' }))).toBeNull();
   });
 
-  it('tolerates missing context_token (still parses,empty string)', () => {
+  it('tolerates missing context_token (still parses, empty string)', () => {
     const r = parseInbound(baseMsg({ context_token: undefined }));
     expect(r?.context_token).toBe('');
   });

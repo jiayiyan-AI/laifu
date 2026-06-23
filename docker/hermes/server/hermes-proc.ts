@@ -16,11 +16,86 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { HERMES_BIN, KILL_GRACE_MS, DYN_SYSTEM_PROMPT_FILE } from './config.ts';
 
+// ─── provider → hermes 实际读的 env 名 (generic HERMES_* → provider 专属名) ──────
+// 单一依据 = 镜像内 hermes-agent 源码 (pin 95715dcb):
+//   key 名     → plugins/model-providers/<provider>/__init__.py 的 env_vars[0]
+//   base_url 名 → hermes_cli/providers.py HERMES_OVERLAYS[<provider>].base_url_env_var
+// 通用名 (HERMES_PROVIDER/MODEL/BASE_URL + HERMES_API_KEY) 由 gateway buildSpec(prod) /
+// dev-hermes.sh --env-file(dev) 注入; 这层 generic→专属 翻译只在容器这一处, prod/dev 共用。
+//
+// ⚠ key 用**canonical provider id**, 不做 hermes 的 ALIASES 归一化 (那张表太大会漂)。
+//   故裸 "openai" 这种别名 (hermes 里 →openrouter 聚合器) **不收**: 要用就显式写 canonical id。
+const PROVIDER_KEY_MAP: Record<string, string> = {
+  alibaba: 'DASHSCOPE_API_KEY',
+  // coding-plan 首选 ALIBABA_CODING_PLAN_API_KEY, 但 env_vars 接受 DASHSCOPE_API_KEY 作 fallback,
+  // 而我们的 secret 就是 dashscope key, 故钉 DASHSCOPE_API_KEY (同一把 key 直接通用)。
+  'alibaba-coding-plan': 'DASHSCOPE_API_KEY',
+  alibaba_coding: 'DASHSCOPE_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  xai: 'XAI_API_KEY',
+  nvidia: 'NVIDIA_API_KEY',
+  novita: 'NOVITA_API_KEY',
+  huggingface: 'HF_TOKEN',
+  gmi: 'GMI_API_KEY',
+  stepfun: 'STEPFUN_API_KEY',
+};
+// base_url 覆盖 env: 仅 overlay 里声明了 base_url_env_var 的 provider 才有 (其余固定端点)。
+// 与 KEY_MAP **同一 provider 集**, 唯一缺 anthropic —— overlay 未给它 base_url_env_var
+// (固定端点), 这就是两表数量差 1 的全部原因 (有依据, 非随意)。
+const PROVIDER_BASE_URL_MAP: Record<string, string> = {
+  alibaba: 'DASHSCOPE_BASE_URL',
+  'alibaba-coding-plan': 'ALIBABA_CODING_PLAN_BASE_URL',
+  alibaba_coding: 'ALIBABA_CODING_PLAN_BASE_URL',
+  deepseek: 'DEEPSEEK_BASE_URL',
+  xai: 'XAI_BASE_URL',
+  nvidia: 'NVIDIA_BASE_URL',
+  novita: 'NOVITA_BASE_URL',
+  huggingface: 'HF_BASE_URL',
+  gmi: 'GMI_BASE_URL',
+  stepfun: 'STEPFUN_BASE_URL',
+};
+
+/**
+ * 纯函数: 由通用 HERMES_API_KEY/HERMES_BASE_URL + provider 派生 hermes 专属 env 名。
+ * key 走 provider 专属名 (alibaba→DASHSCOPE_API_KEY; 未知 provider 兜底 CUSTOM_API_KEY);
+ * base_url 仅 mapped provider 写 (其余靠 config.yaml model.base_url)。缺值各自跳过。
+ */
+export function providerEnvVars(provider: string, apiKey: string, baseUrl: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (apiKey) out[PROVIDER_KEY_MAP[provider] || 'CUSTOM_API_KEY'] = apiKey;
+  const baseUrlName = PROVIDER_BASE_URL_MAP[provider];
+  if (baseUrl && baseUrlName) out[baseUrlName] = baseUrl;
+  return out;
+}
+
 // ─── 子进程 env: 每次 chat 现读 dynamic system prompt 文件 ──────────
 // gateway 通过 /api/me/prompts/system-prompt.md 下发 → bootstrap.ts sync-prompts
 // 写到 DYN_SYSTEM_PROMPT_FILE → 现读现注 HERMES_EPHEMERAL_SYSTEM_PROMPT
-export async function buildSubprocessEnv(): Promise<NodeJS.ProcessEnv> {
+/**
+ * hermes 子进程的基础 env: 克隆 process.env 但抹掉 server 专属的跨租户密钥。
+ * GATEWAY_SECRET 是签发所有用户 LAIFU_USER_TOKEN 的对称主密钥, 只有 server 的 requireBearer
+ * 验签入站请求用; hermes CLI / agent 子进程一概不需要。盲传 process.env 会把它递给半受信的
+ * agent 代码 (bash/pnpm/skills) → 可伪造任意用户 token。chat 与 sessions 子命令共用此基础。
+ * (注: 同 UID 仍可读 /proc/1/environ, 这是纵深防御非硬边界; 硬边界需 secret 改文件投递。)
+ */
+export function hermesSubprocessBaseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.GATEWAY_SECRET;
+  return env;
+}
+
+export async function buildSubprocessEnv(): Promise<NodeJS.ProcessEnv> {
+  const env = hermesSubprocessBaseEnv();
+
+  // generic HERMES_* → hermes 专属 env 名 (alibaba→DASHSCOPE_API_KEY/BASE_URL)。注入源:
+  // prod=ACA spec env(buildSpec) / dev=--env-file; 翻译只在此一处。aux/vision 子代理读
+  // provider profile env (而非 config.yaml), 故必须在 env 里给到专属名。
+  Object.assign(env, providerEnvVars(
+    (process.env.HERMES_PROVIDER ?? '').trim(),
+    process.env.HERMES_API_KEY ?? '',
+    (process.env.HERMES_BASE_URL ?? '').trim(),
+  ));
 
   // 非交互执行: 这俩 env 是 hermes oneshot 模式 (-z) 自己也会设的,
   // 等价于 CLI flag --yolo + --accept-hooks, 但 env 覆盖更彻底

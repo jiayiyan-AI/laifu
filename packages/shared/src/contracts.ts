@@ -203,6 +203,16 @@ export interface WechatUnbindResponse {
   ok: true;
 }
 
+// === 微信附件 (P1: 图片) ===
+
+/** 微信附件在 hermes 容器内的引用 (临时缓存, 7 天 TTL)。 */
+export interface WechatAttachmentRef {
+  kind: 'image';                  // P2 扩 'file'|'voice'|'video'
+  cache_path: string;             // 容器内绝对路径, e.g. /home/hermes/.hermes/cache/images/img_xxx.jpg
+  content_type: string;           // image/jpeg | image/png | ...
+  size: number;                   // 解密后字节数
+}
+
 // === Cloud Drive 契约 (P0 起步，P1/P2 继续扩展) ===
 
 /**
@@ -286,10 +296,9 @@ export interface PromptsManifest {
   files: Record<string, string>;
 }
 
+// GET /api/me/runtime-config 的响应。provider/model/base_url 已迁到 ACA spec env
+// (azure.ts buildSpec, 容器直接读环境变量), 此端点只剩 prompts manifest 协商。
 export interface RuntimeConfig {
-  provider: string;                  // anthropic / openai / custom
-  model: string;
-  base_url: string | null;           // null 表示用 provider 默认 endpoint
   prompts_manifest: PromptsManifest;
 }
 

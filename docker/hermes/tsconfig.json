@@ -25,5 +25,5 @@
       "/opt/lingxi-scripts/*": ["./scripts/*"]
     }
   },
-  "include": ["server/**/*.ts", "scripts/**/*.ts"]
+  "include": ["server/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
 }

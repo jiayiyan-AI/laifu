@@ -182,3 +182,48 @@ describe('storePendingLoop — hard deadline timer', () => {
     unsubscribeLoop('lp_sse_timer', stream);
   });
 });
+
+describe('POST /internal/hermes-callback — 心跳保活回敲 /health', () => {
+  beforeEach(() => {
+    __resetPendingLoopsForTests();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('心跳 + 容器 ready → 回敲 container_url/health (保活 KEDA)', async () => {
+    vi.mocked(dao.cache.get).mockReturnValue({
+      user_id: 'u1', status: 'ready', container_url: 'http://c.local',
+    } as never);
+    const f = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', f);
+
+    const res = await request(makeApp())
+      .post('/internal/hermes-callback')
+      .set('x-test-user', 'u1')
+      .send({ type: 'heartbeat', loop_id: 'lp_hb' });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(f).toHaveBeenCalled());
+    expect(vi.mocked(f).mock.calls[0]?.[0]).toBe('http://c.local/health');
+  });
+
+  it('心跳 + 容器未 ready (cache miss) → 不回敲', async () => {
+    vi.mocked(dao.cache.get).mockReturnValue(null);
+    const f = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', f);
+
+    const res = await request(makeApp())
+      .post('/internal/hermes-callback')
+      .set('x-test-user', 'u1')
+      .send({ type: 'heartbeat', loop_id: 'lp_hb2' });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 10)); // 给 fire-and-forget 一个 tick
+    expect(f).not.toHaveBeenCalled();
+  });
+});

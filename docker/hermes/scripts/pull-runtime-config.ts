@@ -1,12 +1,14 @@
 // 拉 /api/me/runtime-config, **partial merge** 到 ~/.hermes/config.yaml。
 //
 // 拆成两个 export:
-//   fetchRuntimeConfig()  — 拉 HTTP, 返回 cfg 对象 (含 prompts_manifest)
-//                            bootstrap 拿到后驱动 sync-prompts 并行下载
-//   renderConfigYaml(cfg) — 读旧 config.yaml, 只覆盖我们管的字段, 写回
-//                           (保留 hermes seed / 用户手动加的其他字段不动)
+//   fetchRuntimeConfig()  — 拉 /api/me/runtime-config, 返回 prompts_manifest (驱动 sync-prompts)
+//   renderConfigYaml()    — 读 HERMES_PROVIDER/MODEL/BASE_URL/VISION_MODEL 环境变量 (由 ACA spec env /
+//                           dev-hermes.sh 注入), partial merge 进 ~/.hermes/config.yaml, 写回
+//                           (保留 hermes seed / 用户手动加的其他字段不动)。
 //
-// 拉不到时 fallback: 旧 config.yaml 原样保留, 容器仍能跑老配置。
+// provider/model/base_url 不再走 runtime-config HTTP, 也不再写 .runtime_env 中转 —— 统一从
+// 环境变量取; generic→provider 专属 env 名映射在 server/hermes-proc.ts 一处 (spawn hermes 时)。
+// 环境变量缺失时 fallback: 旧 config.yaml 原样保留, 容器仍能跑老配置。
 //
 // system-prompt.md 暂时不嵌进 config.yaml (hermes 是否支持 system_message 待验证);
 // 留在 ~/dynamic_prompts/system-prompt.md 等后续做法定下来再接。
@@ -20,29 +22,8 @@ import { log, warn, readToken, httpJson, HOME_DIR } from './lib.ts';
 
 const CFG = `${HOME_DIR}/.hermes/config.yaml`;
 
-// Hermes 一等公民 provider → 对应的 env var 名
-const PROVIDER_KEY_MAP: Record<string, string> = {
-  alibaba: 'DASHSCOPE_API_KEY',
-  'alibaba-coding-plan': 'DASHSCOPE_API_KEY',
-  alibaba_coding: 'DASHSCOPE_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  xai: 'XAI_API_KEY',
-  nvidia: 'NVIDIA_API_KEY',
-  novita: 'NOVITA_API_KEY',
-  huggingface: 'HF_TOKEN',
-  gmi: 'GMI_API_KEY',
-  stepfun: 'STEPFUN_API_KEY',
-};
-function providerKeyName(provider: string): string {
-  return PROVIDER_KEY_MAP[provider] || 'CUSTOM_API_KEY';
-}
-
+// fetchRuntimeConfig 的返回 (端点已瘦成只回 prompts manifest)。
 export interface RuntimeConfig {
-  provider: string;
-  model: string;
-  base_url?: string | null;
   prompts_manifest?: RemoteManifest;
 }
 
@@ -57,6 +38,10 @@ type ModelSection = Record<string, unknown>;
  *   model.provider
  *   model.base_url            (cfg.base_url 为 null 时删除该字段)
  *   model.api_key             (仅 custom provider 有效，一等公民 provider 从 ~/.hermes/.env 读 key)
+ *   auxiliary.vision         主模型不吃原生图时, 配专用 VL 模型走文字描述路 (model 名由
+ *                            env HERMES_VISION_MODEL 注入); 不写 base_url (见下); 否则删除
+ *   model.supports_vision    主动删除 —— v16 曾无条件写 true 让 qwen3.7-max 走 native,
+ *                            实测该端点 400 拒图; 现统一靠 auxiliary.vision, 不再骗路由
  *   display.tool_progress     'off' — 不在 chat UI 输出 "⚙ pnpm install ..." 工具进度条
  *   display.inline_diffs      false — 不在 chat UI 输出 "┊ review diff a/x → b/x @@ ..."
  *
@@ -75,12 +60,10 @@ type ModelSection = Record<string, unknown>;
  * 其他所有字段 (providers / compression / stt / browser / memory / skills / ...)
  * 保留 hermes seed 或用户手动添加的内容不动。
  */
-function mergeConfig(existing: YamlDoc | null, cfg: RuntimeConfig): YamlDoc {
+export function mergeConfig(existing: YamlDoc | null, cfg: { provider: string; model: string; base_url: string; vision_model: string }): YamlDoc {
   const doc: YamlDoc = (existing && typeof existing === 'object') ? { ...existing } : {};
   const existingModel = doc.model;
-  const model: ModelSection = (existingModel && typeof existingModel === 'object')
-    ? { ...(existingModel as ModelSection) }
-    : {};
+  const model: ModelSection = (existingModel && typeof existingModel === 'object') ? { ...existingModel } : {};
 
   model.default = cfg.model;
   model.provider = cfg.provider;
@@ -94,20 +77,39 @@ function mergeConfig(existing: YamlDoc | null, cfg: RuntimeConfig): YamlDoc {
   } else {
     delete model.api_key;
   }
-  // 清旧版本错位置写入的死字段 (一次性, 老 volume 升级时自动清理)
-  delete model.request_timeout_seconds;
-  delete model.stale_timeout_seconds;
 
   doc.model = model;
 
   // display: clamp 我们关心的两条, 其余字段 (compact / banner / language / ...) 不动
   const existingDisplay = doc.display;
-  const display: Record<string, unknown> = (existingDisplay && typeof existingDisplay === 'object')
-    ? { ...(existingDisplay as Record<string, unknown>) }
-    : {};
+  const display: Record<string, unknown> = (existingDisplay && typeof existingDisplay === 'object') ? { ...existingDisplay } : {};
   display.tool_progress = 'off';
   display.inline_diffs = false;
   doc.display = display;
+
+  // auxiliary.vision: "主模型不吃原生图"时配专用 VL 模型走文字描述路。VL model 名由 gateway
+  // 经 env HERMES_VISION_MODEL 注入 (config.azure.hermesVisionModel) → 改它只需重部署 gateway,
+  // 不必 rebuild 镜像 (旧 PROVIDER_VISION_MODEL 硬编码映射已删, 单一事实源回到 gateway)。
+  // ⚠ 只写 provider+model, **绝不写 base_url**: hermes call_llm(task=vision) 会把
+  //   auxiliary.vision.base_url 当显式 base_url 传进 _resolve_task_provider_model →
+  //   命中 `if base_url: return "custom"` → provider 被强制成 custom → custom 分支只认
+  //   OPENAI_API_KEY (空) → 401 invalid_api_key (pin 95715dcb 实测坐实)。
+  //   端点改由 env DASHSCOPE_BASE_URL 覆盖 (buildSubprocessEnv 已注入国内站, 与主模型
+  //   同一机制): registry 路 resolve_api_key_provider_credentials(alibaba) 读
+  //   DASHSCOPE_BASE_URL(端点) + DASHSCOPE_API_KEY(key), 都从 env, 密钥不落 NFS。
+  //   gate 仍用 cfg.base_url 在场 (⟺ HERMES_BASE_URL 有值 ⟺ DASHSCOPE_BASE_URL 必被注入),
+  //   确保端点覆盖一定到位, 不会落 alibaba profile 默认的国际站 dashscope-intl。
+  //   无 vision_model / 无 base_url → 删除该字段 (delete-on-absence, 防 provider 切换后残留强制 text)。
+  const visionModel = cfg.vision_model;
+  const existingAux = doc.auxiliary;
+  const auxiliary: Record<string, unknown> = (existingAux && typeof existingAux === 'object') ? { ...existingAux } : {};
+  if (visionModel && cfg.base_url) {
+    auxiliary.vision = { provider: cfg.provider, model: visionModel };
+  } else {
+    delete auxiliary.vision;
+  }
+  if (Object.keys(auxiliary).length > 0) doc.auxiliary = auxiliary;
+  else delete doc.auxiliary;
 
   return doc;
 }
@@ -153,33 +155,24 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig | null> {
   return null;
 }
 
-export async function renderConfigYaml(cfg: RuntimeConfig | null | undefined): Promise<void> {
-  if (!cfg) {
+export async function renderConfigYaml(): Promise<void> {
+  const provider = (process.env['HERMES_PROVIDER'] ?? '').trim();
+  const model = (process.env['HERMES_MODEL'] ?? '').trim();
+  const base_url = (process.env['HERMES_BASE_URL'] ?? '').trim();
+  const vision_model = (process.env['HERMES_VISION_MODEL'] ?? '').trim();
+  if (!provider || !model) {
     if (existsSync(CFG)) {
-      warn('runtime-config unreachable — keeping existing config.yaml');
+      warn('HERMES_PROVIDER/MODEL 未注入 — 保留现有 config.yaml');
     } else {
-      warn('runtime-config unreachable, no existing config.yaml — Hermes may fail to start');
+      warn('HERMES_PROVIDER/MODEL 未注入, 且无现有 config.yaml — Hermes 可能起不来');
     }
     return;
   }
   const existing = await readExistingConfig();
-  const merged = mergeConfig(existing, cfg);
+  const merged = mergeConfig(existing, { provider, model, base_url, vision_model });
   const yaml = YAML.stringify(merged, null, 2);
   await Bun.write(CFG, yaml);
-
-  // 写 .runtime_env，entrypoint source 后变成环境变量，供 server.ts + hermes CLI 继承
-  const apiKey = process.env['HERMES_API_KEY'] || '';
-  const envLines = [
-    `HERMES_PROVIDER=${cfg.provider || 'unknown'}`,
-    `HERMES_MODEL=${cfg.model || 'unknown'}`,
-  ];
-  if (apiKey) {
-    const keyName = providerKeyName(cfg.provider);
-    envLines.push(`${keyName}=${apiKey}`);
-  }
-  await Bun.write(`${HOME_DIR}/.hermes/.runtime_env`, envLines.join('\n') + '\n');
-
-  log(`merged config.yaml (provider=${cfg.provider} model=${cfg.model} base_url=${cfg.base_url ?? 'default'})`);
+  log(`merged config.yaml (provider=${provider} model=${model} base_url=${base_url || 'default'} vision=${vision_model || 'none'})`);
 }
 
 function sleep(ms: number): Promise<void> {

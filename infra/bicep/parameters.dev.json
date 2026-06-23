@@ -8,6 +8,7 @@
     "appServiceSku": { "value": "B1" },
     "hermesProvider": { "value": "alibaba" },
     "hermesModel": { "value": "qwen3.7-max" },
-    "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" }
+    "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    "hermesVisionModel": { "value": "qwen-vl-max" }
   }
 }

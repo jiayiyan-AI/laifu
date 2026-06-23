@@ -12,6 +12,11 @@ import { dao } from '../../src/db/index.js';
 import { buildChatRouter } from '../../src/api/chat.js';
 import { signSession } from '../../src/auth/session.js';
 import { requireSession } from '../../src/auth/middleware.js';
+import {
+  __resetThreadInflightForTests,
+  isThreadReserved,
+} from '../../src/lib/thread-inflight.js';
+import { emitLoopEvent, __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
 
 const SECRET = 'test-secret-do-not-use-in-prod-123456';
 const COOKIE_NAME = 'lingxi_sid';
@@ -26,6 +31,8 @@ describe('POST /api/chat', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetThreadInflightForTests();
+    __resetPendingLoopsForTests();
     vi.mocked(dao.threads.getByIdAndUser).mockResolvedValue({ id: 'thr_1', user_id: 'u1', source: 'web' } as any);
     vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u1',
@@ -127,6 +134,58 @@ describe('POST /api/chat', () => {
       .send({ thread_id: 'thr_1', message: 'hi' });
     expect(res.status).toBe(502);
     expect(dao.agentLoops.complete).toHaveBeenCalledWith(expect.any(String), 'fail');
+  });
+
+  it('409 when同 thread 已有 loop 在跑 (busy-reject)', async () => {
+    const app = makeApp();
+    // 第一条: 占用 thr_1 (dispatch 202, loop 未终态 → 占用不释放)
+    const first = await request(app)
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: 'first' });
+    expect(first.status).toBe(200);
+    expect(isThreadReserved('thr_1')).toBe(true);
+
+    // 第二条同 thread: 拒
+    const second = await request(app)
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: 'second' });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe('busy');
+    // 第二条不写库不 dispatch
+    expect(dao.messages.insert).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('loop 终态后释放占用, 同 thread 可再发', async () => {
+    const app = makeApp();
+    const first = await request(app)
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: 'first' });
+    expect(first.status).toBe(200);
+    // loop 终态 → waitLoopTerminal 释放
+    emitLoopEvent(first.body.loop_id, { type: 'done', reply: 'ok', completion: 'success' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(isThreadReserved('thr_1')).toBe(false);
+
+    const second = await request(app)
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: 'second' });
+    expect(second.status).toBe(200);
+  });
+
+  it('dispatch 失败即释放占用 (不留死锁)', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: 'hi' });
+    expect(res.status).toBe(502);
+    await Promise.resolve();
+    expect(isThreadReserved('thr_1')).toBe(false);
   });
 
   it('intercepts /new with inline reply, no Hermes, no DB write', async () => {

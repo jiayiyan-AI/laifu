@@ -22,6 +22,7 @@ import { runRefreshToken } from './refresh-token.ts';
 import { fetchRuntimeConfig, renderConfigYaml } from './pull-runtime-config.ts';
 import { runSyncEntitlements } from './sync-entitlements.ts';
 import { syncPrompts } from './sync-prompts.ts';
+import { sweepCache } from './sweep-cache.ts';
 import { log, warn, envOrDie } from './lib.ts';
 
 async function safe<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
@@ -36,6 +37,10 @@ async function safe<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
 async function main(): Promise<void> {
   envOrDie('GATEWAY_BASE_URL');
   const t0 = Date.now();
+
+  // 清理过期附件缓存: 纯本地 FS, 与 token/config 无关, 起手并发跑 (替代旧 entrypoint.sh
+  // 的 find sweep), 末尾再 await, 不占 token 续签的关键路径。
+  const sweeping = safe('sweep-cache', sweepCache);
 
   // Step 1: 续签 token (后续步骤要读最新 token 文件)
   await safe('refresh-token', runRefreshToken);
@@ -53,8 +58,10 @@ async function main(): Promise<void> {
     await safe('sync-prompts', () => syncPrompts(cfg.prompts_manifest));
   }
 
-  // Step 4: 渲染 config.yaml (在 sync-prompts 之后)
-  await safe('render-config', () => renderConfigYaml(cfg));
+  // Step 4: 渲染 config.yaml (读 HERMES_PROVIDER/MODEL/BASE_URL 环境变量; 在 sync-prompts 之后)
+  await safe('render-config', () => renderConfigYaml());
+
+  await sweeping; // 收尾等沸 (本地 FS, 通常早已完成)
 
   log(`bootstrap done in ${Date.now() - t0}ms`);
 }

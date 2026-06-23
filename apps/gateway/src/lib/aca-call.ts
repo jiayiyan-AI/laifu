@@ -1,110 +1,32 @@
 /**
- * 调用每用户 hermes ACA 的 /chat 时做指标埋点。
+ * Gateway → 每用户 hermes ACA 的出站调用 (异步 /chat dispatch + DELETE /session)
+ * 与共用的 per-user Bearer 签发 (getContainerToken)。
  *
- * 只测 chat 本身, 不再额外打 /health probe (那会让所有请求多一次 RTT, 得不偿失)。
- * 冷启动判断: 直接查 ContainerAppSystemLogs_CL 里 scaler 0→1 / 容器创建事件,
- * 按时间戳跟 aca.chat.call 对齐, 见 docs/observability.md。
+ * 每次出站前 checkAndReconcileACA(userId): spec 漂移则后台拉齐 (幂等去重, 非阻塞,
+ * 本次仍走老 revision)。出站 2xx 后 noteContainerActivity 续 warm-cache。
  *
- * 字段:
- *  - chat_ms: POST /chat 端到端耗时
- *  - reply_chars: 回复字符数, 配合 chat_ms 看吞吐
- *  - status: ok | no_reply | http_<code> | error
- *  - user_id / thread_id / source: 切片维度
+ * 日志: 单行 JSON → stdout → App Service → Log Analytics。
+ *  - aca.chat.dispatch: status=202 ack / http_<code> / 0 (error)
+ *  - aca.session.delete: status=ok / http_<code> / error, deleted 标记幂等命中
  *
- * 日志格式: 单行 JSON, 走 stdout → App Service → Log Analytics
- *           AppServiceConsoleLogs.ResultDescription。
- *
- * 失败也打: status=http_<code> | error, 便于按 status 分组算成功率。
- *
- * 不做指数退避 / 重试; 调用方 (chat.ts / inbound-handler) 已有自己的兜底文案。
+ * 不做指数退避 / 重试; 调用方 (chat.ts / threads.ts / inbound-handler) 已有兜底文案。
  */
-import type { ContainerChatResponse, ContainerChatUsage } from '@lingxi/shared';
 import { log } from './logger.js';
 import { checkAndReconcileACA } from '../provisioning/reconcile.js';
+import { signLaifuUserToken } from './gateway-token.js';
+import { config } from '../config.js';
+import { dao } from '../db/index.js';
+import { noteContainerActivity } from './container-warm-cache.js';
 
-interface CallArgs {
-  containerUrl: string;
-  userId: string;
-  threadId: string;
-  source: string;            // 'web' | 'wechat'
-  sessionId: string;
-  message: string;
-  /** 注入用; 测试里替成 vi.fn 控制 hermes 行为。生产走全局 fetch。 */
-  fetchImpl?: typeof fetch;
-}
-
-export interface CallResult {
-  ok: boolean;
-  status: number;            // 0 表示网络/抛错没拿到 HTTP code
-  reply?: string;
-  error?: string;
-  usage?: ContainerChatUsage; // 透出 hermes 本轮 token 消耗, 调用方负责落库
-}
-
-const now = (): number => performance.now();
-
-export const callHermesChat = async (args: CallArgs): Promise<CallResult> => {
-  const { containerUrl, userId, threadId, source, sessionId, message } = args;
-  const fetcher = args.fetchImpl ?? fetch;
-  // 发往 ACA 前的统一触发点: spec 漂移则后台拉齐 (幂等去重, 非阻塞, 本次仍走老 revision)。
-  checkAndReconcileACA(userId);
-
-  const chatStart = now();
-  try {
-    const resp = await fetcher(`${containerUrl}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId, source }),
-    });
-    const chatMs = Math.round(now() - chatStart);
-    if (!resp.ok) {
-      log.warn({
-        event: 'aca.chat.call',
-        user_id: userId,
-        thread_id: threadId,
-        source,
-        chat_ms: chatMs,
-        status: `http_${resp.status}`,
-      });
-      return { ok: false, status: resp.status };
-    }
-    const body = await resp.json() as ContainerChatResponse;
-    const reply = typeof body.reply === 'string' ? body.reply : undefined;
-    const usage = body.usage;
-    log.info({
-      event: 'aca.chat.call',
-      user_id: userId,
-      thread_id: threadId,
-      source,
-      chat_ms: chatMs,
-      reply_chars: reply?.length ?? 0,
-      status: reply ? 'ok' : 'no_reply',
-      // token 字段: server/index.ts (前身 server.py PR1) 稳定下发; 旧镜像 undefined 不进日志即可
-      provider: usage?.provider ?? undefined,
-      model: usage?.model ?? undefined,
-      input_tokens: usage?.input_tokens,
-      output_tokens: usage?.output_tokens,
-      cache_read_tokens: usage?.cache_read_tokens,
-      cache_write_tokens: usage?.cache_write_tokens,
-      reasoning_tokens: usage?.reasoning_tokens,
-    });
-    return reply
-      ? { ok: true, status: resp.status, reply, usage }
-      : { ok: false, status: resp.status, error: 'missing reply', usage };
-  } catch (e) {
-    const chatMs = Math.round(now() - chatStart);
-    const err = e instanceof Error ? e.message : String(e);
-    log.error({
-      event: 'aca.chat.call',
-      user_id: userId,
-      thread_id: threadId,
-      source,
-      chat_ms: chatMs,
-      status: 'error',
-      err,
-    });
-    return { ok: false, status: 0, error: err };
-  }
+/**
+ * 给出站容器请求签一个 per-user Bearer token (4 个出站函数 + inbox-uploader 共用)。
+ * token_version 取 DB 当前值; 缺失 (无 user 行) 抛错, 让调用方按各自语义兜底。
+ * 不缓存: 稳态下 user 不会频繁刷新, 每次 1 select 可接受。
+ */
+export const getContainerToken = async (userId: string): Promise<string> => {
+  const v = await dao.users.getTokenVersion(userId);
+  if (v == null) throw new Error(`no token_version for user ${userId}`);
+  return signLaifuUserToken({ userId, tokenVersion: v, secret: config.auth.gatewaySecret });
 };
 
 // === Async dispatch (fire-and-forget, 只等 202 ack) ===
@@ -117,7 +39,6 @@ interface DispatchArgs {
   sessionId: string;
   message: string;
   loopId: string;
-  fetchImpl?: typeof fetch;
 }
 
 export interface DispatchResult {
@@ -128,12 +49,12 @@ export interface DispatchResult {
 
 export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchResult> => {
   const { containerUrl, userId, threadId, source, sessionId, message, loopId } = args;
-  const fetcher = args.fetchImpl ?? fetch;
-  checkAndReconcileACA(userId);   // 见 callHermesChat: ACA 出口层统一触发 reconcile
+  checkAndReconcileACA(userId);   // ACA 出口层统一触发 reconcile (幂等去重, 非阻塞, 本次仍走老 revision)
   try {
-    const resp = await fetcher(`${containerUrl}/chat`, {
+    const token = await getContainerToken(userId);
+    const resp = await fetch(`${containerUrl}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         message,
         session_id: sessionId,
@@ -148,7 +69,10 @@ export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchRe
       source,
       status: resp.status,
     });
-    if (resp.status === 202) return { ok: true, status: 202 };
+    if (resp.status === 202) {
+      noteContainerActivity(userId);   // 202 ack → 续 warm-cache
+      return { ok: true, status: 202 };
+    }
     return { ok: false, status: resp.status, error: `expected 202, got ${resp.status}` };
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
@@ -172,7 +96,6 @@ interface DeleteSessionArgs {
   threadId: string;
   source: string;
   sessionId: string;
-  fetchImpl?: typeof fetch;
 }
 
 export interface DeleteSessionResult {
@@ -195,11 +118,14 @@ export interface DeleteSessionResult {
  */
 export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<DeleteSessionResult> => {
   const { containerUrl, userId, threadId, source, sessionId } = args;
-  const fetcher = args.fetchImpl ?? fetch;
-  checkAndReconcileACA(userId);   // 见 callHermesChat: ACA 出口层统一触发 reconcile
+  checkAndReconcileACA(userId);   // ACA 出口层统一触发 reconcile (幂等去重, 非阻塞, 本次仍走老 revision)
   try {
     const url = `${containerUrl}/session?session_id=${encodeURIComponent(sessionId)}`;
-    const resp = await fetcher(url, { method: 'DELETE' });
+    const token = await getContainerToken(userId);
+    const resp = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
     if (!resp.ok) {
       log.warn({
         event: 'aca.session.delete',
@@ -210,6 +136,7 @@ export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<Dele
       });
       return { ok: false, status: resp.status, error: `http ${resp.status}` };
     }
+    noteContainerActivity(userId);   // 2xx → 续 warm-cache
     const body = await resp.json() as { ok?: boolean; deleted?: boolean; hermes_session_id?: string };
     log.info({
       event: 'aca.session.delete',
