@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { isValidAssistantName, assistantLocalpartBase, MAX_ASSISTANT_NAME_LEN } from './assistant.js';
+import {
+  isValidAssistantName,
+  isValidEmailLocalpart,
+  MAX_ASSISTANT_NAME_LEN,
+  EMAIL_LOCALPART_MIN,
+  EMAIL_LOCALPART_MAX,
+} from './assistant.js';
 
 describe('isValidAssistantName', () => {
   it('非空 <=24 → true；空/纯空白/超长 → false', () => {
@@ -13,18 +19,25 @@ describe('isValidAssistantName', () => {
   });
 });
 
-describe('assistantLocalpartBase', () => {
-  it('空 → 空串', () => { expect(assistantLocalpartBase('')).toBe(''); expect(assistantLocalpartBase('  ')).toBe(''); });
-  it('英文数字直显并小写', () => { expect(assistantLocalpartBase('Aria')).toBe('aria'); });
-  it('中文转拼音（无声调、音节相连）', () => {
-    expect(assistantLocalpartBase('灵犀')).toBe('lingxi');
-    expect(assistantLocalpartBase('张小明')).toBe('zhangxiaoming');
+describe('isValidEmailLocalpart', () => {
+  it('合法：字母/数字开头结尾，中间含 . _ -', () => {
+    expect(isValidEmailLocalpart('aria')).toBe(true);
+    expect(isValidEmailLocalpart('lingxi')).toBe(true);
+    expect(isValidEmailLocalpart('a.b_c-1')).toBe(true);
+    expect(isValidEmailLocalpart('x'.repeat(EMAIL_LOCALPART_MAX))).toBe(true);
+    expect(isValidEmailLocalpart('x'.repeat(EMAIL_LOCALPART_MIN))).toBe(true);
   });
-  it('空格 → 连字符', () => {
-    expect(assistantLocalpartBase('小助 7')).toBe('xiaozhu-7');
-    expect(assistantLocalpartBase('Aria 小助')).toBe('aria-xiaozhu');
-  });
-  it('全 emoji / 无可用字符 → 空串（兜底由调用方决定）', () => {
-    expect(assistantLocalpartBase('🎉🎉')).toBe('');
+  it('非法：太短/太长/非法字符/首尾符号/大写/空', () => {
+    expect(isValidEmailLocalpart('ab')).toBe(false);                                // < 3
+    expect(isValidEmailLocalpart('x'.repeat(EMAIL_LOCALPART_MAX + 1))).toBe(false); // > 32
+    expect(isValidEmailLocalpart('.abc')).toBe(false);                             // 首符号
+    expect(isValidEmailLocalpart('abc-')).toBe(false);                             // 尾符号
+    expect(isValidEmailLocalpart('a b')).toBe(false);                              // 空格
+    expect(isValidEmailLocalpart('张三')).toBe(false);                             // 非 ASCII（不再拼音）
+    expect(isValidEmailLocalpart('Aria')).toBe(false);                             // 大写（调用方需先 toLowerCase）
+    expect(isValidEmailLocalpart('a@b')).toBe(false);                              // @ 非法
+    expect(isValidEmailLocalpart('')).toBe(false);
+    // @ts-expect-error 故意传错类型
+    expect(isValidEmailLocalpart(undefined)).toBe(false);
   });
 });

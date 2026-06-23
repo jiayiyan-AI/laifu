@@ -22,8 +22,5 @@
   },
   "devDependencies": {
     "vitest": "^1.4.0"
-  },
-  "dependencies": {
-    "pinyin-pro": "^3.28.1"
   }
 }

@@ -1,5 +1,3 @@
-import { pinyin } from 'pinyin-pro';
-
 /** 助理名最大长度（前端 maxLength + 后端兜底共用）。 */
 export const MAX_ASSISTANT_NAME_LEN = 24;
 
@@ -10,18 +8,17 @@ export const isValidAssistantName = (name: unknown): name is string => {
   return t.length >= 1 && t.length <= MAX_ASSISTANT_NAME_LEN;
 };
 
+/** 邮箱 local part 长度范围（前后端共用）。 */
+export const EMAIL_LOCALPART_MIN = 3;
+export const EMAIL_LOCALPART_MAX = 32;
+
 /**
- * 名字 → 邮箱 local part 的 base（不含碰撞后缀，前后端单一真源）。
- * - 按空白切段，段间连字符；
- * - 段内：中文→拼音(无声调、相连)，ASCII 取 [a-z0-9] 小写，其余丢弃；
- * - 空输入 / 全被丢弃 → ''（兜底策略由调用方定）。
+ * 用户自填的邮箱前缀（local part）是否合法。前端即时校验 + 后端兜底单一真源。
+ * 规则：小写字母/数字开头结尾，中间可含 . _ -；长度 3..32。
+ * 调用方负责先 trim + toLowerCase（本函数按字面校验，不替用户改写）。
  */
-export const assistantLocalpartBase = (name: string): string => {
-  const trimmed = name.trim();
-  if (!trimmed) return '';
-  const segments = trimmed.split(/\s+/).map((seg) => {
-    const py = pinyin(seg, { toneType: 'none', type: 'array' }).join('');
-    return py.toLowerCase().replace(/[^a-z0-9]/g, '');
-  }).filter(Boolean);
-  return segments.join('-');
+export const isValidEmailLocalpart = (s: unknown): s is string => {
+  if (typeof s !== 'string') return false;
+  if (s.length < EMAIL_LOCALPART_MIN || s.length > EMAIL_LOCALPART_MAX) return false;
+  return /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/.test(s);
 };

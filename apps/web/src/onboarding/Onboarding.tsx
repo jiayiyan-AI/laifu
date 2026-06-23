@@ -1,10 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { IconSpark, IconRefresh } from '../lib/icons.js';
-import { assistantEmailPreview } from '../lib/assistantEmail.js';
 import { assistantAtom } from '../states/assistant.atom.js';
 import { authAtom } from '../states/auth.atom.js';
-import { isValidAssistantName, MAX_ASSISTANT_NAME_LEN } from '@lingxi/shared';
+import {
+  isValidAssistantName,
+  isValidEmailLocalpart,
+  MAX_ASSISTANT_NAME_LEN,
+  EMAIL_LOCALPART_MAX,
+} from '@lingxi/shared';
+
+/** 购买失败错误码 → 中文文案。未知错误透出真实信息。 */
+const purchaseErrorMessage = (e: unknown): string => {
+  if (e instanceof api.ApiError) {
+    switch (e.code) {
+      case 'email_taken': return '该邮箱前缀已被占用，换一个';
+      case 'invalid_localpart': return '邮箱前缀格式不对（小写字母/数字开头结尾，可含 . _ -，3–32 位）';
+      case 'invalid_assistant_name': return '请填写助理名字';
+      default: return `激活失败：${e.message}`;
+    }
+  }
+  return e instanceof Error ? e.message : '激活失败';
+};
 
 type View =
   | { mode: 'loading' }
@@ -22,10 +39,15 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
   const [submitting, setSubmitting] = useState(false);
   const pollRef = useRef<number | null>(null);
   const [name, setName] = useState('');
+  const [localpart, setLocalpart] = useState('');   // 用户自填邮箱前缀，可空（空→后端默认）
+  const [formError, setFormError] = useState('');
   const [, assistantActions] = assistantAtom.use();
   const [auth] = authAtom.use();
   const domain = auth.status === 'authenticated' ? auth.user.email_domain : 'mail.localhost';
   const nameValid = isValidAssistantName(name);
+  const localpartTrimmed = localpart.trim().toLowerCase();
+  const localpartValid = localpartTrimmed === '' || isValidEmailLocalpart(localpartTrimmed);
+  const canSubmit = nameValid && localpartValid;
 
   useEffect(() => {
     void (async () => {
@@ -59,14 +81,23 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
   }, [view.mode, onReady]);
 
   const onPurchase = async () => {
-    if (!nameValid) return;
+    if (!canSubmit) return;
+    setFormError('');
     setSubmitting(true);
     try {
-      await api.purchase({ assistant_name: name.trim() });
+      await api.purchase({
+        assistant_name: name.trim(),
+        email_localpart: localpartTrimmed || undefined,   // 空→后端走 u-<hash> 默认
+      });
       assistantActions.setName(name.trim());
       setView({ mode: 'provisioning', step: '正在创建账户与订单', pct: 5 });
     } catch (e) {
-      setView({ mode: 'failed', err: e instanceof Error ? e.message : '购买失败' });
+      // 邮箱占用 / 格式错 → 停在表单内联提示让用户改；其它错 → 失败页
+      if (e instanceof api.ApiError && (e.code === 'email_taken' || e.code === 'invalid_localpart')) {
+        setFormError(purchaseErrorMessage(e));
+      } else {
+        setView({ mode: 'failed', err: purchaseErrorMessage(e) });
+      }
     } finally {
       setSubmitting(false);
     }
@@ -93,15 +124,39 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
               <span className="dim" style={{ fontWeight: 400, marginLeft: 6 }}>必填</span>
             </label>
             <input className="input" autoFocus maxLength={MAX_ASSISTANT_NAME_LEN} value={name}
-              onChange={(e) => setName(e.target.value)} placeholder="如：灵犀 / Aria / 小助"
+              onChange={(e) => { setName(e.target.value); setFormError(''); }} placeholder="如：灵犀 / Aria / 小助"
               style={{ width: '100%', marginTop: 8 }} />
-            <div className="dim" style={{ fontSize: 11.5, marginTop: 6, fontFamily: 'monospace' }}>
-              专属邮箱预览：{assistantEmailPreview(name, domain)}
+
+            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginTop: 16 }}>
+              专属邮箱
+              <span className="dim" style={{ fontWeight: 400, marginLeft: 6 }}>选填，留空自动分配</span>
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginTop: 8 }}>
+              <input className="input" maxLength={EMAIL_LOCALPART_MAX} value={localpart}
+                onChange={(e) => { setLocalpart(e.target.value); setFormError(''); }}
+                placeholder="自己起一个，如 aria"
+                style={{ flex: 1, textAlign: 'right', borderTopRightRadius: 0, borderBottomRightRadius: 0 }} />
+              <span className="dim" style={{
+                fontFamily: 'monospace', fontSize: 13, padding: '0 10px', height: 38,
+                display: 'inline-flex', alignItems: 'center',
+                border: '1px solid var(--border)', borderLeft: 'none',
+                borderTopRightRadius: 10, borderBottomRightRadius: 10, background: 'var(--bg-soft, #f4f4f6)',
+              }}>@{domain}</span>
             </div>
+            {!localpartValid && (
+              <div style={{ color: 'var(--bad)', fontSize: 11.5, marginTop: 6 }}>
+                小写字母/数字开头结尾，可含 . _ -，3–32 位
+              </div>
+            )}
+
+            {formError && (
+              <div style={{ color: 'var(--bad)', fontSize: 12.5, marginTop: 12 }}>{formError}</div>
+            )}
+
             <div className="muted" style={{ fontSize: 12, margin: '16px 0 6px' }}>套餐 · MVP 阶段免费</div>
             <button className="btn btn-primary"
-              style={{ width: '100%', padding: '12px 28px', fontSize: 14, marginTop: 10, opacity: nameValid ? 1 : 0.5 }}
-              disabled={submitting || !nameValid} onClick={onPurchase}>
+              style={{ width: '100%', padding: '12px 28px', fontSize: 14, marginTop: 10, opacity: canSubmit ? 1 : 0.5 }}
+              disabled={submitting || !canSubmit} onClick={onPurchase}>
               {submitting ? '激活中…' : '确认支付并激活'}
             </button>
           </div>
@@ -112,18 +167,18 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
             {name.trim() && (
               <div style={{ margin: '4px 0 14px' }}>
                 <div style={{ fontSize: 15, fontWeight: 650 }}>{name.trim()}</div>
-                <div className="dim" style={{ fontSize: 11.5, fontFamily: 'monospace' }}>{assistantEmailPreview(name, domain)}</div>
+                {localpartTrimmed && (
+                  <div className="dim" style={{ fontSize: 11.5, fontFamily: 'monospace' }}>{localpartTrimmed}@{domain}</div>
+                )}
               </div>
             )}
             <div className="muted" style={{ height: 20, margin: '12px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13 }}>
               <span className="spin"><IconRefresh size={13} /></span>{view.step}
             </div>
             <div className="progress"><div style={{ width: `${view.pct}%` }} /></div>
-            {name.trim() && (
-              <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>
-                ✉️ 为助理生成专属邮箱：{assistantEmailPreview(name, domain)}
-              </div>
-            )}
+            <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>
+              ✉️ 正在为助理分配专属邮箱…
+            </div>
           </div>
         )}
 
