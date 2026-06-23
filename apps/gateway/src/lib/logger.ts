@@ -6,6 +6,8 @@
  * 不引第三方 logger 是刻意的: 体积 + 全局副作用都不值, 这里 30 行够用。
  */
 
+import { currentTrace } from './trace-context.js';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 interface LogFields {
@@ -14,9 +16,12 @@ interface LogFields {
 }
 
 const emit = (level: LogLevel, fields: LogFields): void => {
+  // ambient trace 上下文 (trace_id 等) 自动并入; 显式 fields 优先覆盖。
+  const trace = currentTrace();
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     level,
+    ...(trace ?? {}),
     ...fields,
   });
   if (level === 'error') console.error(line);

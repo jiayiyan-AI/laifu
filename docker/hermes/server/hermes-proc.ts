@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { HERMES_BIN, KILL_GRACE_MS, DYN_SYSTEM_PROMPT_FILE } from './config.ts';
+import { log } from './logger.ts';
 
 // ─── provider → hermes 实际读的 env 名 (generic HERMES_* → provider 专属名) ──────
 // 单一依据 = 镜像内 hermes-agent 源码 (pin 95715dcb):
@@ -118,7 +119,7 @@ export async function buildSubprocessEnv(): Promise<NodeJS.ProcessEnv> {
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code !== 'ENOENT') {
-      console.error(`[server] read ${DYN_SYSTEM_PROMPT_FILE} failed: ${err.message}`);
+      log.error({ event: 'prompt.read.failed', file: DYN_SYSTEM_PROMPT_FILE, err: err.message });
     }
     // 文件不存在 / 读失败 → 显式 unset 防吃到启动时继承的旧值
     delete env.HERMES_EPHEMERAL_SYSTEM_PROMPT;
@@ -165,7 +166,7 @@ export function runHermes(
   const pid = child.pid;
   const wallTimer = setTimeout(() => {
     timedOut = true;
-    console.error(`[server] hermes wall timeout ${timeoutMs}ms, killing pgid ${pid}`);
+    log.error({ event: 'hermes.proc.timeout', timeout_ms: timeoutMs, pid });
     try {
       if (pid) process.kill(-pid, 'SIGTERM');
     } catch {}
@@ -239,7 +240,7 @@ async function newestSessionIdViaList(source: string): Promise<string | null> {
     }
     return null;
   } catch (e) {
-    console.error(`[server] sessions list failed: ${(e as Error).message}`);
+    log.error({ event: 'session.list.failed', source, err: (e as Error).message });
     return null;
   }
 }

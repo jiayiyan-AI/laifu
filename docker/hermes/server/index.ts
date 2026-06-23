@@ -31,42 +31,57 @@
 
 import { PORT, HERMES_TIMEOUT_MS } from './config.ts';
 import { handle } from './http.ts';
+import { log } from './logger.ts';
+import { runWithTrace, newTraceId } from './trace-context.ts';
 
 const server = Bun.serve({
   port: PORT,
   hostname: '0.0.0.0',
   // 包一层访问日志 + 末端兜底 — handle() 内部已 try/catch 各 handler, 这里防漏
   async fetch(req) {
-    const start = Date.now();
-    let response: Response;
-    try {
-      response = await handle(req);
-    } catch (e) {
-      console.error('[server] handler error:', e);
-      response = Response.json({ error: 'internal' }, { status: 500 });
-    }
-    const path = new URL(req.url).pathname;
-    if (path !== '/health') {
-      console.log(`[server] ${req.method} ${path} ${response.status} ${Date.now() - start}ms`);
-    }
-    return response;
+    // 续用 gateway 注入的 X-Trace-Id (缺则现签), 包住整个请求 → 含 http.request 在内的所有日志都带 trace。
+    const traceId = req.headers.get('x-trace-id')?.trim() || newTraceId();
+    return runWithTrace({ trace_id: traceId }, async () => {
+      const start = Date.now();
+      let response: Response;
+      try {
+        response = await handle(req);
+      } catch (e) {
+        log.error({ event: 'http.handler.error', err: (e as Error).message ?? String(e) });
+        response = Response.json({ error: 'internal' }, { status: 500 });
+      }
+      const path = new URL(req.url).pathname;
+      if (path !== '/health') {
+        log.info({
+          event: 'http.request',
+          method: req.method,
+          path,
+          status: response.status,
+          dur_ms: Date.now() - start,
+        });
+      }
+      return response;
+    });
   },
   // 连接层异常 (parse / abort 等), 跟 node:http server.on('clientError') 同位
   error(err) {
-    console.error('[server] connection error:', err);
+    log.error({ event: 'http.connection.error', err: (err as Error).message ?? String(err) });
     return Response.json({ error: 'bad request' }, { status: 400 });
   },
 });
 
-console.log(
-  `[server] listening on ${server.hostname}:${server.port} (HERMES_TIMEOUT=${HERMES_TIMEOUT_MS / 1000}s)`,
-);
+log.info({
+  event: 'server.listening',
+  host: server.hostname,
+  port: server.port,
+  hermes_timeout_s: HERMES_TIMEOUT_MS / 1000,
+});
 
 // Graceful shutdown: 收 SIGTERM/SIGINT 让 in-flight 请求完成, 10s 后强制退出
 // server.stop(false) 等所有活动 request 走完才 resolve, 同时不接新连接。
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {
   process.on(sig, async () => {
-    console.log(`[server] received ${sig}, shutting down`);
+    log.info({ event: 'server.shutdown', signal: sig });
     setTimeout(() => process.exit(1), 10_000).unref();
     await server.stop(false);
     process.exit(0);

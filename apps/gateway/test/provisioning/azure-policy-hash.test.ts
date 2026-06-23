@@ -16,10 +16,13 @@ describe('policyHashFor', () => {
     expect(a).not.toBe(b);
   });
 
-  it('只取 userId 前 8 位 hex (与 appNameFor/shareNameFor 同算法): 前 8 位相同 → 哈希相同', () => {
+  it('完整 userId 入哈希 (USER_ID env, 日志对齐): 前 8 位相同但完整 id 不同 → 哈希不同', () => {
+    // 容器名 / share subPath 仍只取前 8 位前缀, 但 USER_ID env 注入**完整** userId
+    // (供 server/logger.ts 记结构化日志的 user_id, 跟 gateway 侧完整 user_id 对齐),
+    // 故前缀相同、完整 id 不同的两个用户哈希不再相同。
     const a = policyHashFor('abcdef01-1111-1111-1111-111111111111');
     const b = policyHashFor('abcdef01-9999-9999-9999-999999999999');
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
   });
 });
 
@@ -77,5 +80,22 @@ describe('buildSpec 通用 LLM env 注入 (provider/model/base_url)', () => {
   it('是 policy 字段: 哨兵空 token 下仍注入 (进哈希 → 部署后存量用户 reconcile)', () => {
     const env = buildSpec(USER, '').template?.containers?.[0]?.env?.find((e) => e.name === 'HERMES_PROVIDER');
     expect(env?.value).toBeDefined();
+  });
+});
+
+// USER_ID 注入: 容器侧结构化日志 (server/logger.ts) 的 user_id 基础字段, 跟 gateway
+// 侧完整 user_id 对齐。明文 value (非 secret), 且是 policy 字段 (哨兵空 token 下仍注入)。
+describe('buildSpec USER_ID 注入 (日志对齐)', () => {
+  const USER = '11111111-2222-3333-4444-555555555555';
+
+  it('以明文 value 注入完整 userId, 非 secretRef', () => {
+    const env = buildSpec(USER, 'tok').template?.containers?.[0]?.env?.find((e) => e.name === 'USER_ID');
+    expect(env?.value).toBe(USER);
+    expect(env?.secretRef).toBeUndefined();
+  });
+
+  it('是 policy 字段: 哨兵空 token 下仍注入 (进哈希 → 部署后存量用户 reconcile)', () => {
+    const env = buildSpec(USER, '').template?.containers?.[0]?.env?.find((e) => e.name === 'USER_ID');
+    expect(env?.value).toBe(USER);
   });
 });

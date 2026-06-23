@@ -17,6 +17,13 @@ import { signLaifuUserToken } from './gateway-token.js';
 import { config } from '../config.js';
 import { dao } from '../db/index.js';
 import { noteContainerActivity } from './container-warm-cache.js';
+import { getTraceId } from './trace-context.js';
+
+/** 出站到容器时把当前 trace_id 透传成 header, 让容器侧日志归到同一 trace。无上下文则不带。 */
+const traceHeader = (): Record<string, string> => {
+  const t = getTraceId();
+  return t ? { 'X-Trace-Id': t } : {};
+};
 
 /**
  * 给出站容器请求签一个 per-user Bearer token (4 个出站函数 + inbox-uploader 共用)。
@@ -54,7 +61,7 @@ export const dispatchHermesChat = async (args: DispatchArgs): Promise<DispatchRe
     const token = await getContainerToken(userId);
     const resp = await fetch(`${containerUrl}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...traceHeader() },
       body: JSON.stringify({
         message,
         session_id: sessionId,
@@ -124,7 +131,7 @@ export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<Dele
     const token = await getContainerToken(userId);
     const resp = await fetch(url, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...traceHeader() },
     });
     if (!resp.ok) {
       log.warn({

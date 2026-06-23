@@ -27,6 +27,9 @@ import {
   flush,
   type AggregatedBurst,
 } from './thread-aggregator.js';
+import { WechatBinding } from '../db/wechat-binding-dao.js';
+import { IlinkClient } from './client.js';
+import { runWithTrace } from '../lib/trace-context.js';
 
 type ImagePart = Extract<InboundPart, { kind: 'image' }>;
 
@@ -306,94 +309,105 @@ const handleWechatNew = async (
 type WechatClient = Parameters<typeof safeSendText>[0];
 type ParsedMsg = NonNullable<ReturnType<typeof parseInbound>>;
 
+async function onWechatInbound(
+  binding: WechatBinding,
+  client: IlinkClient,
+  raw: unknown,
+) {
+  const msg = parseInbound(raw);
+  if (!msg) return;
+
+  // parts → text (串联) + image 列表; slash 只看 text。
+  const text = msg.parts
+    .filter((p): p is Extract<InboundPart, { kind: 'text' }> => p.kind === 'text')
+    .map((p) => p.text)
+    .join('');
+  const imageParts = msg.parts.filter((p): p is ImagePart => p.kind === 'image');
+
+  // 入站到达埋点(常驻):量「图文混排被 iLink 拆成多条时,各条 push 实际到达 gateway 的间隔」。
+  // 聚合窗口能否兜住拆分,取决于图那条 push 比文本晚到多少 —— 这条日志把它变成可测。
+  // 用 ts(logger 自带) + message_id 关联;has_image 区分图/文那条。thread_id 可能尚未解析。
+  log.info({
+    event: 'wechat.inbound.arrived',
+    thread_id: binding.thread_id ?? null,
+    from_user_id: msg.from_user_id,
+    message_id: msg.message_id,
+    has_image: imageParts.length > 0,
+    text_len: text.length,
+  });
+
+  // Hermes slash 拦截 (详见 lib/slash-filter.ts) — 微信渠道有两点特殊:
+  //   1. /new 真生效 (网关创建新 thread + bindThread) —— 因为微信用户没有
+  //      web UI 的"新对话"按钮可用,只能靠这个指令开新会话。
+  //   2. 其他 intercept 走通用 render 文案,跟 web 端一致地引导用户。
+  const slash = classifyMessage(text);
+  if (slash.kind === 'intercept') {
+    // slash 抢占: 先结算该 thread 待聚合窗口, 保序(避免 slash 插到未派发 burst 前面)
+    if (binding.thread_id) await flush(binding.thread_id);
+    if (slash.cmd === 'new') {
+      return await handleWechatNew(binding, client, msg, slash.args);
+    }
+    const reply = await runIntercept(slash, {
+      userId: binding.user_id,
+      threadId: binding.thread_id ?? '',
+    });
+    log.info({ event: 'wechat.slash.intercepted', user_id: binding.user_id, cmd: slash.cmd, log_tag: slash.logTag });
+    await safeSendText(client, msg, reply);
+    return;
+  }
+
+  let threadId: string;
+  try {
+    threadId = await resolveThread(binding);
+  } catch (e) {
+    console.error('[handleInbound] resolveThread failed:', e);
+    await safeSendText(client, msg, FALLBACK_TEXT);
+    return;
+  }
+
+  // 容器 ready 闸(同步, 不 ready → 提示并丢弃, 不进聚合 —— 后面 upload 也要容器活着)
+  const mapping = dao.cache.get(binding.user_id);
+  if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
+    await safeSendText(client, msg, CONTAINER_NOT_READY_TEXT);
+    return;
+  }
+  const containerUrl = mapping.container_url;
+
+  // unsupported 类型(voice/file/video)即时提示一次, 不阻塞 text/image
+  if (msg.unsupported_hints.length > 0) {
+    await safeSendText(client, msg, msg.unsupported_hints.join('\n'));
+  }
+
+  const hasImage = imageParts.length > 0;
+  // 纯 unsupported / 空消息: 提示已发, 无内容可派发, 不进聚合
+  if (!text && !hasImage) return;
+
+  // 软配额闸(派发前, eager 下载图之前): 超额则提示并止, 不白下图。
+  if (await isQuotaExhausted(binding.user_id)) {
+    await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
+    return;
+  }
+
+  // 进聚合窗口: 图 eager-fetch 串进 uploadChain; 窗口静默到期 flush → 合并 burst 进车道。
+  aggregateInbound(threadId, {
+    text,
+    hasImage,
+    upload: hasImage ? buildUploadThunk(binding, client, msg, imageParts, containerUrl) : undefined,
+    onFlush: (burst) => {
+      const accepted = enqueueThreadTask(threadId, () =>
+        dispatchMerged(binding, { client, msg }, threadId, burst),
+      );
+      if (!accepted) void safeSendText(client, msg, BUSY_QUEUE_TEXT);
+    },
+  });
+}
+
 export const makeHandleInbound = (): OnMessageFactory => {
-  return (binding, client) => async (raw: unknown) => {
-    const msg = parseInbound(raw);
-    if (!msg) return;
-
-    // parts → text (串联) + image 列表; slash 只看 text。
-    const text = msg.parts
-      .filter((p): p is Extract<InboundPart, { kind: 'text' }> => p.kind === 'text')
-      .map((p) => p.text)
-      .join('');
-    const imageParts = msg.parts.filter((p): p is ImagePart => p.kind === 'image');
-
-    // 入站到达埋点(常驻):量「图文混排被 iLink 拆成多条时,各条 push 实际到达 gateway 的间隔」。
-    // 聚合窗口能否兜住拆分,取决于图那条 push 比文本晚到多少 —— 这条日志把它变成可测。
-    // 用 ts(logger 自带) + message_id 关联;has_image 区分图/文那条。thread_id 可能尚未解析。
-    log.info({
-      event: 'wechat.inbound.arrived',
-      thread_id: binding.thread_id ?? null,
-      from_user_id: msg.from_user_id,
-      message_id: msg.message_id,
-      has_image: imageParts.length > 0,
-      text_len: text.length,
-    });
-
-    // Hermes slash 拦截 (详见 lib/slash-filter.ts) — 微信渠道有两点特殊:
-    //   1. /new 真生效 (网关创建新 thread + bindThread) —— 因为微信用户没有
-    //      web UI 的"新对话"按钮可用,只能靠这个指令开新会话。
-    //   2. 其他 intercept 走通用 render 文案,跟 web 端一致地引导用户。
-    const slash = classifyMessage(text);
-    if (slash.kind === 'intercept') {
-      // slash 抢占: 先结算该 thread 待聚合窗口, 保序(避免 slash 插到未派发 burst 前面)
-      if (binding.thread_id) await flush(binding.thread_id);
-      if (slash.cmd === 'new') {
-        return await handleWechatNew(binding, client, msg, slash.args);
-      }
-      const reply = await runIntercept(slash, {
-        userId: binding.user_id,
-        threadId: binding.thread_id ?? '',
-      });
-      log.info({ event: 'wechat.slash.intercepted', user_id: binding.user_id, cmd: slash.cmd, log_tag: slash.logTag });
-      await safeSendText(client, msg, reply);
-      return;
-    }
-
-    let threadId: string;
-    try {
-      threadId = await resolveThread(binding);
-    } catch (e) {
-      console.error('[handleInbound] resolveThread failed:', e);
-      await safeSendText(client, msg, FALLBACK_TEXT);
-      return;
-    }
-
-    // 容器 ready 闸(同步, 不 ready → 提示并丢弃, 不进聚合 —— 后面 upload 也要容器活着)
-    const mapping = dao.cache.get(binding.user_id);
-    if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
-      await safeSendText(client, msg, CONTAINER_NOT_READY_TEXT);
-      return;
-    }
-    const containerUrl = mapping.container_url;
-
-    // unsupported 类型(voice/file/video)即时提示一次, 不阻塞 text/image
-    if (msg.unsupported_hints.length > 0) {
-      await safeSendText(client, msg, msg.unsupported_hints.join('\n'));
-    }
-
-    const hasImage = imageParts.length > 0;
-    // 纯 unsupported / 空消息: 提示已发, 无内容可派发, 不进聚合
-    if (!text && !hasImage) return;
-
-    // 软配额闸(派发前, eager 下载图之前): 超额则提示并止, 不白下图。
-    if (await isQuotaExhausted(binding.user_id)) {
-      await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
-      return;
-    }
-
-    // 进聚合窗口: 图 eager-fetch 串进 uploadChain; 窗口静默到期 flush → 合并 burst 进车道。
-    aggregateInbound(threadId, {
-      text,
-      hasImage,
-      upload: hasImage ? buildUploadThunk(binding, client, msg, imageParts, containerUrl) : undefined,
-      onFlush: (burst) => {
-        const accepted = enqueueThreadTask(threadId, () =>
-          dispatchMerged(binding, { client, msg }, threadId, burst),
-        );
-        if (!accepted) void safeSendText(client, msg, BUSY_QUEUE_TEXT);
-      },
-    });
+  return (binding, client) => (raw: unknown) => {
+    return runWithTrace(
+      { trace_id: genId.trace },
+      () => onWechatInbound(binding, client, raw)
+    );
   };
 };
 

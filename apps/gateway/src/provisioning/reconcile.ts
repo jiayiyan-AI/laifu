@@ -8,12 +8,7 @@
 import { config } from '../config.js';
 import { dao } from '../db/index.js';
 import { policyHashFor, reconcileContainerAppAzure } from './azure.js';
-
-const log = {
-  info: (obj: unknown, msg: string) => console.log(`[reconcile] ${msg}`, obj),
-  warn: (obj: unknown, msg: string) => console.warn(`[reconcile] ${msg}`, obj),
-  error: (obj: unknown, msg: string) => console.error(`[reconcile] ${msg}`, obj),
-};
+import { log } from '../lib/logger.js';
 
 /** 进程内 per-user 去重: 同一用户同一时刻只跑一个 reconcile, 挡住单实例并发踩踏。 */
 const inflight = new Map<string, Promise<void>>();
@@ -31,7 +26,7 @@ const startReconcile = (userId: string): Promise<void> => {
   const existing = inflight.get(userId);
   if (existing) return existing;
   const p = reconcileUser(userId)
-    .catch((err) => log.warn({ userId, err: String(err) }, 'reconcile failed'))
+    .catch((err) => log.warn({ event: 'aca.reconcile.failed', user_id: userId, err: String(err) }))
     .finally(() => inflight.delete(userId));
   inflight.set(userId, p);
   return p;
@@ -75,7 +70,7 @@ export const sweepReconcileAll = async (): Promise<void> => {
     .filter((m) => m.status === 'ready' && m.policy_hash !== policyHashFor(m.user_id))
     .map((m) => m.user_id);
   if (stale.length === 0) return;                              // 稳态: 零 ARM 调用
-  log.info({ count: stale.length }, 'sweep: reconciling stale ACAs');
+  log.info({ event: 'aca.reconcile.sweep.start', count: stale.length });
   await runPool(stale, SWEEP_CONCURRENCY, startReconcile);
-  log.info({ count: stale.length }, 'sweep: done');
+  log.info({ event: 'aca.reconcile.sweep.done', count: stale.length });
 };

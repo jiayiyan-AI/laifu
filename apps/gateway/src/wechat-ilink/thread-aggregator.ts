@@ -23,6 +23,8 @@
  */
 import type { WechatAttachmentRef } from '@lingxi/shared';
 import { log } from '../lib/logger.js';
+import { genId } from '@lingxi/db';
+import { runWithTrace, getTraceId } from '../lib/trace-context.js';
 
 // ─── 窗口取值(env 可覆盖;偏向「修复拆分」而非「最低延迟」)───
 // 窗口 = 收到**最后一条**消息后再静默等这么久才派发。值越大越能兜住「iLink 把图文拆成多条、
@@ -80,6 +82,9 @@ interface Slot {
   uploadChain: Promise<void>;
   onFlush: (burst: AggregatedBurst) => void;
   firstTs: number;
+  /** burst 的关联 trace_id: slot 创建时捕获 ambient(无则现签), uploadChain + onFlush 都在它里面跑,
+   *  让聚合后**异步触发**的派发(定时器 / slash 抢占 / 直接 flush)始终归到同一 trace, 不依赖上下文自动传播。 */
+  trace: string;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -106,6 +111,7 @@ export const aggregateInbound = (threadId: string, opts: AggregateOpts): void =>
       uploadChain: Promise.resolve(),
       onFlush: opts.onFlush,
       firstTs: now,
+      trace: getTraceId() ?? genId.trace,
       timer: setTimeout(() => {}, 0),
     };
     clearTimeout(slot.timer);
@@ -118,23 +124,25 @@ export const aggregateInbound = (threadId: string, opts: AggregateOpts): void =>
   if (opts.upload) {
     const upload = opts.upload;
     const cur = slot;
-    slot.uploadChain = slot.uploadChain.then(async () => {
-      try {
-        const { attachments, fetchErrors } = await upload();
-        cur.attachments.push(...attachments);
-        cur.fetchErrors.push(...fetchErrors);
-      } catch (e) {
-        // upload 约定吞错; 这里是兜底,防一条抛错带垮整条 uploadChain。
-        cur.fetchErrors.push(e instanceof Error ? e.message : String(e));
-        log.warn({ event: 'thread.agg.upload.error', thread_id: threadId, err: String(e) });
-      }
-    });
+    slot.uploadChain = slot.uploadChain.then(() =>
+      runWithTrace({ trace_id: cur.trace }, async () => {
+        try {
+          const { attachments, fetchErrors } = await upload();
+          cur.attachments.push(...attachments);
+          cur.fetchErrors.push(...fetchErrors);
+        } catch (e) {
+          // upload 约定吞错; 这里是兜底,防一条抛错带垮整条 uploadChain。
+          cur.fetchErrors.push(e instanceof Error ? e.message : String(e));
+          log.warn({ event: 'thread.agg.upload.error', thread_id: threadId, err: String(e) });
+        }
+      }),
+    );
   }
 
   clearTimeout(slot.timer);
   const want = computeWaitMs(opts.text, opts.hasImage);
   const capped = Math.max(0, Math.min(want, HARD_CAP_MS - (now - slot.firstTs)));
-  slot.timer = setTimeout(() => { void flush(threadId); }, capped);
+  slot.timer = setTimeout(() => flush(threadId), capped);
 };
 
 /**
@@ -147,7 +155,10 @@ export const flush = async (threadId: string): Promise<void> => {
   slots.delete(threadId);
   clearTimeout(slot.timer);
   await slot.uploadChain;
-  slot.onFlush({ texts: slot.texts, attachments: slot.attachments, fetchErrors: slot.fetchErrors });
+  // onFlush(→ 派发)在 burst 自己的 trace 里跑, 与触发路径(定时器/抢占/直接 flush)无关。
+  runWithTrace({ trace_id: slot.trace }, () => {
+    slot.onFlush({ texts: slot.texts, attachments: slot.attachments, fetchErrors: slot.fetchErrors });
+  });
 };
 
 /** 当前是否有待结算窗口(introspection / 测试)。 */

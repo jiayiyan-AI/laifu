@@ -7,6 +7,8 @@ import { existsSync } from 'node:fs';
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
 import { dao, getDb } from './db/index.js';
+import { genId } from '@lingxi/db';
+import { runWithTrace } from './lib/trace-context.js';
 import { healthzRouter } from './api/healthz.js';
 import { buildStatusRouter } from './api/status.js';
 import { buildPurchaseRouter } from './api/purchase.js';
@@ -52,6 +54,13 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
+
+  // 请求级 trace 上下文: 优先续用入站 X-Trace-Id (容器回调会带), 否则现签一个。
+  // 挂在路由之前 → 之后所有 handler / 出站调用 / 日志都在同一 trace 上下文里。
+  app.use((req, _res, next) => {
+    const incoming = req.header('x-trace-id')?.trim();
+    runWithTrace({ trace_id: incoming || genId.trace }, () => next());
+  });
 
   app.use(healthzRouter);
   const sessionMw = requireSession({

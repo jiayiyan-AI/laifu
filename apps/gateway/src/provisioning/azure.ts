@@ -177,6 +177,7 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
             { name: 'HERMES_BASE_URL', value: config.azure.hermesBaseUrl },
             { name: 'HERMES_VISION_MODEL', value: config.azure.hermesVisionModel },
             { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
+            { name: 'USER_ID', value: userId },
             { name: 'LAIFU_USER_TOKEN', value: token },
             { name: 'GATEWAY_SECRET', secretRef: GATEWAY_SECRET },
           ],

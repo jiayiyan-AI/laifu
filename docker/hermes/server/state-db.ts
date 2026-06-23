@@ -15,6 +15,7 @@
 import { Database } from 'bun:sqlite';
 import { STATE_DB_PATH, TOKEN_COLS } from './config.ts';
 import type { TokenCol } from './config.ts';
+import { log } from './logger.ts';
 
 const CONTENT_JSON_PREFIX = '\x00json:';
 
@@ -60,7 +61,7 @@ export function loadMessagesByUuid(uuid: string | null | undefined): HistoryMess
   try {
     db = openStateDb();
   } catch (e) {
-    console.error(`[server] open state.db failed: ${(e as Error).message}`);
+    log.error({ event: 'statedb.open.failed', err: (e as Error).message });
     return [];
   }
 
@@ -113,7 +114,7 @@ export function snapshotSession(hermesUuid: string | null | undefined): Snapshot
   try {
     db = openStateDb();
   } catch (e) {
-    console.error(`[server] snapshot open state.db failed: ${(e as Error).message}`);
+    log.error({ event: 'statedb.snapshot.open.failed', err: (e as Error).message });
     return emptySnapshot();
   }
   try {
@@ -128,7 +129,7 @@ export function snapshotSession(hermesUuid: string | null | undefined): Snapshot
     }
     return out;
   } catch (e) {
-    console.error(`[server] snapshotSession(${hermesUuid}) failed: ${(e as Error).message}`);
+    log.error({ event: 'statedb.snapshot.failed', hermes_session_id: hermesUuid, err: (e as Error).message });
     return emptySnapshot();
   } finally {
     db.close();

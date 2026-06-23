@@ -13,6 +13,7 @@ import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { IMAGE_CACHE_DIR, INBOX_CACHE_TTL_DAYS } from './config.ts';
+import { log } from './logger.ts';
 
 const TTL_MS = INBOX_CACHE_TTL_DAYS * 86_400_000;
 // gateway 没给 X-Max-Bytes 时的兜底上限 (正常 gateway 总会给, 这是防绕过)。
@@ -74,7 +75,7 @@ export async function handleInboxImage(req: Request): Promise<Response> {
   } catch (e) {
     await unlink(partialPath).catch(() => {});
     const err = e instanceof Error ? e.message : String(e);
-    console.error(`[inbox] image upload failed: ${err}`);
+    log.error({ event: 'inbox.image.upload.failed', err, bytes });
     return Response.json({ error: err }, { status: 500 });
   }
 

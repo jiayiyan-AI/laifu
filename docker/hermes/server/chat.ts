@@ -22,6 +22,8 @@ import { snapshotSession, usageDelta } from './state-db.ts';
 import type { Snapshot } from './state-db.ts';
 import { runHermes, buildSubprocessEnv, detectNewSessionId, cleanReply } from './hermes-proc.ts';
 import { httpJsonRetry } from '/opt/lingxi-scripts/lib.ts';
+import { log } from './logger.ts';
+import { getTraceId } from './trace-context.ts';
 
 export interface CallHermesResult {
   stdout: string;
@@ -58,9 +60,9 @@ export async function callHermes(
     if (newId) {
       await putHermesId(sessionName, newId);
       resolved = newId;
-      console.log(`[server] mapped ${sessionName} → ${newId}`);
+      log.info({ event: 'session.map', session: sessionName, hermes_session_id: newId, source });
     } else {
-      console.log(`[server] could NOT find hermes_session_id for ${sessionName}`);
+      log.warn({ event: 'session.map.miss', session: sessionName, source });
     }
   }
 
@@ -134,7 +136,7 @@ export async function asyncChatAndCallback(
 // POST 回调 gateway, 带重试 (httpJsonRetry 默认 exp backoff 1s/2s/4s)
 async function postCallback(payload: CallbackPayload): Promise<void> {
   if (!GATEWAY_BASE_URL || !LAIFU_USER_TOKEN) {
-    console.log('[server] callback skipped: GATEWAY_BASE_URL or LAIFU_USER_TOKEN not set');
+    log.warn({ event: 'callback.skipped', reason: 'gateway_base_url_or_token_unset', type: payload.type });
     return;
   }
 
@@ -148,14 +150,16 @@ async function postCallback(payload: CallbackPayload): Promise<void> {
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
           Authorization: `Bearer ${LAIFU_USER_TOKEN}`,
+          // 回写 trace_id → gateway callback handler 经全局中间件续上同一 trace, 闭环。
+          ...(getTraceId() ? { 'X-Trace-Id': getTraceId()! } : {}),
         },
         body: payload,
         timeoutMs: 15_000,
       },
       CALLBACK_MAX_RETRIES - 1,
     );
-    console.log(`[server] callback ok (${payload.type})`);
+    log.info({ event: 'callback.ok', type: payload.type, loop_id: payload.loop_id });
   } catch (e) {
-    console.error(`[server] callback exhausted all retries: ${(e as Error).message}`);
+    log.error({ event: 'callback.failed', type: payload.type, loop_id: payload.loop_id, err: (e as Error).message });
   }
 }

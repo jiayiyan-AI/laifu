@@ -64,6 +64,10 @@ class IdGenerator {
   get tool(): string {
     return newEntityId('tc');
   }
+
+  get trace() {
+    return `trace_${Date.now()}`;
+  }
 }
 
 export const genId = new IdGenerator();
