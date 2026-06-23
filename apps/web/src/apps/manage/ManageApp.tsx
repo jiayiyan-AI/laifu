@@ -1,12 +1,10 @@
 import { useState } from 'react';
 import type { Capability } from '../../lib/capabilities.js';
-import { authAtom } from '../../states/auth.atom.js';
 import { IconSpark, IconMessage, IconPlus } from '../../lib/icons.js';
 import { entitlementsAtom } from '../../states/entitlements.atom.js';
 import { CAPABILITIES, MARKET_CAPABILITIES, isEquipped } from '../../lib/capabilities.js';
 import { CapabilityEquip, CapabilityRemove } from './CapabilityAction.js';
 import { useAssistantName, assistantAtom } from '../../states/assistant.atom.js';
-import { assistantEmailPreview } from '../../lib/assistantEmail.js';
 import { useIMCount } from '../../states/imBindings.atom.js';
 
 type Tab = 'equip' | 'market';
@@ -70,9 +68,7 @@ export const ManageApp = ({ onOpenIM }: { onOpenIM: () => void }) => {
   const [tab, setTab] = useState<Tab>('equip');
   const assistantName = useAssistantName();
   const [assistant] = assistantAtom.use();
-  const [auth] = authAtom.use();
-  const domain = auth.status === 'authenticated' ? auth.user.email_domain : 'mail.localhost';
-  const email = assistant.email ?? assistantEmailPreview(assistantName, domain);
+  const email = assistant.email ?? '未分配';
   const imCount = useIMCount();
 
   const equipped = CAPABILITIES.filter((c) => isEquipped(c, ent.observed));

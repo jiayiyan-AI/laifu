@@ -21,7 +21,7 @@ import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildCloudRouter } from './api/cloud.js';
 import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
 import { getEmailProvider } from './lib/email/index.js';
-import { ensureEmailAddress } from './api/email-provision.js';
+import { claimEmailAddress } from './api/email-provision.js';
 import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
 import { loadPricing } from './lib/pricing.js';
@@ -140,7 +140,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       sessionMw,
       onEnable: async (userId: string, feature: string) => {
         if (feature === 'email') {
-          await ensureEmailAddress(userId);
+          await claimEmailAddress(userId);   // 回填：无用户输入 → u-<hash> 默认
         }
       },
     }));

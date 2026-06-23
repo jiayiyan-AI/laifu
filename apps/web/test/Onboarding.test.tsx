@@ -12,8 +12,11 @@ vi.mock('../src/lib/api.js', async (orig) => ({
 }));
 
 const renderIt = () => render(<WithStore><Onboarding onReady={() => {}} /></WithStore>);
+const nameInput = () => screen.findByPlaceholderText(/灵犀.*Aria.*小助/);
+const emailInput = () => screen.getByPlaceholderText(/自己起一个/);
+const activateBtn = () => screen.getByRole('button', { name: /确认支付并激活/ });
 
-describe('Onboarding 起名', () => {
+describe('Onboarding 起名 + 自填邮箱', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('名字为空时激活按钮 disabled', async () => {
@@ -21,19 +24,29 @@ describe('Onboarding 起名', () => {
     expect(await screen.findByRole('button', { name: /确认支付并激活/ })).toBeDisabled();
   });
 
-  it('输入名字 → 邮箱预览实时变化 + 按钮可点', async () => {
+  it('填名字、邮箱留空 → 按钮可点；purchase 带 assistant_name，email_localpart=undefined', async () => {
     renderIt();
-    const input = await screen.findByPlaceholderText(/灵犀.*Aria.*小助/);
-    fireEvent.change(input, { target: { value: 'Aria' } });
-    expect(screen.getByText(/aria@mail\.laifu\.uncagedai\.org/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /确认支付并激活/ })).toBeEnabled();
+    fireEvent.change(await nameInput(), { target: { value: '灵犀' } });
+    expect(activateBtn()).toBeEnabled();
+    fireEvent.click(activateBtn());
+    expect(api.purchase).toHaveBeenCalledWith({ assistant_name: '灵犀', email_localpart: undefined });
   });
 
-  it('点激活 → purchase 带 assistant_name', async () => {
+  it('自填邮箱前缀 → 显示 @域名后缀；purchase 带小写化的 localpart（不拼音）', async () => {
     renderIt();
-    const input = await screen.findByPlaceholderText(/灵犀.*Aria.*小助/);
-    fireEvent.change(input, { target: { value: '灵犀' } });
-    fireEvent.click(screen.getByRole('button', { name: /确认支付并激活/ }));
-    expect(api.purchase).toHaveBeenCalledWith({ assistant_name: '灵犀' });
+    fireEvent.change(await nameInput(), { target: { value: '灵犀' } });
+    fireEvent.change(emailInput(), { target: { value: 'Aria' } });
+    expect(screen.getByText('@mail.laifu.uncagedai.org')).toBeInTheDocument();
+    fireEvent.click(activateBtn());
+    expect(api.purchase).toHaveBeenCalledWith({ assistant_name: '灵犀', email_localpart: 'aria' });
+  });
+
+  it('邮箱前缀格式非法 → 按钮 disabled + 格式提示，不发请求', async () => {
+    renderIt();
+    fireEvent.change(await nameInput(), { target: { value: '灵犀' } });
+    fireEvent.change(emailInput(), { target: { value: 'ab' } });   // < 3 位
+    expect(activateBtn()).toBeDisabled();
+    expect(screen.getByText(/小写字母\/数字开头结尾/)).toBeInTheDocument();
+    expect(api.purchase).not.toHaveBeenCalled();
   });
 });
