@@ -26,9 +26,9 @@ export const IM_PROVIDERS: IMProvider[] = [
   },
   {
     id: 'feishu', name: '飞书', brand: '#3370ff', brandWeak: '#3370ff1f',
-    status: 'coming_soon', icon: <IconFeishu size={22} color="#3370ff" />,
+    status: 'available', icon: <IconFeishu size={22} color="#3370ff" />,
     unboundDesc: '绑定后在飞书里直接给助理派活',
-    bindTitlePrefix: '用飞书扫一扫绑定',
-    steps: ['打开飞书 → 扫一扫', '扫描二维码', '在飞书里点确认授权'],
+    bindTitlePrefix: '用飞书绑定',
+    steps: ['打开飞书 → 扫一扫，扫描二维码', '飞书为你创建专属应用，等待企业管理员审批', '审批通过后点"我已审批"激活'],
   },
 ];
