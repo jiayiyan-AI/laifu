@@ -12,6 +12,12 @@ vi.mock('../../src/db/index.js', async () => {
 const { provisionUser } = vi.hoisted(() => ({ provisionUser: vi.fn(async () => {}) }));
 vi.mock('../../src/provisioning/manager.js', () => ({ provisionUser }));
 
+// ensureEmailAddress 分配邮箱；mock 掉避免真跑 DAO 逻辑
+vi.mock('../../src/api/email-provision.js', () => ({
+  ensureEmailAddress: vi.fn(async () => 'mock-localpart'),
+  defaultLocalpart: (userId: string) => `u-${userId.replace(/-/g, '').slice(0, 8)}`,
+}));
+
 import { dao } from '../../src/db/index.js';
 import { buildPurchaseRouter } from '../../src/api/purchase.js';
 import { signSession } from '../../src/auth/session.js';
@@ -46,14 +52,32 @@ describe('POST /api/purchase', () => {
   it('inserts container_mapping row, returns provisioning, kicks off async task', async () => {
     const res = await request(makeApp())
       .post('/api/purchase')
+      .send({ assistant_name: '小林' })
       .set('Cookie', validCookie('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('provisioning');
     expect(res.body.user_id).toBe('u1');
-    expect(dao.containerMapping.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1' }));
+    expect(dao.containerMapping.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1', assistant_name: '小林' }));
     expect(provisionUser).toHaveBeenCalledOnce();
     expect(provisionUser).toHaveBeenCalledWith('u1');
+  });
+
+  it('400 when assistant_name missing', async () => {
+    const res = await request(makeApp())
+      .post('/api/purchase')
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(400);
+    expect(provisionUser).not.toHaveBeenCalled();
+  });
+
+  it('400 when assistant_name is empty string', async () => {
+    const res = await request(makeApp())
+      .post('/api/purchase')
+      .send({ assistant_name: '   ' })
+      .set('Cookie', validCookie('u1'));
+    expect(res.status).toBe(400);
+    expect(provisionUser).not.toHaveBeenCalled();
   });
 
   it('401 when no session cookie', async () => {

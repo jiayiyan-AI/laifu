@@ -3,6 +3,7 @@
  * 被 session-routes 与 password-routes 共用,避免两处重复定义。
  */
 import type { AuthMeResponse } from '@lingxi/shared';
+import { config } from '../config.js';
 
 export interface UserView {
   id: string;
@@ -20,4 +21,5 @@ export const toMeResponse = (row: UserView): AuthMeResponse => ({
   email: row.email,
   nickname: row.nickname,
   avatar_url: row.avatar_url,
+  email_domain: config.email.domain,
 });

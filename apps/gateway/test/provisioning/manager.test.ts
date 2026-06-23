@@ -20,6 +20,7 @@ const finalReadyRow = {
   error_message: null,
   created_at: new Date().toISOString(),
   ready_at: new Date().toISOString(),
+  assistant_name: null,
 };
 
 describe('provisionContainer', () => {
