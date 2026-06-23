@@ -20,6 +20,10 @@ export const PORT: number = parseInt(process.env.PORT ?? '8080', 10);
 
 export const GATEWAY_BASE_URL: string = process.env.GATEWAY_BASE_URL ?? '';
 
+// 该容器归属的用户 id (gateway azure.ts buildSpec 以 env 注入)。结构化日志的
+// user_id 基础字段; dev / 未注入时为空, logger 会省略该字段。
+export const USER_ID: string = (process.env.USER_ID ?? '').trim();
+
 // 容器侧 Bearer 验签密钥 (gateway buildSpec 以 KV reference 注入)。
 // 空 = dev / 未注入 → http.ts requireBearer 放行 (见 auth.ts)。
 export const GATEWAY_SECRET: string = (process.env.GATEWAY_SECRET ?? '').trim();

@@ -11,6 +11,7 @@ import { getContainerToken } from '../lib/aca-call.js';
 import { noteContainerActivity } from '../lib/container-warm-cache.js';
 import { WECHAT_IMAGE_MAX_BYTES } from './wechat-media-fetcher.js';
 import { log } from '../lib/logger.js';
+import { getTraceId } from '../lib/trace-context.js';
 
 const UPLOAD_TIMEOUT_MS = 60_000;
 
@@ -50,6 +51,7 @@ export async function uploadImageStream(args: UploadImageArgs): Promise<Uploaded
         Authorization: `Bearer ${token}`,
         'X-Max-Bytes': String(WECHAT_IMAGE_MAX_BYTES),
         'X-Filename': args.filename ?? '',
+        ...(getTraceId() ? { 'X-Trace-Id': getTraceId()! } : {}),
       },
       signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });

@@ -25,7 +25,7 @@
 - **现象**：单个 HTTP 请求超过 240s 会被 ACA Ingress 强切, 返回 504。
 - **本质**：Consumption-only 环境的 ingress idle timeout **固定 240s 且不可配** (envoy 写死)。"idle" 指的是这条 TCP 连接 4 分钟内没有任何字节流动 — **不是绝对耗时**, 这是后续绕开方案的关键。
 - **当前架构**：Gateway → Container 用同步 `POST /chat` 调用 (`apps/gateway/src/lib/aca-call.ts`), 受这个上限制约。
-- **实测**：2026-06-05 wechat 链路一次 240015ms (≈240s 整) → `http_504`, 来源是平台返回不是 hermes。同一链路下一条 chat 38s 成功。指标埋在 `event=aca.chat.call`, KQL 见 `docs/observability.md`。
+- **实测**：2026-06-05 wechat 链路一次 240015ms (≈240s 整) → `http_504`, 来源是平台返回不是 hermes。同一链路下一条 chat 38s 成功。指标现埋在 `event=aca.chat.dispatch`(端到端按 thread_id 关联 callback, 见 `docs/log.md` §9.3), KQL 见 `docs/log.md`。
 
 #### 绕开方案 (按性价比排序)
 
@@ -58,7 +58,7 @@ gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通
 
 #### 不要做的
 
-- 在 `aca-call.ts` 里调 `/chat` 前先打 `/health` probe 预热 — 让所有请求多一次 RTT, 得不偿失。之前试过又回滚, 冷启动判断改成 join `ContainerAppSystemLogs_CL` 的 scaler 事件, 见 `docs/observability.md`。
+- 在 `aca-call.ts` 里调 `/chat` 前先打 `/health` probe 预热 — 让所有请求多一次 RTT, 得不偿失。之前试过又回滚, 冷启动判断改成 join `ContainerAppSystemLogs_CL` 的 scaler 事件, 见 `docs/log.md` §9.5。
   - **例外 (2026-06, 微信图片附件)**: files 链路 (`container-warm-cache.ts` 的 `ensureContainerWarm`) **有图时**会先 `GET /health` 唤醒再开 streaming pipeline。原因不同于上面的"省 RTT": files 把 CDN 连接挂在冷启动窗口里, 微信 CDN ~30-60s idle timeout 必 RST 整张图作废, 所以必须先唤醒。text `/chat` 路径**仍不加 probe**, 本条结论不变。详见 `docs/todo/weichat-file-impl.md` §3.7。
 
 

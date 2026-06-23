@@ -28,6 +28,7 @@ import { cleanReply, runHermes, hermesSubprocessBaseEnv } from './hermes-proc.ts
 import { callHermes, asyncChatAndCallback } from './chat.ts';
 import { requireBearer } from './auth.ts';
 import { handleInboxImage } from './inbox.ts';
+import { log } from './logger.ts';
 
 // `hermes sessions delete` 是纯 SQLite 操作 (state.db 里 sessions/messages 几条 UPDATE),
 // 正常 < 1s; 15s 上限只防 state.db 被 hermes writer 长锁的极端情况。
@@ -60,7 +61,7 @@ async function handleHistory(url: URL): Promise<Response> {
     const messages = uuid ? loadMessagesByUuid(uuid) : [];
     return Response.json({ messages });
   } catch (e) {
-    console.error(`[server] load_history failed: ${(e as Error).message}`);
+    log.error({ event: 'history.load.failed', err: (e as Error).message });
     return Response.json({ error: 'load_history failed' }, { status: 500 });
   }
 }
@@ -93,7 +94,7 @@ async function handleChat(req: Request): Promise<Response> {
   if (callback && typeof callback === 'object' && callback.loop_id) {
     const loopId = callback.loop_id;
     asyncChatAndCallback(message, sessionId, source, loopId).catch((e) => {
-      console.error(`[server] asyncChatAndCallback unhandled: ${(e as Error).message}`);
+      log.error({ event: 'chat.async.unhandled', loop_id: loopId, err: (e as Error).message });
     });
     return Response.json({ accepted: true }, { status: 202 });
   }
@@ -153,25 +154,25 @@ async function handleDeleteSession(url: URL): Promise<Response> {
       SESSION_DELETE_TIMEOUT_MS,
     );
     if (timedOut) {
-      console.error(`[server] session delete ${sessionName} (${uuid}) timed out`);
+      log.error({ event: 'session.delete', session: sessionName, hermes_session_id: uuid, status: 'timeout' });
       return Response.json({ error: 'hermes sessions delete timeout' }, { status: 504 });
     }
     if (exitCode !== 0) {
-      console.error(`[server] session delete ${sessionName} (${uuid}) exit ${exitCode}: ${stderr.trim()}`);
+      log.error({ event: 'session.delete', session: sessionName, hermes_session_id: uuid, status: 'error', exit_code: exitCode, stderr: stderr.trim() });
       return Response.json(
         { error: `hermes sessions delete exit ${exitCode}`, stderr: stderr.trim() },
         { status: 500 },
       );
     }
     await delHermesId(sessionName);
-    console.log(`[server] session deleted ${sessionName} → ${uuid}`);
+    log.info({ event: 'session.delete', session: sessionName, hermes_session_id: uuid, status: 'ok' });
     return Response.json({ ok: true, deleted: true, hermes_session_id: uuid });
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') {
       return Response.json({ error: `hermes binary not found (${HERMES_BIN})` }, { status: 500 });
     }
-    console.error(`[server] session delete ${sessionName} threw: ${err.message}`);
+    log.error({ event: 'session.delete', session: sessionName, status: 'error', err: err.message ?? String(e) });
     return Response.json({ error: err.message ?? String(e) }, { status: 500 });
   }
 }
