@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { IconSpark, IconRefresh } from '../lib/icons.js';
+import { assistantEmailPreview } from '../lib/assistantEmail.js';
+import { assistantAtom } from '../states/assistant.atom.js';
+import { authAtom } from '../states/auth.atom.js';
+import { isValidAssistantName, MAX_ASSISTANT_NAME_LEN } from '@lingxi/shared';
 
 type View =
   | { mode: 'loading' }
@@ -17,13 +21,18 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
   const [view, setView] = useState<View>({ mode: 'loading' });
   const [submitting, setSubmitting] = useState(false);
   const pollRef = useRef<number | null>(null);
+  const [name, setName] = useState('');
+  const [, assistantActions] = assistantAtom.use();
+  const [auth] = authAtom.use();
+  const domain = auth.status === 'authenticated' ? auth.user.email_domain : 'mail.localhost';
+  const nameValid = isValidAssistantName(name);
 
   useEffect(() => {
     void (async () => {
       try {
         const s = await api.status();
         if (!s) { setView({ mode: 'not-purchased' }); return; }
-        if (s.status === 'ready') { setView({ mode: 'ready' }); onReady(); return; }
+        if (s.status === 'ready') { setView({ mode: 'ready' }); void assistantActions.refresh(); onReady(); return; }
         if (s.status === 'failed') { setView({ mode: 'failed', err: s.error_message ?? '未知错误' }); return; }
         setView({ mode: 'provisioning', step: s.provisioning_step ?? '准备中…', pct: s.progress_pct });
       } catch (e) {
@@ -38,7 +47,7 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
       try {
         const s = await api.status();
         if (!s) return;
-        if (s.status === 'ready') { onReady(); setView({ mode: 'ready' }); return; }
+        if (s.status === 'ready') { void assistantActions.refresh(); onReady(); setView({ mode: 'ready' }); return; }
         if (s.status === 'failed') { setView({ mode: 'failed', err: s.error_message ?? '失败' }); return; }
         setView({ mode: 'provisioning', step: s.provisioning_step ?? '准备中…', pct: s.progress_pct });
       } catch { /* ignore tick errors */ }
@@ -50,9 +59,11 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
   }, [view.mode, onReady]);
 
   const onPurchase = async () => {
+    if (!nameValid) return;
     setSubmitting(true);
     try {
-      await api.purchase();
+      await api.purchase({ assistant_name: name.trim() });
+      assistantActions.setName(name.trim());
       setView({ mode: 'provisioning', step: '正在创建账户与订单', pct: 5 });
     } catch (e) {
       setView({ mode: 'failed', err: e instanceof Error ? e.message : '购买失败' });
@@ -76,21 +87,43 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
         </p>
 
         {view.mode === 'not-purchased' && (
-          <>
-            <button className="btn btn-primary" style={{ padding: '12px 28px', fontSize: 14 }} disabled={submitting} onClick={onPurchase}>
-              {submitting ? '激活中…' : '购买并激活灵犀助理'}
+          <div style={{ textAlign: 'left' }}>
+            <label style={{ fontSize: 13, fontWeight: 600 }}>
+              给你的助理起个名字 <span style={{ color: 'var(--bad)' }}>*</span>
+              <span className="dim" style={{ fontWeight: 400, marginLeft: 6 }}>必填</span>
+            </label>
+            <input className="input" autoFocus maxLength={MAX_ASSISTANT_NAME_LEN} value={name}
+              onChange={(e) => setName(e.target.value)} placeholder="如：灵犀 / Aria / 小助"
+              style={{ width: '100%', marginTop: 8 }} />
+            <div className="dim" style={{ fontSize: 11.5, marginTop: 6, fontFamily: 'monospace' }}>
+              专属邮箱预览：{assistantEmailPreview(name, domain)}
+            </div>
+            <div className="muted" style={{ fontSize: 12, margin: '16px 0 6px' }}>套餐 · MVP 阶段免费</div>
+            <button className="btn btn-primary"
+              style={{ width: '100%', padding: '12px 28px', fontSize: 14, marginTop: 10, opacity: nameValid ? 1 : 0.5 }}
+              disabled={submitting || !nameValid} onClick={onPurchase}>
+              {submitting ? '激活中…' : '确认支付并激活'}
             </button>
-            <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>免费 · MVP 阶段</div>
-          </>
+          </div>
         )}
 
         {view.mode === 'provisioning' && (
           <div className="fade">
+            {name.trim() && (
+              <div style={{ margin: '4px 0 14px' }}>
+                <div style={{ fontSize: 15, fontWeight: 650 }}>{name.trim()}</div>
+                <div className="dim" style={{ fontSize: 11.5, fontFamily: 'monospace' }}>{assistantEmailPreview(name, domain)}</div>
+              </div>
+            )}
             <div className="muted" style={{ height: 20, margin: '12px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13 }}>
               <span className="spin"><IconRefresh size={13} /></span>{view.step}
             </div>
             <div className="progress"><div style={{ width: `${view.pct}%` }} /></div>
-            <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>预计 1-3 分钟（local 模式约 5 秒）</div>
+            {name.trim() && (
+              <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>
+                ✉️ 为助理生成专属邮箱：{assistantEmailPreview(name, domain)}
+              </div>
+            )}
           </div>
         )}
 

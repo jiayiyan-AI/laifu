@@ -59,7 +59,7 @@ export interface ContainerHistoryResponse {
 // === Gateway Web API 契约 (Web → Gateway) ===
 
 export interface PurchaseRequest {
-  // 当前无 body 字段；MVP 全免费、单套餐
+  assistant_name: string;   // 用户给助理起的名字（必填，trim 后 1..24 字符）
 }
 
 export interface PurchaseResponse {
@@ -76,6 +76,8 @@ export interface StatusResponse {
   entitlements_desired: string[];     // user_entitlements 表里 active 的 feature
   entitlements_observed: string[];    // container_observed_state 里容器最后报告的
   container_token_version: number;    // 当前 users.token_version（前端用来比对 observed）
+  assistant_name: string | null;      // container_mapping.assistant_name
+  assistant_email: string | null;     // 真实专属邮箱（含碰撞后缀）= localpart@EMAIL_DOMAIN; 未分配则 null
 }
 
 // === Auth 契约 ===
@@ -87,6 +89,7 @@ export interface AuthMeResponse {
   email: string | null;
   nickname: string | null;
   avatar_url: string | null;
+  email_domain: string;        // 当前部署的助理邮箱域名（前端实时预览拼）；= 后端 EMAIL_DOMAIN
 }
 
 /** 账号密码登录请求 */

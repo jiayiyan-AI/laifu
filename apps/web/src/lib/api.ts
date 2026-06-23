@@ -7,6 +7,7 @@ import type {
   AgentLoopRow,
   PasswordLoginRequest,
   PasswordRegisterRequest,
+  PurchaseRequest,
   PurchaseResponse,
   StatusResponse,
   ThreadCreateRequest,
@@ -81,8 +82,8 @@ export const logout = (): Promise<{ ok: true }> =>
   json('/api/auth/logout', { method: 'POST' });
 
 // === Purchase / Status ===
-export const purchase = (): Promise<PurchaseResponse> =>
-  json('/api/purchase', { method: 'POST' });
+export const purchase = (body: PurchaseRequest): Promise<PurchaseResponse> =>
+  json('/api/purchase', { method: 'POST', body: JSON.stringify(body) });
 
 export const status = async (): Promise<StatusResponse | null> => {
   const resp = await fetch('/api/status', { credentials: 'include' });

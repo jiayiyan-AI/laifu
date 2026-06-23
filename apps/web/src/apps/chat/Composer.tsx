@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type FormEvent, type KeyboardEvent } from 'react';
 import { IconSend } from '../../lib/icons.js';
+import { useAssistantName } from '../../states/assistant.atom.js';
 
 interface Props {
   disabled?: boolean;
@@ -9,6 +10,7 @@ interface Props {
 const MAX_H = 120;
 
 export const Composer = ({ disabled, onSend }: Props) => {
+  const n = useAssistantName();
   const [value, setValue] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -33,7 +35,7 @@ export const Composer = ({ disabled, onSend }: Props) => {
     <form onSubmit={submit} style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'rgba(255,255,255,0.8)', padding: '13px 18px', display: 'flex', gap: 10, alignItems: 'flex-end' }}>
       <textarea
         ref={taRef}
-        placeholder="继续和灵犀对话…"
+        placeholder={`继续和${n}对话…`}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) submit(e); }}

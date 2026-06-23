@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type Router as RouterType, type RequestHandler } from 'express';
 import type { StatusResponse } from '@lingxi/shared';
 import { dao } from '../db/index.js';
+import { config } from '../config.js';
 
 export const buildStatusRouter = (
   sessionMw: RequestHandler,
@@ -15,10 +16,11 @@ export const buildStatusRouter = (
       return;
     }
 
-    const [desired, observed, tv] = await Promise.all([
+    const [desired, observed, tv, addr] = await Promise.all([
       dao.entitlements.listActive(userId),
       dao.observedState.get(userId),
       dao.entitlements.getTokenVersion(userId),
+      dao.email.getAddress(userId),
     ]);
 
     const body: StatusResponse = {
@@ -29,6 +31,8 @@ export const buildStatusRouter = (
       entitlements_desired: desired,
       entitlements_observed: observed?.observed_entitlements ?? [],
       container_token_version: tv ?? 0,
+      assistant_name: row.assistant_name ?? null,
+      assistant_email: addr ? `${addr.localpart}@${config.email.domain}` : null,
     };
     res.json(body);
   });

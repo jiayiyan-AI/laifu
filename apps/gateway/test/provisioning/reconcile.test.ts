@@ -35,6 +35,7 @@ const row = (userId: string, policy_hash: string | null, status = 'ready'): Cont
   created_at: '2026-01-01',
   ready_at: '2026-01-01',
   policy_hash,
+  assistant_name: null,
 });
 
 /** 让 fire-and-forget 的 reconcileUser 跑完所有微任务 (reconcile → setPolicyHash → getByUserId → cache.set)。 */

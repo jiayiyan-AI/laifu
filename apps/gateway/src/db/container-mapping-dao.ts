@@ -14,6 +14,7 @@ export interface ContainerMappingDao {
     azure_files_share: string;
     status: string;
     progress_pct: number;
+    assistant_name: string;
   }): Promise<void>;
   getByUserId(userId: string): Promise<ContainerMapping | null>;
   listByStatus(status: string): Promise<{ user_id: string; container_name: string }[]>;
@@ -36,6 +37,7 @@ const toMapping = (r: typeof schema.containerMapping.$inferSelect): ContainerMap
   created_at: r.created_at?.toISOString() ?? new Date().toISOString(),
   ready_at: r.ready_at?.toISOString() ?? null,
   policy_hash: r.policy_hash ?? null,
+  assistant_name: r.assistant_name ?? null,
 });
 
 export const makeContainerMappingDao = (db: Db): ContainerMappingDao => {
@@ -48,6 +50,7 @@ export const makeContainerMappingDao = (db: Db): ContainerMappingDao => {
         azure_files_share: row.azure_files_share,
         status: row.status,
         progress_pct: row.progress_pct,
+        assistant_name: row.assistant_name,
       });
     },
 

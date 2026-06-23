@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import { IconSpark, IconGrid, IconFolder } from '../lib/icons.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
+import { useAssistantName, DEFAULT_ASSISTANT_NAME } from '../states/assistant.atom.js';
 
 export type DockAppId = 'chat' | 'manage' | 'files';
 
 interface AppDef { id: DockAppId; name: string; icon: ReactNode; c1: string; c2: string }
 
 const baseApps: AppDef[] = [
-  { id: 'chat',   name: '灵犀助理', icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
+  { id: 'chat',   name: DEFAULT_ASSISTANT_NAME, icon: <IconSpark size={24} />, c1: '#8b5cf6', c2: '#6d28d9' },
   { id: 'manage', name: '我的助理', icon: <IconGrid size={24} />,  c1: '#3b82f6', c2: '#1d4ed8' },
 ];
 
@@ -23,6 +24,7 @@ interface DockProps {
 }
 
 export const Dock = ({ onOpen, openApps, entitlements }: DockProps) => {
+  const assistantName = useAssistantName();
   const conditional: AppDef[] = CAPABILITIES
     .filter((c) => c.desktopApp && entitlements.includes(c.id) && dockVisuals[c.desktopApp])
     .map((c) => ({ id: c.desktopApp as DockAppId, ...dockVisuals[c.desktopApp!]! }));
@@ -39,18 +41,21 @@ export const Dock = ({ onOpen, openApps, entitlements }: DockProps) => {
       border: '1px solid rgba(255,255,255,0.5)',
       boxShadow: '0 14px 44px rgba(0,0,0,0.3)',
     }}>
-      {apps.map((a) => (
-        <button key={a.id} title={a.name} onClick={() => onOpen(a.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: 14, display: 'flex',
-            alignItems: 'center', justifyContent: 'center', color: '#fff',
-            background: `linear-gradient(160deg, ${a.c1}, ${a.c2})`,
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 7px 16px rgba(0,0,0,0.22)',
-            transition: 'transform 0.18s cubic-bezier(0.25,1.4,0.5,1)',
-          }}>{a.icon}</div>
-          <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', marginTop: 4, opacity: openApps.has(a.id) ? 1 : 0 }} />
-        </button>
-      ))}
+      {apps.map((a) => {
+        const label = a.id === 'chat' ? assistantName : a.name;
+        return (
+          <button key={a.id} title={label} onClick={() => onOpen(a.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{
+              width: 52, height: 52, borderRadius: 14, display: 'flex',
+              alignItems: 'center', justifyContent: 'center', color: '#fff',
+              background: `linear-gradient(160deg, ${a.c1}, ${a.c2})`,
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 7px 16px rgba(0,0,0,0.22)',
+              transition: 'transform 0.18s cubic-bezier(0.25,1.4,0.5,1)',
+            }}>{a.icon}</div>
+            <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', marginTop: 4, opacity: openApps.has(a.id) ? 1 : 0 }} />
+          </button>
+        );
+      })}
     </div>
   );
 };

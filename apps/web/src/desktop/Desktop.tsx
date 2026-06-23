@@ -9,30 +9,33 @@ import * as api from '../lib/api.js';
 import { IconSpark, IconGrid, IconMessage, IconFolder } from '../lib/icons.js';
 import { ChatApp } from '../apps/chat/ChatApp.js';
 import { ManageApp } from '../apps/manage/ManageApp.js';
-import { WechatApp } from '../apps/wechat/WechatApp.js';
+import { IMHub } from '../apps/im/IMHub.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
 import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
+import { useAssistantName, DEFAULT_ASSISTANT_NAME } from '../states/assistant.atom.js';
+import { ToastHost } from './ToastHost.js';
 
-type AppId = DockAppId | 'wechat';
+type AppId = DockAppId | 'im';
 
 const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
   if (id === 'chat') return <ChatApp />;
-  if (id === 'manage') return <ManageApp onOpenWechat={() => openApp('wechat')} />;
-  if (id === 'wechat') return <WechatApp />;
+  if (id === 'manage') return <ManageApp onOpenIM={() => openApp('im')} />;
+  if (id === 'im') return <IMHub />;
   if (id === 'files') return <FilesApp />;
   return null;
 };
 
 const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: number }> = {
-  chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
+  chat:   { title: DEFAULT_ASSISTANT_NAME, icon: <IconSpark size={14} />,   w: 900, h: 600 },
   manage: { title: '我的助理', icon: <IconGrid size={14} />,    w: 780, h: 580 },
-  wechat: { title: '微信绑定', icon: <IconMessage size={14} />, w: 560, h: 440 },
+  im:     { title: 'IM 绑定', icon: <IconMessage size={14} />, w: 600, h: 480 },
   files:  { title: '文件',     icon: <IconFolder size={14} />,  w: 900, h: 600 },
 };
 
 export const Desktop = () => {
   const [{ observed }] = entitlementsAtom.use();
+  const assistantName = useAssistantName();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
   // 置顶用 zIndex map, 不重排数组: 重排会让 React 移动 DOM 节点, 触发 .fade 入场动画重放 → 焦点闪烁。
@@ -84,6 +87,7 @@ export const Desktop = () => {
     return (
       <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
         <Wallpaper />
+        <ToastHost />
         <Menubar />
         <div style={{ position: 'absolute', left: 0, right: 0, top: 26, bottom: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: 600, height: 480, background: 'rgba(255,255,255,0.95)', borderRadius: 12, overflow: 'hidden', boxShadow: '0 30px 80px rgba(0,0,0,0.34), 0 0 0 1px rgba(0,0,0,0.09)' }}>
@@ -97,12 +101,14 @@ export const Desktop = () => {
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
       <Wallpaper />
+      <ToastHost />
       <Menubar />
       <div style={{ position: 'absolute', left: 0, right: 0, top: 26, bottom: 0, zIndex: 10 }}>
         {openApps.map((id, i) => {
           const meta = titles[id];
+          const title = id === 'chat' ? assistantName : meta.title;
           return (
-            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={zMap[id] ?? (i + 1)} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
+            <Window key={id} title={title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={zMap[id] ?? (i + 1)} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
               {renderApp(id, openApp)}
             </Window>
           );

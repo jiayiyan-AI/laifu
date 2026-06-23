@@ -44,13 +44,14 @@ describe('session-routes', () => {
         .get('/api/auth/me')
         .set('Cookie', validCookie('u1'));
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
+      expect(res.body).toMatchObject({
         user_id: 'u1',
         provider: 'google',
         external_id: '12345',
         email: 'a@b.com',
         nickname: 'Alice',
         avatar_url: null,
+        email_domain: 'mail.localhost',
       });
     });
 

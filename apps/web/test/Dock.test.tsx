@@ -5,7 +5,8 @@ import { Dock } from '../src/desktop/Dock.js';
 describe('Dock', () => {
   it('always shows base apps (chat + manage)', () => {
     render(<Dock onOpen={vi.fn()} openApps={new Set()} entitlements={[]} />);
-    expect(screen.getByTitle('灵犀助理')).toBeInTheDocument();
+    // 未购买时 useAssistantName() 回退 '灵犀'（不含"助理"后缀）
+    expect(screen.getByTitle('灵犀')).toBeInTheDocument();
     expect(screen.getByTitle('我的助理')).toBeInTheDocument();
   });
 

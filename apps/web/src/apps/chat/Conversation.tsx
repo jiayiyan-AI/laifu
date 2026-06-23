@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Composer } from './Composer.js';
 import * as api from '../../lib/api.js';
 import { IconSpark } from '../../lib/icons.js';
 import { usageAtom } from '../../states/usage.atom.js';
+import { useAssistantName } from '../../states/assistant.atom.js';
 import type { MessageRow } from '@lingxi/shared';
 
 export interface Message {
@@ -15,8 +16,7 @@ interface Props {
   threadId: string;
 }
 
-const THINKING_TEXTS = [
-  '灵犀正在思考…',
+const STATIC_thinkingTexts = [
   '让我想想…',
   '正在整理思路…',
   '马上就好…',
@@ -29,6 +29,8 @@ const rowToMsg = (r: MessageRow): Message => ({
 });
 
 export const Conversation = ({ threadId }: Props) => {
+  const n = useAssistantName();
+  const thinkingTexts = useMemo(() => [`${n}正在思考…`, ...STATIC_thinkingTexts], [n]);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
@@ -51,8 +53,8 @@ export const Conversation = ({ threadId }: Props) => {
     thinkingIdx.current = 0;
     const cleanup = api.connectLoopStream(loopId, {
       onHeartbeat: () => {
-        thinkingIdx.current = (thinkingIdx.current + 1) % THINKING_TEXTS.length;
-        const text = THINKING_TEXTS[thinkingIdx.current]!;
+        thinkingIdx.current = (thinkingIdx.current + 1) % thinkingTexts.length;
+        const text = thinkingTexts[thinkingIdx.current]!;
         setMsgs((m) => m.map((x, i) =>
           i === m.length - 1 && x.pending ? { ...x, text } : x,
         ));
@@ -75,7 +77,7 @@ export const Conversation = ({ threadId }: Props) => {
     });
     loopCleanup.current = cleanup;
     return cleanup;
-  }, [refreshUsage]);
+  }, [refreshUsage, thinkingTexts]);
 
   // 组件卸载时清理 loop SSE
   useEffect(() => {
@@ -104,7 +106,7 @@ export const Conversation = ({ threadId }: Props) => {
       if (cancelled) return;
       if (loop) {
         setBusy(true);
-        setMsgs((m) => [...m, { who: 'assistant', text: THINKING_TEXTS[0]!, pending: true }]);
+        setMsgs((m) => [...m, { who: 'assistant', text: thinkingTexts[0]!, pending: true }]);
         connectLoop(loop.id);
       }
     }).catch(() => { /* ignore */ });
@@ -117,7 +119,7 @@ export const Conversation = ({ threadId }: Props) => {
 
   const onSend = async (text: string) => {
     setErrorBanner(null);
-    setMsgs((m) => [...m, { who: 'user', text }, { who: 'assistant', text: THINKING_TEXTS[0]!, pending: true }]);
+    setMsgs((m) => [...m, { who: 'user', text }, { who: 'assistant', text: thinkingTexts[0]!, pending: true }]);
     setBusy(true);
 
     try {
@@ -171,7 +173,7 @@ export const Conversation = ({ threadId }: Props) => {
               borderTopLeftRadius: m.who === 'user' ? 14 : 4,
               borderTopRightRadius: m.who === 'user' ? 4 : 14,
             }}>
-              {m.text || (m.pending ? <span className="pulse">{THINKING_TEXTS[0]}</span> : '')}
+              {m.text || (m.pending ? <span className="pulse">{thinkingTexts[0]}</span> : '')}
               {m.pending && m.text && <span className="pulse"> </span>}
             </div>
           </div>
