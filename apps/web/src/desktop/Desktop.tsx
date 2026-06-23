@@ -9,18 +9,18 @@ import * as api from '../lib/api.js';
 import { IconSpark, IconGrid, IconMessage, IconFolder } from '../lib/icons.js';
 import { ChatApp } from '../apps/chat/ChatApp.js';
 import { ManageApp } from '../apps/manage/ManageApp.js';
-import { WechatApp } from '../apps/wechat/WechatApp.js';
+import { IMHub } from '../apps/im/IMHub.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
 import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
 import { useAssistantName } from '../states/assistant.atom.js';
 
-type AppId = DockAppId | 'wechat';
+type AppId = DockAppId | 'im';
 
 const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
   if (id === 'chat') return <ChatApp />;
-  if (id === 'manage') return <ManageApp onOpenWechat={() => openApp('wechat')} />;
-  if (id === 'wechat') return <WechatApp />;
+  if (id === 'manage') return <ManageApp onOpenIM={() => openApp('im')} />;
+  if (id === 'im') return <IMHub />;
   if (id === 'files') return <FilesApp />;
   return null;
 };
@@ -28,7 +28,7 @@ const renderApp = (id: AppId, openApp: (id: AppId) => void) => {
 const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: number }> = {
   chat:   { title: '灵犀助理', icon: <IconSpark size={14} />,   w: 900, h: 600 },
   manage: { title: '我的助理', icon: <IconGrid size={14} />,    w: 780, h: 580 },
-  wechat: { title: '微信绑定', icon: <IconMessage size={14} />, w: 560, h: 440 },
+  im:     { title: 'IM 绑定', icon: <IconMessage size={14} />, w: 600, h: 480 },
   files:  { title: '文件',     icon: <IconFolder size={14} />,  w: 900, h: 600 },
 };
 
