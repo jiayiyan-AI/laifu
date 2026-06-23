@@ -58,12 +58,13 @@ const evt = (opts: {
   openId?: string;
   type?: string;
   text?: string;
+  chatType?: string;
 }) => ({
   sender: { sender_id: { open_id: opts.openId ?? OWNER } },
   message: {
     message_id: opts.messageId ?? 'm1',
     chat_id: 'oc_1',
-    chat_type: 'p2p',
+    chat_type: opts.chatType ?? 'p2p',
     message_type: opts.type ?? 'text',
     content: JSON.stringify({ text: opts.text ?? '你好' }),
   },
@@ -131,5 +132,24 @@ describe('makeFeishuInbound', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(evt({ text: '   ', messageId: 'blank1' }));
     expect(dispatchHermesChat).not.toHaveBeenCalled();
+  });
+
+  it('群聊消息 (chat_type:group) → 忽略, dispatch 不被调 (即便 sender 是 owner)', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    await handle(evt({ chatType: 'group', text: 'hi', messageId: 'grp1' }));
+    expect(dispatchHermesChat).not.toHaveBeenCalled();
+    expect(feishuReplyContexts.size).toBe(0);
+  });
+
+  it('seen Set 超过上限清空后, 新消息仍可正常 dispatch', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    // 第一条正常 dispatch
+    await handle(evt({ messageId: 'before_clear', text: 'first' }));
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
+    // 重复同一 message_id → 仍被去重
+    await handle(evt({ messageId: 'before_clear', text: 'first again' }));
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
   });
 });

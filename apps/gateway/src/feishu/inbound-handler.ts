@@ -37,8 +37,18 @@ export const feishuReplyContexts = new Map<string, {
 /**
  * 进程内 message_id 去重集合。飞书 WS 在网络抖动 / 重连时会重投同一事件,
  * 必须按 message_id 幂等掉, 否则同一条消息会 dispatch 多次。
+ * 有界: 超过 SEEN_MAX 整清, 防 Always-On 进程长跑内存泄漏。
  */
+const SEEN_MAX = 5000;
 const seen = new Set<string>();
+
+/** 返回 true=新消息(已加入); false=已见过(重复)。 */
+const markSeen = (id: string): boolean => {
+  if (seen.has(id)) return false;
+  if (seen.size >= SEEN_MAX) seen.clear();
+  seen.add(id);
+  return true;
+};
 
 /** 测试 reset 用。生产代码不要调。 */
 export const __resetSeenForTests = (): void => {
@@ -50,6 +60,7 @@ interface FeishuInboundEvent {
   sender?: { sender_id?: { open_id?: string } };
   message?: {
     message_id?: string;
+    chat_type?: string;
     message_type?: string;
     content?: string;
   };
@@ -66,12 +77,14 @@ export const makeFeishuInbound = () => {
     // 缺关键字段 → 丢弃
     if (!messageId || !senderOpenId || !messageType || !content) return;
 
+    // MVP 只处理私聊 (p2p), 群聊消息忽略
+    if (evt.message?.chat_type !== 'p2p') return;
+
     // 鉴权: 只服务绑定者本人, 别人发的直接忽略 (不回, 不服务)
     if (senderOpenId !== binding.owner_open_id) return;
 
-    // 去重: 同 message_id 已见过 → return
-    if (seen.has(messageId)) return;
-    seen.add(messageId);
+    // 去重: 同 message_id 已见过 → return (有界 Set, 防长跑内存泄漏)
+    if (!markSeen(messageId)) return;
 
     // 非 text 类型: 提示一次, 不 dispatch
     if (messageType !== 'text') {

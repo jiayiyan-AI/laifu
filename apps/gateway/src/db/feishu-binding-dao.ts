@@ -8,7 +8,7 @@
  */
 import type { Db } from '@lingxi/db';
 import { schema } from '@lingxi/db';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 
 export interface FeishuBinding {
   id: string;
@@ -77,7 +77,7 @@ export const makeFeishuBindingDao = (db: Db): FeishuBindingDao => {
   const t = schema.feishuBindings;
   return {
     async listActive() {
-      const rows = await db.select().from(t).where(eq(t.is_active, true));
+      const rows = await db.select().from(t).where(and(eq(t.is_active, true), eq(t.status, 'active')));
       return rows.map(toBinding);
     },
 

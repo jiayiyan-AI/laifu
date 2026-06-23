@@ -81,6 +81,27 @@ describe('feishuBindingDao.listActive', () => {
     const dao = makeFeishuBindingDao(db as any);
     expect(await dao.listActive()).toEqual([]);
   });
+
+  it('where 条件同时包含 is_active 和 status (and 两个条件)', async () => {
+    const { db, selectChain } = mockDrizzleDb({ selectRows: [] });
+    const dao = makeFeishuBindingDao(db as any);
+    await dao.listActive();
+    // where 应被调用一次
+    expect(selectChain.where).toHaveBeenCalledTimes(1);
+    const whereArg = selectChain.where.mock.calls[0]![0];
+    expect(whereArg).toBeDefined();
+    // Drizzle and(a, b) 在最外层产生一个有 queryChunks 长度=3 的节点
+    // (两个子条件 + 中间分隔符), 而单个 eq() 的 queryChunks 长度=5。
+    // 借此区分「传了 and() 含两个子条件」与「只传了单个 eq()」。
+    const outerChunks: any[] = whereArg?.queryChunks ?? [];
+    expect(outerChunks).toHaveLength(3);
+    // 中间节点是「( ... and ... )」结构, 其 queryChunks[1].value 含 ' and '
+    const innerChunks: any[] = outerChunks[1]?.queryChunks ?? [];
+    expect(innerChunks.length).toBeGreaterThanOrEqual(3);
+    // 提取 value 类节点中的字符串, 确认含 ' and '
+    const andChunk = innerChunks.find((c: any) => Array.isArray(c.value) && c.value.some((s: any) => typeof s === 'string' && s.includes('and')));
+    expect(andChunk).toBeDefined();
+  });
 });
 
 describe('feishuBindingDao.getByUserId', () => {
