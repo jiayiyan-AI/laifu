@@ -109,11 +109,21 @@ export const Onboarding = ({ onReady }: OnboardingProps) => {
 
         {view.mode === 'provisioning' && (
           <div className="fade">
+            {name.trim() && (
+              <div style={{ margin: '4px 0 14px' }}>
+                <div style={{ fontSize: 15, fontWeight: 650 }}>{name.trim()}</div>
+                <div className="dim" style={{ fontSize: 11.5, fontFamily: 'monospace' }}>{assistantEmailPreview(name, domain)}</div>
+              </div>
+            )}
             <div className="muted" style={{ height: 20, margin: '12px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13 }}>
               <span className="spin"><IconRefresh size={13} /></span>{view.step}
             </div>
             <div className="progress"><div style={{ width: `${view.pct}%` }} /></div>
-            <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>预计 1-3 分钟（local 模式约 5 秒）</div>
+            {name.trim() && (
+              <div className="dim" style={{ fontSize: 11.5, marginTop: 10 }}>
+                ✉️ 为助理生成专属邮箱：{assistantEmailPreview(name, domain)}
+              </div>
+            )}
           </div>
         )}
 
