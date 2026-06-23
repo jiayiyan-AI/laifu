@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { authAtom } from '../states/auth.atom.js';
 import { IconChevDown, IconUser, IconPower } from '../lib/icons.js';
 import { UsageWidget } from '../components/UsageWidget.js';
+import { useAssistantName } from '../states/assistant.atom.js';
 
 const fmtClock = () => {
   const d = new Date();
@@ -12,6 +13,7 @@ const fmtClock = () => {
 
 export const Menubar = () => {
   const [authState, { logout }] = authAtom.use();
+  const n = useAssistantName();
   const [clock, setClock] = useState(fmtClock());
   const [accountOpen, setAccountOpen] = useState(false);
 
@@ -31,7 +33,7 @@ export const Menubar = () => {
       backdropFilter: 'blur(22px) saturate(180%)',
       borderBottom: '1px solid rgba(0,0,0,0.07)', zIndex: 1000,
     }}>
-      <span style={{ fontWeight: 700 }}>灵犀</span>
+      <span style={{ fontWeight: 700 }}>{n}</span>
       <span style={{ color: '#2c2d33' }}>文件</span>
       <span style={{ color: '#2c2d33' }}>编辑</span>
       <span style={{ color: '#2c2d33' }}>查看</span>

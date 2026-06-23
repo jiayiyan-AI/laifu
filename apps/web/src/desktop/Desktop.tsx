@@ -13,6 +13,7 @@ import { WechatApp } from '../apps/wechat/WechatApp.js';
 import { FilesApp } from '../apps/files/FilesApp.js';
 import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
+import { useAssistantName } from '../states/assistant.atom.js';
 
 type AppId = DockAppId | 'wechat';
 
@@ -33,6 +34,7 @@ const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: numb
 
 export const Desktop = () => {
   const [{ observed }] = entitlementsAtom.use();
+  const assistantName = useAssistantName();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
   // 置顶用 zIndex map, 不重排数组: 重排会让 React 移动 DOM 节点, 触发 .fade 入场动画重放 → 焦点闪烁。
@@ -101,8 +103,9 @@ export const Desktop = () => {
       <div style={{ position: 'absolute', left: 0, right: 0, top: 26, bottom: 0, zIndex: 10 }}>
         {openApps.map((id, i) => {
           const meta = titles[id];
+          const title = id === 'chat' ? assistantName : meta.title;
           return (
-            <Window key={id} title={meta.title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={zMap[id] ?? (i + 1)} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
+            <Window key={id} title={title} icon={meta.icon} width={meta.w} height={meta.h} offsetX={i * 20} offsetY={i * 20} zIndex={zMap[id] ?? (i + 1)} onClose={() => closeApp(id)} onFocus={() => focusApp(id)}>
               {renderApp(id, openApp)}
             </Window>
           );
