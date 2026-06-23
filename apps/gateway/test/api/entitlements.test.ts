@@ -65,6 +65,7 @@ describe('POST /api/entitlements/cloud/enable', () => {
     expect(res.body.changed).toBe(false);
     expect(dao.entitlements.bumpTokenVersion).not.toHaveBeenCalled();
     expect(resyncEntitlements).toHaveBeenCalledWith(USER_ID);
+    expect(syncUserContainer).not.toHaveBeenCalled();
   });
 });
 
@@ -79,7 +80,7 @@ describe('POST /api/entitlements/cloud/disable', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, entitlements: [], changed: true });
     expect(dao.entitlements.disable).toHaveBeenCalledWith(USER_ID, 'cloud');
-    expect(dao.entitlements.bumpTokenVersion).toHaveBeenCalled();
+    expect(dao.entitlements.bumpTokenVersion).toHaveBeenCalledWith(USER_ID);
     expect(syncUserContainer).toHaveBeenCalledWith(USER_ID);
     expect(resyncEntitlements).not.toHaveBeenCalled();
   });
