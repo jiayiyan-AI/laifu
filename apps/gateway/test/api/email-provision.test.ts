@@ -58,7 +58,7 @@ describe('ensureEmailAddress', () => {
   it('base localpart 被占 → 试 -2 后缀', async () => {
     vi.mocked(dao.email.getAddress).mockResolvedValue(null);
     vi.mocked(dao.email.insertAddress)
-      .mockRejectedValueOnce(new Error('duplicate key'))  // base 撞了
+      .mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }))  // base 撞了
       .mockResolvedValueOnce(undefined);                   // base-2 成功
     const lp = await ensureEmailAddress(UID, '小林');
     expect(lp).toBe('xiaolin-2');
@@ -67,14 +67,29 @@ describe('ensureEmailAddress', () => {
   it('前 5 候选都撞 → 用 base-<short6hex> 兜底', async () => {
     vi.mocked(dao.email.getAddress).mockResolvedValue(null);
     vi.mocked(dao.email.insertAddress)
-      .mockRejectedValueOnce(new Error('dup'))  // base
-      .mockRejectedValueOnce(new Error('dup'))  // base-2
-      .mockRejectedValueOnce(new Error('dup'))  // base-3
-      .mockRejectedValueOnce(new Error('dup'))  // base-4
-      .mockRejectedValueOnce(new Error('dup'))  // base-5
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-2
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-3
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-4
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-5
       .mockResolvedValueOnce(undefined);         // base-<short6> 成功
     const short6 = UID.replace(/-/g, '').slice(0, 6);
     const lp = await ensureEmailAddress(UID, '小林');
     expect(lp).toBe(`xiaolin-${short6}`);
+  });
+
+  it('全部 6 候选都被占 → 终极兜底带完整 userId hex', async () => {
+    vi.mocked(dao.email.getAddress).mockResolvedValue(null);
+    vi.mocked(dao.email.insertAddress)
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-2
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-3
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-4
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-5
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }))  // base-<short6>
+      .mockResolvedValueOnce(undefined);                                           // base-<fullhex> 成功
+    const fullHex = UID.replace(/-/g, '');
+    const lp = await ensureEmailAddress(UID, '小林');
+    expect(lp).toBe(`xiaolin-${fullHex}`);
   });
 });

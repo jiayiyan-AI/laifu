@@ -5,6 +5,10 @@ import { assistantLocalpartBase } from '@lingxi/shared';
 export const defaultLocalpart = (userId: string): string =>
   `u-${userId.replace(/-/g, '').slice(0, 8)}`;
 
+/** Postgres 唯一键冲突 (localpart 已被占用)。其它错误(如连接失败)不该被当成"换下一个候选"。 */
+const isUniqueViolation = (e: unknown): boolean =>
+  typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
+
 /**
  * 确保该用户有一行 email_addresses，返回其 localpart（幂等）。
  * 规则（方案 A）：local part = 拼音(assistantName) 的 base；同名碰撞按 -2/-3/… 去重，
@@ -29,11 +33,12 @@ export const ensureEmailAddress = async (userId: string, assistantName?: string 
     try {
       await dao.email.insertAddress(userId, c, name);   // display_name = 名字（出站 From 友好）
       return c;
-    } catch {
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;   // 真 DB 错误 → 冒泡，不静默吞
       // localpart 被别的用户占了 → 试下一个 candidate
     }
   }
-  // 理论到不了（最后 candidate 带 userId hash 必唯一）；再兜底带全 hash
+  // 前面候选都被占用时的终极兜底：带完整 userId hex，按 users 主键保证全局唯一
   const full = `${base}-${userId.replace(/-/g, '')}`;
   await dao.email.insertAddress(userId, full, name);
   return full;
