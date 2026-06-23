@@ -49,34 +49,38 @@ describe('password-routes', () => {
       expect(bcrypt.compareSync('secret12', call.hash)).toBe(true);
     });
 
-    it('邮箱已存在 → 409', async () => {
+    it('邮箱已存在 → 409 + code=email_taken', async () => {
       vi.mocked(dao.users.createPasswordUser).mockResolvedValue(null);
       const res = await request(makeApp())
         .post('/api/auth/password/register')
         .send({ email: 'a@b.com', password: 'secret12', nickname: 'Qiang' });
       expect(res.status).toBe(409);
+      expect(res.body.code).toBe('email_taken');
     });
 
-    it('密码太短 → 400,不落库', async () => {
+    it('密码太短 → 400 + code=password_too_short,不落库', async () => {
       const res = await request(makeApp())
         .post('/api/auth/password/register')
         .send({ email: 'a@b.com', password: 'short', nickname: 'Qiang' });
       expect(res.status).toBe(400);
+      expect(res.body.code).toBe('password_too_short');
       expect(dao.users.createPasswordUser).not.toHaveBeenCalled();
     });
 
-    it('邮箱格式非法 → 400', async () => {
+    it('邮箱格式非法 → 400 + code=invalid_email', async () => {
       const res = await request(makeApp())
         .post('/api/auth/password/register')
         .send({ email: 'notanemail', password: 'secret12', nickname: 'Qiang' });
       expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_email');
     });
 
-    it('称呼为空 → 400', async () => {
+    it('称呼为空 → 400 + code=nickname_required', async () => {
       const res = await request(makeApp())
         .post('/api/auth/password/register')
         .send({ email: 'a@b.com', password: 'secret12', nickname: '   ' });
       expect(res.status).toBe(400);
+      expect(res.body.code).toBe('nickname_required');
     });
   });
 
@@ -107,6 +111,7 @@ describe('password-routes', () => {
         .post('/api/auth/password/login')
         .send({ email: 'a@b.com', password: 'wrongpass' });
       expect(res.status).toBe(401);
+      expect(res.body.code).toBe('invalid_credentials');
     });
 
     it('邮箱不存在 → 401(与密码错同文案,防枚举)', async () => {

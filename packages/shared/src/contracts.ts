@@ -59,12 +59,22 @@ export interface ContainerHistoryResponse {
 // === Gateway Web API 契约 (Web → Gateway) ===
 
 export interface PurchaseRequest {
-  assistant_name: string;   // 用户给助理起的名字（必填，trim 后 1..24 字符）
+  assistant_name: string;        // 用户给助理起的名字（必填，trim 后 1..24 字符）
+  email_localpart?: string;      // 用户自填的专属邮箱前缀（可选；留空→后端 u-<hash> 默认）。用户自己输入，不再拼音派生。
 }
 
 export interface PurchaseResponse {
   user_id: string;
   status: 'provisioning' | 'ready' | 'failed';
+}
+
+/** 购买失败的稳定错误码（前端据此精确提示，不靠英文字符串匹配）。 */
+export type PurchaseErrorCode = 'invalid_assistant_name' | 'invalid_localpart' | 'email_taken';
+
+/** 购买接口错误响应体。 */
+export interface PurchaseErrorResponse {
+  error: string;
+  code: PurchaseErrorCode;
 }
 
 export interface StatusResponse {
@@ -104,6 +114,23 @@ export interface PasswordRegisterRequest {
   password: string;
   nickname: string;
 }
+
+/** 注册/登录失败的稳定错误码。前端据此给精确提示，不靠英文文案字符串匹配。 */
+export type AuthErrorCode =
+  | 'invalid_email'
+  | 'password_too_short'
+  | 'nickname_required'
+  | 'email_taken'
+  | 'invalid_credentials';
+
+/** 认证类接口的错误响应体（400/401/409 等非 2xx 共用）。 */
+export interface AuthErrorResponse {
+  error: string;          // 英文调试信息（给开发看）
+  code: AuthErrorCode;    // 前端映射文案用
+}
+
+/** 密码最小长度（前后端共用，保证客户端即时校验与服务端一致）。 */
+export const MIN_PASSWORD_LENGTH = 8;
 
 // === Threads 契约 ===
 

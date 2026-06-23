@@ -72,18 +72,46 @@ const json = async <T>(path: string, opts: RequestInit = {}): Promise<T> => {
 // === Auth ===
 export const me = (): Promise<AuthMeResponse> => json('/api/auth/me');
 
+/**
+ * 表单提交类接口的错误: 携带后端稳定 code (AuthErrorCode / PurchaseErrorCode 等),
+ * 让调用方给精确文案。不复用通用 json(): 它把 409 一律当 BusyError("正在处理上一条消息"),
+ * 对注册 / 购买语义是错的。
+ */
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const submitJson = async <T>(path: string, body: unknown): Promise<T> => {
+  const resp = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (resp.ok) return resp.json() as Promise<T>;
+  const b = (await resp.json().catch(() => ({}))) as { error?: string; code?: string };
+  throw new ApiError(resp.status, b.code ?? 'unknown', b.error ?? `${path} → ${resp.status}`);
+};
+
 export const login = (body: PasswordLoginRequest): Promise<AuthMeResponse> =>
-  json('/api/auth/password/login', { method: 'POST', body: JSON.stringify(body) });
+  submitJson('/api/auth/password/login', body);
 
 export const register = (body: PasswordRegisterRequest): Promise<AuthMeResponse> =>
-  json('/api/auth/password/register', { method: 'POST', body: JSON.stringify(body) });
+  submitJson('/api/auth/password/register', body);
 
 export const logout = (): Promise<{ ok: true }> =>
   json('/api/auth/logout', { method: 'POST' });
 
 // === Purchase / Status ===
 export const purchase = (body: PurchaseRequest): Promise<PurchaseResponse> =>
-  json('/api/purchase', { method: 'POST', body: JSON.stringify(body) });
+  submitJson('/api/purchase', body);
 
 export const status = async (): Promise<StatusResponse | null> => {
   const resp = await fetch('/api/status', { credentials: 'include' });

@@ -1,11 +1,27 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { MIN_PASSWORD_LENGTH } from '@lingxi/shared';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
 import { authAtom } from '../states/auth.atom.js';
 import * as api from '../lib/api.js';
 
 type Mode = 'login' | 'register';
+
+/** 把后端的认证错误码映射成给用户看的中文。未知错误直接透出真实信息, 不再甩锅给邮箱。 */
+const authErrorMessage = (e: unknown, mode: Mode): string => {
+  if (e instanceof api.ApiError) {
+    switch (e.code) {
+      case 'invalid_email': return '邮箱格式不正确';
+      case 'password_too_short': return `密码至少 ${MIN_PASSWORD_LENGTH} 位`;
+      case 'nickname_required': return '请填写称呼';
+      case 'email_taken': return '该邮箱已注册，请直接登录';
+      case 'invalid_credentials': return '邮箱或密码错误';
+      default: return `${mode === 'login' ? '登录' : '注册'}失败：${e.message}`;
+    }
+  }
+  return mode === 'login' ? '登录失败，请重试' : '注册失败，请重试';
+};
 
 /**
  * 登录页:账号密码为主(登录/注册 tab),Google OAuth 作为下方次要入口。
@@ -30,6 +46,11 @@ export const LoginPage = () => {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    // 客户端即时校验: 密码太短不必往返服务端 (与后端 MIN_PASSWORD_LENGTH 同源)。
+    if (mode === 'register' && password.length < MIN_PASSWORD_LENGTH) {
+      setError(`密码至少 ${MIN_PASSWORD_LENGTH} 位`);
+      return;
+    }
     setBusy(true);
     try {
       if (mode === 'login') {
@@ -41,7 +62,7 @@ export const LoginPage = () => {
       nav('/desktop', { replace: true });
     } catch (e) {
       console.error('[LoginPage] auth failed:', e);
-      setError(mode === 'login' ? '邮箱或密码错误' : '注册失败,请检查邮箱是否已注册');
+      setError(authErrorMessage(e, mode));
     } finally {
       setBusy(false);
     }
