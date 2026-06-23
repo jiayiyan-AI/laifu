@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Capability } from '../../lib/capabilities.js';
 import { authAtom } from '../../states/auth.atom.js';
 import { IconSpark, IconMessage, IconPlus } from '../../lib/icons.js';
 import { entitlementsAtom } from '../../states/entitlements.atom.js';
-import { getMyWechatBind } from '../../lib/api.js';
 import { CAPABILITIES, MARKET_CAPABILITIES, isEquipped } from '../../lib/capabilities.js';
 import { CapabilityEquip, CapabilityRemove } from './CapabilityAction.js';
+import { useAssistantName, assistantAtom } from '../../states/assistant.atom.js';
+import { assistantEmailPreview } from '../../lib/assistantEmail.js';
+import { useIMCount } from '../../states/imBindings.atom.js';
 
 type Tab = 'equip' | 'market';
 
@@ -63,22 +65,15 @@ const MarketTab = ({ observed }: { observed: string[] }) => (
   </div>
 );
 
-export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
-  const [authState] = authAtom.use();
-  const nick = authState.status === 'authenticated' ? authState.user.nickname ?? '未命名' : '';
+export const ManageApp = ({ onOpenIM }: { onOpenIM: () => void }) => {
   const [ent] = entitlementsAtom.use();
   const [tab, setTab] = useState<Tab>('equip');
-
-  // 拉微信绑定状态决定按钮文案 (绑定 / 解绑)。null = 还没拿到 → 不显示文案避免闪烁。
-  const [wechatBound, setWechatBound] = useState<boolean | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const timeoutId = window.setTimeout(() => { if (!cancelled) setWechatBound(false); }, 5000);
-    void getMyWechatBind()
-      .then((info) => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(info.bound); } })
-      .catch(() => { if (!cancelled) { window.clearTimeout(timeoutId); setWechatBound(false); } });
-    return () => { cancelled = true; window.clearTimeout(timeoutId); };
-  }, []);
+  const assistantName = useAssistantName();
+  const [assistant] = assistantAtom.use();
+  const [auth] = authAtom.use();
+  const domain = auth.status === 'authenticated' ? auth.user.email_domain : 'mail.localhost';
+  const email = assistant.email ?? assistantEmailPreview(assistantName, domain);
+  const imCount = useIMCount();
 
   const equipped = CAPABILITIES.filter((c) => isEquipped(c, ent.observed));
 
@@ -86,24 +81,20 @@ export const ManageApp = ({ onOpenWechat }: { onOpenWechat: () => void }) => {
     <div style={{ flex: 1, overflow: 'auto', padding: 22 }}>
       <div style={{ maxWidth: 880, margin: '0 auto' }}>
         <div className="card" style={{ padding: 18, display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
-          <span style={{ display: 'inline-flex', width: 52, height: 52, borderRadius: 14, background: '#7c3aed1f', color: '#7c3aed', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ display: 'inline-flex', width: 52, height: 52, borderRadius: 14, background: '#7c3aed1f', color: '#7c3aed', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <IconSpark size={26} strokeWidth={1.9} />
           </span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 650, fontSize: 16 }}>灵犀助理</div>
-            <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 650, fontSize: 16 }}>{assistantName}</div>
+            <div className="dim" style={{ fontSize: 12, fontFamily: 'monospace', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</div>
+            <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
               <span className="pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok)', display: 'inline-block', marginRight: 6 }} />
-              在线 · {nick} 的助理
+              在线 · 专业版 · {imCount > 0 ? `已接入 ${imCount} 个 IM` : '未接入 IM'}
             </div>
           </div>
-          <button
-            className="btn btn-primary"
-            style={{ background: wechatBound ? '#6b7280' : '#16a34a' }}
-            onClick={onOpenWechat}
-            title={wechatBound ? '查看绑定 / 解绑' : '通过扫码绑定微信'}
-          >
+          <button className="btn btn-primary" onClick={onOpenIM} title="管理 IM 接入">
             <IconMessage size={15} />
-            {wechatBound === null ? '微信…' : wechatBound ? '解绑微信' : '绑定微信'}
+            IM 绑定{imCount > 0 ? ` · ${imCount}` : ''}
           </button>
         </div>
 
