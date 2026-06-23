@@ -35,7 +35,7 @@ export interface PendingLoopContext {
   loopId: string;
   threadId: string;
   userId: string;
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
 }
 
 export interface StorePendingLoopOpts {

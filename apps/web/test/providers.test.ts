@@ -16,8 +16,8 @@ describe('IM_PROVIDERS', () => {
       expect(p.icon).toBeTruthy();
     }
   });
-  it('微信 available、飞书 coming_soon', () => {
+  it('微信 available、飞书 available', () => {
     expect(IM_PROVIDERS.find((p) => p.id === 'wechat')?.status).toBe('available');
-    expect(IM_PROVIDERS.find((p) => p.id === 'feishu')?.status).toBe('coming_soon');
+    expect(IM_PROVIDERS.find((p) => p.id === 'feishu')?.status).toBe('available');
   });
 });

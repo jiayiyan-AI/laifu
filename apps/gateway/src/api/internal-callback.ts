@@ -20,6 +20,8 @@ export interface CallbackRouterDeps {
   containerAuth: RequestHandler;
   /** 微信回复能力：给定 threadId 和回复文本，发送到对应微信对话 */
   wechatReplier?: (threadId: string, text: string) => Promise<void>;
+  /** 飞书回复能力：给定 threadId 和回复文本，发送到对应飞书对话 */
+  feishuReplier?: (threadId: string, text: string) => Promise<void>;
 }
 
 export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
@@ -58,7 +60,7 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
 
     // 优先从内存取上下文（零查询），fallback 查 DB
     let threadId: string;
-    let source: 'web' | 'wechat';
+    let source: 'web' | 'wechat' | 'feishu';
     const cached = consumePendingLoop(body.loop_id);
 
     if (cached) {
@@ -79,7 +81,7 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
         return res.status(403).json({ error: 'thread ownership mismatch' });
       }
       threadId = loop.thread_id;
-      source = thread.source as 'web' | 'wechat';
+      source = thread.source as 'web' | 'wechat' | 'feishu';
     }
 
     // 确定 completion
@@ -136,6 +138,17 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
       deps.wechatReplier(threadId, result.reply).catch((err) => {
         log.warn({
           event: 'callback.wechat.reply.failed',
+          thread_id: threadId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    // 飞书回复
+    if (source === 'feishu' && result.reply && deps.feishuReplier) {
+      deps.feishuReplier(threadId, result.reply).catch((err) => {
+        log.warn({
+          event: 'callback.feishu.reply.failed',
           thread_id: threadId,
           err: err instanceof Error ? err.message : String(err),
         });

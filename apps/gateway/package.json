@@ -16,6 +16,7 @@
     "@azure/arm-storage": "^18.2.0",
     "@azure/identity": "^4.0.0",
     "@azure/storage-blob": "^12.20.0",
+    "@larksuiteoapi/node-sdk": "^1.67.0",
     "@lingxi/db": "workspace:*",
     "@lingxi/shared": "workspace:*",
     "bcryptjs": "^3.0.3",

@@ -4,7 +4,7 @@
 export interface ContainerChatRequest {
   message: string;
   session_id: string;          // e.g. "web:thr_abc123" / "wechat:main"
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
   /** 带此字段 → 容器走异步 202 模式；不带 → 保留同步模式（向后兼容 + 测试） */
   callback?: { loop_id: string };
 }
@@ -184,7 +184,7 @@ export interface MessageRow {
   role: 'user' | 'assistant';
   content_type: 'text' | 'json';
   content: unknown;
-  source: 'web' | 'wechat';
+  source: 'web' | 'wechat' | 'feishu';
   created_at: string;
 }
 
@@ -232,6 +232,28 @@ export type WechatBindingInfoResponse =
 export interface WechatUnbindResponse {
   ok: true;
 }
+
+// === 飞书绑定契约 ===
+
+export interface FeishuScanStartResponse {
+  qrUrl: string;        // 二维码内容 URL(前端渲染成码)
+  deviceCode: string;   // 后续 scan-poll 透传
+  interval: number;     // 轮询间隔(秒)
+  expireIn: number;     // 过期(秒)
+}
+
+export type FeishuScanPollResponse =
+  | { status: 'pending' }                                          // 还没扫/没授权,继续轮询
+  | { status: 'approved'; appId: string; adminConsoleUrl: string } // 已建 app(pending_approval),给后台深链让管理员审批
+  | { status: 'denied' | 'expired' };
+
+export interface FeishuActivateResponse { ok: boolean }
+
+export type FeishuBindingInfoResponse =
+  | { bound: false }
+  | { bound: true; status: 'pending_approval' | 'active'; app_id: string };
+
+export interface FeishuUnbindResponse { ok: true }
 
 // === 微信附件 (P1: 图片) ===
 

@@ -15,6 +15,7 @@ import { makeMessageDao, type MessageDao } from './message-dao.js';
 import { makeThreadsDao, type ThreadsDao } from './threads-dao.js';
 import { makeAgentLoopDao, type AgentLoopDao } from './agent-loop-dao.js';
 import { makeWechatBindingDao, type WechatBindingDao } from './wechat-binding-dao.js';
+import { makeFeishuBindingDao, type FeishuBindingDao } from './feishu-binding-dao.js';
 import { makeEmailDao, type EmailDao } from './email-dao.js';
 import { makeEntitlementsDao, type EntitlementsDao } from './entitlements-dao.js';
 import { makeUsageDao, type UsageDao } from './usage-dao.js';
@@ -28,6 +29,7 @@ export interface Dao {
   threads: ThreadsDao;
   agentLoops: AgentLoopDao;
   wechatBindings: WechatBindingDao;
+  feishuBindings: FeishuBindingDao;
   email: EmailDao;
   entitlements: EntitlementsDao;
   usage: UsageDao;
@@ -42,6 +44,7 @@ const factories: Record<keyof Dao, () => unknown> = {
   threads: () => makeThreadsDao(getDb()),
   agentLoops: () => makeAgentLoopDao(getDb()),
   wechatBindings: () => makeWechatBindingDao(getDb()),
+  feishuBindings: () => makeFeishuBindingDao(getDb()),
   email: () => makeEmailDao(getDb()),
   entitlements: () => makeEntitlementsDao(getDb()),
   usage: () => makeUsageDao(getDb()),
@@ -82,6 +85,6 @@ export { getDb, closeDb };
 export { ContainerMappingCache };
 export type {
   UsersDao, ContainerMappingDao, MessageDao, ThreadsDao,
-  AgentLoopDao, WechatBindingDao, EmailDao, EntitlementsDao,
+  AgentLoopDao, WechatBindingDao, FeishuBindingDao, EmailDao, EntitlementsDao,
   UsageDao, ObservedStateDao,
 };

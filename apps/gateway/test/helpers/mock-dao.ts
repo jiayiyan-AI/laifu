@@ -50,6 +50,14 @@ export const createMockDao = () => ({
     bindThread: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
   },
+  feishuBindings: {
+    listActive: vi.fn(async () => []),
+    getByUserId: vi.fn(async () => null),
+    upsertByUserId: vi.fn(async () => ({})),
+    setActive: vi.fn(async () => {}),
+    bindThread: vi.fn(async () => {}),
+    deactivate: vi.fn(async () => {}),
+  },
   email: {
     findUserByLocalpart: vi.fn(async () => null),
     getAddress: vi.fn(async () => null),

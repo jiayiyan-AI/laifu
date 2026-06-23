@@ -18,9 +18,9 @@ describe('IMProviderCard', () => {
     expect(screen.getByText('已生效')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '解绑' })).toBeInTheDocument();
   });
-  it('即将上线：灰徽章 + 无按钮', () => {
+  it('飞书 available：显示"绑定"按钮', () => {
     render(<IMProviderCard provider={feishu} bound={false} onBind={noop} onUnbind={noop} />);
-    expect(screen.getByText('即将上线')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '绑定' })).toBeInTheDocument();
+    expect(screen.queryByText('即将上线')).not.toBeInTheDocument();
   });
 });

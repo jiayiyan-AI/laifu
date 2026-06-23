@@ -39,6 +39,10 @@ import { providers } from './auth/providers/index.js';
 import { buildWechatBindRouter } from './api/wechat-bind.js';
 import { PollManager } from './wechat-ilink/poll-manager.js';
 import { makeHandleInbound, wechatReplyContexts } from './wechat-ilink/inbound-handler.js';
+import { buildFeishuBindRouter } from './api/feishu-bind.js';
+import { FeishuConnectionManager } from './feishu/connection-manager.js';
+import { makeFeishuInbound, feishuReplyContexts } from './feishu/inbound-handler.js';
+import { sendFeishuMessage } from './feishu/client.js';
 import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
 import { loadPromptStore } from './lib/prompt-store.js';
 
@@ -48,6 +52,11 @@ export interface CreateAppOptions {
    * /api/wechat/* 路由,其它端点不受影响。
    */
   pollMgr?: PollManager;
+  /**
+   * 飞书 WS 长连接管理器。仅当 config.feishu.enabled 时构造,测试/默认省略 —
+   * 省了就不挂 /api/feishu/* 路由,其它端点不受影响。
+   */
+  feishuMgr?: FeishuConnectionManager;
 }
 
 export const createApp = (opts: CreateAppOptions = {}): Express => {
@@ -118,6 +127,13 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         sessionMw,
       }));
     }
+    // 飞书扫码绑定路由
+    if (opts.feishuMgr) {
+      app.use(buildFeishuBindRouter({
+        feishuMgr: opts.feishuMgr,
+        sessionMw,
+      }));
+    }
 
     // 内部回调路由 (容器异步完成后回调, JWT 鉴权)
     const containerAuth = makeContainerTokenMiddleware({
@@ -142,7 +158,21 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
         }
       }
     };
-    app.use(buildCallbackRouter({ containerAuth, wechatReplier }));
+    // 飞书回复能力
+    const feishuReplier = async (threadId: string, text: string): Promise<void> => {
+      for (const [loopId, ctx] of feishuReplyContexts) {
+        const loop = await dao.agentLoops.getById(loopId);
+        if (loop && loop.thread_id === threadId) {
+          try {
+            await sendFeishuMessage(ctx.client, ctx.toOpenId, text);
+          } finally {
+            feishuReplyContexts.delete(loopId);
+          }
+          return;
+        }
+      }
+    };
+    app.use(buildCallbackRouter({ containerAuth, wechatReplier, feishuReplier }));
 
     // P1 routes (entitlements + container-side + token refresh)
     app.use(buildEntitlementsRouter({
@@ -271,7 +301,13 @@ export const start = async (): Promise<void> => {
   });
   await pollMgr.startAll();
 
-  const app = createApp({ pollMgr });
+  // 飞书 WS (默认关, FEISHU_ENABLED=true 才起)
+  const feishuMgr = config.feishu.enabled
+    ? new FeishuConnectionManager({ onMessageFor: makeFeishuInbound() })
+    : undefined;
+  if (feishuMgr) await feishuMgr.startAll();
+
+  const app = createApp({ pollMgr, feishuMgr });
   const server = app.listen(config.port, () => {
     console.log(`[gateway] listening on :${config.port}`);
   });
@@ -291,6 +327,7 @@ export const start = async (): Promise<void> => {
     void (async () => {
       console.log(`[gateway] ${signal} received, shutting down...`);
       await pollMgr.stopAll();
+      if (feishuMgr) await feishuMgr.stopAll();
       server.close(() => {
         console.log('[gateway] server closed');
         process.exit(0);

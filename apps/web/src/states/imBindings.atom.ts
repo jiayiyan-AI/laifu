@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { atom } from '../atom/index.js';
-import { getMyWechatBind } from '../lib/api.js';
+import { getMyWechatBind, getMyFeishuBind } from '../lib/api.js';
 import type { IMProviderId } from '../apps/im/providers.js';
 
 export type IMBindings = Partial<Record<IMProviderId, boolean>>;
@@ -11,8 +11,14 @@ export const imBindingsAtom = atom<IMBindings, IMBindingsActions>(
   (_get, set) => {
     const refresh = async () => {
       let wechat = false;
+      let feishu = false;
       try { wechat = (await getMyWechatBind()).bound; } catch { /* 网络错 → 未绑 */ }
-      set({ wechat });
+      try {
+        const info = await getMyFeishuBind();
+        // 只有 active 才算"已生效"
+        feishu = info.bound && info.status === 'active';
+      } catch { /* 网络错 → 未绑 */ }
+      set({ wechat, feishu });
     };
     void refresh();
     return { refresh };
