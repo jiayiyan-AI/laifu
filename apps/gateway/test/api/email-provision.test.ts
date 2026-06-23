@@ -9,7 +9,9 @@ import { dao } from '../../src/db/index.js';
 import { defaultLocalpart, claimEmailAddress, EmailTakenError } from '../../src/api/email-provision.js';
 
 const UID = '6e8b21f0-3a4c-4f3d-9b9e-1a2b3c4d5e6f';
-const dup = () => Object.assign(new Error('duplicate key'), { code: '23505' });
+// 真实形状: Drizzle(node-postgres) 把 pg 错误包成 DrizzleQueryError, 23505 在 .cause 上,
+// 顶层 .code 是 undefined。用这个形状才能真正测到 isUniqueViolation 看 .cause(否则假绿)。
+const dup = () => Object.assign(new Error('DrizzleQueryError'), { cause: Object.assign(new Error('dup'), { code: '23505' }) });
 
 beforeEach(() => { vi.clearAllMocks(); });   // 清调用历史，避免 toHaveBeenCalledTimes 跨用例累计
 

@@ -5,8 +5,15 @@ export const defaultLocalpart = (userId: string): string =>
   `u-${userId.replace(/-/g, '').slice(0, 8)}`;
 
 /** Postgres 唯一键冲突 (localpart 已被占用)。其它错误(如连接失败)不该被当成冲突。 */
-const isUniqueViolation = (e: unknown): boolean =>
-  typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
+// Postgres 唯一键冲突 = SQLSTATE 23505。Drizzle(node-postgres)把驱动错误包成
+// DrizzleQueryError,真实 pg code 在 .cause 上,顶层 .code 是 undefined —— 必须两处都看,
+// 否则永远判不出冲突(填重复 localpart 会被当普通错误放行)。
+const isUniqueViolation = (e: unknown): boolean => {
+  if (typeof e !== 'object' || e === null) return false;
+  const top = (e as { code?: string }).code;
+  const cause = (e as { cause?: { code?: string } }).cause?.code;
+  return top === '23505' || cause === '23505';
+};
 
 /** 用户自填的 localpart 已被别人占用。purchase 据此回 409 让用户改，不再自动加后缀。 */
 export class EmailTakenError extends Error {
