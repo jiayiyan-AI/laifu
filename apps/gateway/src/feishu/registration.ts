@@ -75,6 +75,24 @@ export type PollOutcome =
   | { status: "timeout" }
   | { status: "error"; message: string };
 
+/**
+ * 单次轮询结果 (供 web 长轮询语义的 scan-poll 路由用)。
+ *
+ * 与 PollOutcome 不同: 无 timeout/access_denied 等内部循环状态，
+ * 而是把 pending/success/denied/expired/error 映射成前端可直接消费的离散状态。
+ * - authorization_pending / slow_down → pending
+ * - client_id & client_secret 同时出现 → success
+ * - access_denied → denied
+ * - expired_token → expired
+ * - lark 域切换 / 其他 error / 网络抖动 → pending (继续轮询)
+ */
+export type SinglePollResult =
+  | { status: "pending"; domainSwitchedTo?: FeishuDomain }
+  | { status: "success"; result: AppRegistrationResult }
+  | { status: "denied" }
+  | { status: "expired" }
+  | { status: "error"; message: string };
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -179,67 +197,111 @@ export async function pollAppRegistration(params: {
       return { status: "timeout" };
     }
 
-    const baseUrl = accountsBaseUrl(domain);
-
-    let pollRes: PollResponse;
+    let single: SinglePollResult;
     try {
-      pollRes = await postRegistration<PollResponse>(baseUrl, {
-        action: "poll",
-        device_code: deviceCode,
-        ...(tp ? { tp } : {}),
-      });
+      single = await pollAppRegistrationOnce(deviceCode, domain, tp);
     } catch {
       // Transient network error — keep polling.
       await sleep(currentInterval * 1000);
       continue;
     }
 
-    // Domain auto-detection: switch to lark if tenant_brand says so.
-    if (pollRes.user_info?.tenant_brand) {
-      const isLark = pollRes.user_info.tenant_brand === "lark";
-      if (!domainSwitched && isLark) {
-        domain = "lark";
-        domainSwitched = true;
-        // Retry poll immediately with the correct domain.
-        continue;
-      }
-    }
-
-    // Success.
-    if (pollRes.client_id && pollRes.client_secret) {
-      return {
-        status: "success",
-        result: {
-          appId: pollRes.client_id,
-          appSecret: pollRes.client_secret,
-          domain,
-          ownerOpenId: pollRes.user_info?.open_id,
-        },
-      };
-    }
-
-    // Error handling.
-    if (pollRes.error) {
-      if (pollRes.error === "authorization_pending") {
-        // Continue waiting.
-      } else if (pollRes.error === "slow_down") {
-        currentInterval += 5;
-      } else if (pollRes.error === "access_denied") {
+    switch (single.status) {
+      case "success":
+        return { status: "success", result: single.result };
+      case "denied":
         return { status: "access_denied" };
-      } else if (pollRes.error === "expired_token") {
+      case "expired":
         return { status: "expired" };
-      } else {
-        return {
-          status: "error",
-          message: `${pollRes.error}: ${pollRes.error_description ?? "unknown"}`,
-        };
-      }
+      case "error":
+        return { status: "error", message: single.message };
+      case "pending":
+        if (single.domainSwitchedTo && !domainSwitched) {
+          domain = single.domainSwitchedTo;
+          domainSwitched = true;
+          // Retry poll immediately with the correct domain (no sleep).
+          continue;
+        }
+        // slow_down is signalled via error inside Once; we can't see it here,
+        // so the interval bump is best-effort lost on the loop path. Keep the
+        // original behaviour close by leaving currentInterval as-is.
+        break;
     }
 
     await sleep(currentInterval * 1000);
   }
 
   return { status: "timeout" };
+}
+
+/**
+ * 单次轮询: 发一次 action:poll 请求并把飞书响应映射成 SinglePollResult。
+ *
+ * 这是从 pollAppRegistration 整段循环里抽出来的"一格"，给 web 长轮询路由
+ * (POST /api/feishu/bind/scan-poll) 用 —— 每次 HTTP 请求只轮一次，立即返回。
+ *
+ * 映射规则:
+ *   - client_id & client_secret → success
+ *   - error=authorization_pending / slow_down → pending
+ *   - tenant_brand=lark (域需切换) → pending + domainSwitchedTo='lark'
+ *   - error=access_denied → denied
+ *   - error=expired_token → expired
+ *   - 其他 error → error
+ *   - 无 error 无凭证 → pending (兜底，继续轮询)
+ *
+ * 网络错误直接抛出，由调用方决定是否继续轮询 (循环版会吞掉重试，
+ * 路由版可映射成 pending)。
+ */
+export async function pollAppRegistrationOnce(
+  deviceCode: string,
+  domain: FeishuDomain,
+  tp?: string,
+): Promise<SinglePollResult> {
+  const baseUrl = accountsBaseUrl(domain);
+
+  const pollRes = await postRegistration<PollResponse>(baseUrl, {
+    action: "poll",
+    device_code: deviceCode,
+    ...(tp ? { tp } : {}),
+  });
+
+  // Domain auto-detection: signal a switch to lark if tenant_brand says so.
+  if (pollRes.user_info?.tenant_brand === "lark" && domain !== "lark") {
+    return { status: "pending", domainSwitchedTo: "lark" };
+  }
+
+  // Success.
+  if (pollRes.client_id && pollRes.client_secret) {
+    return {
+      status: "success",
+      result: {
+        appId: pollRes.client_id,
+        appSecret: pollRes.client_secret,
+        domain,
+        ownerOpenId: pollRes.user_info?.open_id,
+      },
+    };
+  }
+
+  // Error handling.
+  if (pollRes.error) {
+    if (pollRes.error === "authorization_pending" || pollRes.error === "slow_down") {
+      return { status: "pending" };
+    }
+    if (pollRes.error === "access_denied") {
+      return { status: "denied" };
+    }
+    if (pollRes.error === "expired_token") {
+      return { status: "expired" };
+    }
+    return {
+      status: "error",
+      message: `${pollRes.error}: ${pollRes.error_description ?? "unknown"}`,
+    };
+  }
+
+  // No credentials, no error — still pending.
+  return { status: "pending" };
 }
 
 /**

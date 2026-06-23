@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   beginAppRegistration,
   pollAppRegistration,
+  pollAppRegistrationOnce,
   getAppOwnerOpenId,
 } from '../../src/feishu/registration.js';
 
@@ -259,6 +260,79 @@ describe('pollAppRegistration', () => {
     // 第一次请求打到 feishu，第二次切到 lark
     expect(urls[0]).toContain('accounts.feishu.cn');
     expect(urls[1]).toContain('accounts.larksuite.com');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pollAppRegistrationOnce (单次轮询 — scan-poll 路由用)
+// ---------------------------------------------------------------------------
+describe('pollAppRegistrationOnce', () => {
+  it('authorization_pending → status:pending', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ error: 'authorization_pending' }, 400),
+    );
+    const r = await pollAppRegistrationOnce('dc_p', 'feishu');
+    expect(r.status).toBe('pending');
+  });
+
+  it('slow_down → status:pending', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ error: 'slow_down' }, 400),
+    );
+    const r = await pollAppRegistrationOnce('dc_s', 'feishu');
+    expect(r.status).toBe('pending');
+  });
+
+  it('client_id+client_secret → status:success 带凭证和 domain', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({
+        client_id: 'cli_ok',
+        client_secret: 'sec_ok',
+        user_info: { open_id: 'ou_ok', tenant_brand: 'feishu' },
+      }),
+    );
+    const r = await pollAppRegistrationOnce('dc_ok', 'feishu');
+    expect(r.status).toBe('success');
+    if (r.status === 'success') {
+      expect(r.result.appId).toBe('cli_ok');
+      expect(r.result.appSecret).toBe('sec_ok');
+      expect(r.result.ownerOpenId).toBe('ou_ok');
+      expect(r.result.domain).toBe('feishu');
+    }
+  });
+
+  it('access_denied → status:denied', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ error: 'access_denied' }, 400),
+    );
+    const r = await pollAppRegistrationOnce('dc_d', 'feishu');
+    expect(r.status).toBe('denied');
+  });
+
+  it('expired_token → status:expired', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ error: 'expired_token' }, 400),
+    );
+    const r = await pollAppRegistrationOnce('dc_e', 'feishu');
+    expect(r.status).toBe('expired');
+  });
+
+  it('未知 error → status:error + message', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ error: 'server_error', error_description: 'boom' }, 500),
+    );
+    const r = await pollAppRegistrationOnce('dc_err', 'feishu');
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.message).toContain('server_error');
+  });
+
+  it('tenant_brand=lark 且当前 feishu → pending + domainSwitchedTo=lark', async () => {
+    vi.stubGlobal('fetch', async () =>
+      mockFetchResponse({ user_info: { tenant_brand: 'lark' } }),
+    );
+    const r = await pollAppRegistrationOnce('dc_lk', 'feishu');
+    expect(r.status).toBe('pending');
+    if (r.status === 'pending') expect(r.domainSwitchedTo).toBe('lark');
   });
 });
 
