@@ -46,6 +46,7 @@ export const containerMapping = pgTable('container_mapping', {
   // 该用户 ACA 当前已应用的 POLICY_HASH (声明式 reconcile)。NULL = 从未 reconcile (存量行 / 刚建)。
   // 与 gateway 启动时算出的 POLICY_HASH 比对, 不一致则后台 reconcile。详见 dynamic-update-aca.md。
   policy_hash: text('policy_hash'),
+  assistant_name: text('assistant_name'),
 });
 
 // ── context_tokens (0001) ───────────────────────────────────────────────

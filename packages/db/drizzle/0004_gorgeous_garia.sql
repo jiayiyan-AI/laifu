@@ -1,0 +1,1 @@
+ALTER TABLE "container_mapping" ADD COLUMN "assistant_name" text;

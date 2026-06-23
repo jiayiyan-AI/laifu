@@ -25,6 +25,7 @@ export interface ContainerMapping {
   created_at: string;
   ready_at: string | null;
   policy_hash: string | null;   // ACA 当前已应用的 POLICY_HASH; NULL = 从未 reconcile
+  assistant_name: string | null;  // 用户给助理起的名字（购买时写入）; 存量行为 NULL
 }
 
 export interface ContextToken {
