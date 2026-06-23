@@ -9,9 +9,12 @@ vi.mock('../../src/db/index.js', async () => {
   return mockDaoModule();
 });
 
-// syncUserContainer 内部按 config 触达 azure (new DefaultAzureCredential) —— 整体 mock 掉, 只验证被触发。
-const { syncUserContainer } = vi.hoisted(() => ({ syncUserContainer: vi.fn(async () => {}) }));
-vi.mock('../../src/provisioning/manager.js', () => ({ syncUserContainer }));
+// enable 走 resyncEntitlements(轻量, 不 bump), disable 走 syncUserContainer(reconcile)。整体 mock, 只验触发。
+const { syncUserContainer, resyncEntitlements } = vi.hoisted(() => ({
+  syncUserContainer: vi.fn(async () => {}),
+  resyncEntitlements: vi.fn(async () => {}),
+}));
+vi.mock('../../src/provisioning/manager.js', () => ({ syncUserContainer, resyncEntitlements }));
 
 import { dao } from '../../src/db/index.js';
 import { buildEntitlementsRouter } from '../../src/api/entitlements.js';
@@ -38,21 +41,21 @@ beforeEach(() => {
 });
 
 describe('POST /api/entitlements/cloud/enable', () => {
-  it('happy path: enable changes state → bump version → sync container', async () => {
+  it('happy path: enable changes state → NO bump → resync (no revision roll)', async () => {
     vi.mocked(dao.entitlements.enable).mockResolvedValue({ changed: true });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(['cloud']);
-    vi.mocked(dao.entitlements.bumpTokenVersion).mockResolvedValue(1);
 
     const res = await request(makeApp()).post('/api/entitlements/cloud/enable');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, entitlements: ['cloud'], changed: true });
     expect(dao.entitlements.enable).toHaveBeenCalledWith(USER_ID, 'cloud');
-    expect(dao.entitlements.bumpTokenVersion).toHaveBeenCalledWith(USER_ID);
-    expect(syncUserContainer).toHaveBeenCalledWith(USER_ID);
+    expect(dao.entitlements.bumpTokenVersion).not.toHaveBeenCalled();
+    expect(resyncEntitlements).toHaveBeenCalledWith(USER_ID);
+    expect(syncUserContainer).not.toHaveBeenCalled();
   });
 
-  it('idempotent: already enabled → no bump, but still sync for resync', async () => {
+  it('idempotent: already enabled → still resync (declarative, harmless)', async () => {
     vi.mocked(dao.entitlements.enable).mockResolvedValue({ changed: false });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(['cloud']);
 
@@ -61,12 +64,12 @@ describe('POST /api/entitlements/cloud/enable', () => {
     expect(res.status).toBe(200);
     expect(res.body.changed).toBe(false);
     expect(dao.entitlements.bumpTokenVersion).not.toHaveBeenCalled();
-    expect(syncUserContainer).toHaveBeenCalledWith(USER_ID);
+    expect(resyncEntitlements).toHaveBeenCalledWith(USER_ID);
   });
 });
 
 describe('POST /api/entitlements/cloud/disable', () => {
-  it('disable changes state → bump version → sync, but does NOT delete blob data', async () => {
+  it('disable changes state → bump version → syncUserContainer (reconcile), no blob delete', async () => {
     vi.mocked(dao.entitlements.disable).mockResolvedValue({ changed: true });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue([]);
     vi.mocked(dao.entitlements.bumpTokenVersion).mockResolvedValue(2);
@@ -78,6 +81,7 @@ describe('POST /api/entitlements/cloud/disable', () => {
     expect(dao.entitlements.disable).toHaveBeenCalledWith(USER_ID, 'cloud');
     expect(dao.entitlements.bumpTokenVersion).toHaveBeenCalled();
     expect(syncUserContainer).toHaveBeenCalledWith(USER_ID);
+    expect(resyncEntitlements).not.toHaveBeenCalled();
   });
 });
 
@@ -86,13 +90,12 @@ describe('feature allowlist', () => {
     const res = await request(makeApp()).post('/api/entitlements/bogus/enable');
     expect(res.status).toBe(404);
     expect(dao.entitlements.enable).not.toHaveBeenCalled();
-    expect(syncUserContainer).not.toHaveBeenCalled();
+    expect(resyncEntitlements).not.toHaveBeenCalled();
   });
 
   it('email is now allowed (sub-project B) → enable proceeds', async () => {
     vi.mocked(dao.entitlements.enable).mockResolvedValue({ changed: true });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(['email']);
-    vi.mocked(dao.entitlements.bumpTokenVersion).mockResolvedValue(1);
 
     const res = await request(makeApp()).post('/api/entitlements/email/enable');
     expect(res.status).toBe(200);
@@ -104,7 +107,6 @@ describe('onEnable hook', () => {
   it('enable 成功后调用 onEnable(userId, feature)', async () => {
     vi.mocked(dao.entitlements.enable).mockResolvedValue({ changed: true });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(['email']);
-    vi.mocked(dao.entitlements.bumpTokenVersion).mockResolvedValue(1);
     const onEnable = vi.fn().mockResolvedValue(undefined);
 
     const res = await request(makeApp({ onEnable })).post('/api/entitlements/email/enable');
@@ -115,7 +117,6 @@ describe('onEnable hook', () => {
   it('onEnable 抛错不影响 200(钩子失败仅记日志)', async () => {
     vi.mocked(dao.entitlements.enable).mockResolvedValue({ changed: true });
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(['email']);
-    vi.mocked(dao.entitlements.bumpTokenVersion).mockResolvedValue(1);
     const onEnable = vi.fn().mockRejectedValue(new Error('boom'));
 
     const res = await request(makeApp({ onEnable })).post('/api/entitlements/email/enable');
