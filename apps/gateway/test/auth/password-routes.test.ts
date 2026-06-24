@@ -39,10 +39,10 @@ describe('password-routes', () => {
 
       const res = await request(makeApp())
         .post('/api/auth/password/register')
-        .send({ email: 'a@b.com', password: 'secret12', nickname: 'Qiang' });
+        .send({ email: 'a@b.com', password: 'secret12' });
 
       expect(res.status).toBe(201);
-      expect(res.body).toMatchObject({ user_id: 'u_new', provider: 'password', email: 'a@b.com', nickname: 'Qiang' });
+      expect(res.body).toMatchObject({ user_id: 'u_new', provider: 'password', email: 'a@b.com' });
       expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(true);
       const call = vi.mocked(dao.users.createPasswordUser).mock.calls[0]![0];
       expect(call.hash).not.toBe('secret12');
@@ -53,7 +53,7 @@ describe('password-routes', () => {
       vi.mocked(dao.users.createPasswordUser).mockResolvedValue(null);
       const res = await request(makeApp())
         .post('/api/auth/password/register')
-        .send({ email: 'a@b.com', password: 'secret12', nickname: 'Qiang' });
+        .send({ email: 'a@b.com', password: 'secret12' });
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('email_taken');
     });
@@ -61,7 +61,7 @@ describe('password-routes', () => {
     it('密码太短 → 400 + code=password_too_short,不落库', async () => {
       const res = await request(makeApp())
         .post('/api/auth/password/register')
-        .send({ email: 'a@b.com', password: 'short', nickname: 'Qiang' });
+        .send({ email: 'a@b.com', password: 'short' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('password_too_short');
       expect(dao.users.createPasswordUser).not.toHaveBeenCalled();
@@ -70,17 +70,9 @@ describe('password-routes', () => {
     it('邮箱格式非法 → 400 + code=invalid_email', async () => {
       const res = await request(makeApp())
         .post('/api/auth/password/register')
-        .send({ email: 'notanemail', password: 'secret12', nickname: 'Qiang' });
+        .send({ email: 'notanemail', password: 'secret12' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('invalid_email');
-    });
-
-    it('称呼为空 → 400 + code=nickname_required', async () => {
-      const res = await request(makeApp())
-        .post('/api/auth/password/register')
-        .send({ email: 'a@b.com', password: 'secret12', nickname: '   ' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('nickname_required');
     });
   });
 
@@ -150,7 +142,7 @@ describe('password-routes', () => {
       );
       const res = await request(makeApp())
         .post('/api/auth/password/register')
-        .send({ email: 'a@b.com', password: 'secret12', nickname: 'Qiang' });
+        .send({ email: 'a@b.com', password: 'secret12' });
       expect(res.status).toBe(500);
     });
   });

@@ -1,6 +1,6 @@
 /**
  * 账号密码登录路由(非 OAuth redirect 流程):
- *   POST /api/auth/password/register  { email, password, nickname }
+ *   POST /api/auth/password/register  { email, password }
  *   POST /api/auth/password/login     { email, password }
  * 成功后签发与 OAuth 同一套 session cookie。
  */
@@ -40,17 +40,15 @@ export const buildPasswordRoutes = (opts: PasswordRoutesOpts): RouterType => {
   r.post('/api/auth/password/register', async (req: Request, res: Response) => {
     const email = String(req.body?.email ?? '').trim();
     const password = String(req.body?.password ?? '');
-    const nickname = String(req.body?.nickname ?? '').trim();
 
     if (!EMAIL_RE.test(email)) return fail(res, 400, 'invalid_email', 'invalid email');
     if (password.length < MIN_PASSWORD_LENGTH) return fail(res, 400, 'password_too_short', 'password too short');
-    if (!nickname) return fail(res, 400, 'nickname_required', 'nickname required');
 
     // 包 try/catch: Express 4 不捕获 async handler 的 reject, 不包会变成
     // unhandledRejection 直接拖垮整个 gateway 进程 (而非返回 500)。与其它路由一致。
     try {
       const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      const created = await dao.users.createPasswordUser({ email, nickname, hash });
+      const created = await dao.users.createPasswordUser({ email, hash });
       if (!created) return fail(res, 409, 'email_taken', 'email already registered');
 
       const row = await dao.users.getById(created.id);
