@@ -100,8 +100,7 @@ export const config = {
   },
 
   feishu: {
-    // 总开关, off 时 gateway 不起飞书连接/不挂飞书路由。
-    enabled: process.env['FEISHU_ENABLED'] === 'true',
+    // 飞书渠道为常驻能力, 无总开关 (gateway boot 时总起, 0 绑定空跑)。
     // 'feishu' | 'lark' — 决定 API endpoint 域名前缀。
     domain: (process.env['FEISHU_DOMAIN'] ?? 'feishu') as 'feishu' | 'lark',
   },

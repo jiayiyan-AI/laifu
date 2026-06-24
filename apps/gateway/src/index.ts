@@ -53,7 +53,7 @@ export interface CreateAppOptions {
    */
   pollMgr?: PollManager;
   /**
-   * 飞书 WS 长连接管理器。仅当 config.feishu.enabled 时构造,测试/默认省略 —
+   * 飞书 WS 长连接管理器。boot 时总是注入; 测试可省略 —
    * 省了就不挂 /api/feishu/* 路由,其它端点不受影响。
    */
   feishuMgr?: FeishuConnectionManager;
@@ -301,11 +301,9 @@ export const start = async (): Promise<void> => {
   });
   await pollMgr.startAll();
 
-  // 飞书 WS (默认关, FEISHU_ENABLED=true 才起)
-  const feishuMgr = config.feishu.enabled
-    ? new FeishuConnectionManager({ onMessageFor: makeFeishuInbound() })
-    : undefined;
-  if (feishuMgr) await feishuMgr.startAll();
+  // 飞书 WS: 渠道是常驻能力, boot 时总是起。0 绑定时 startAll 空跑安全。
+  const feishuMgr = new FeishuConnectionManager({ onMessageFor: makeFeishuInbound() });
+  await feishuMgr.startAll();
 
   const app = createApp({ pollMgr, feishuMgr });
   const server = app.listen(config.port, () => {
@@ -327,7 +325,7 @@ export const start = async (): Promise<void> => {
     void (async () => {
       console.log(`[gateway] ${signal} received, shutting down...`);
       await pollMgr.stopAll();
-      if (feishuMgr) await feishuMgr.stopAll();
+      await feishuMgr.stopAll();
       server.close(() => {
         console.log('[gateway] server closed');
         process.exit(0);
