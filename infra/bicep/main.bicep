@@ -414,9 +414,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
 
-    // 飞书渠道: 默认关闭。FEISHU_ENABLED=true 时 gateway 为每个 active 飞书绑定起一条 WS 长连接。
-    // 非敏感, 明文写死 (appid/secret 等敏感值后续再加 KV reference)。
-    FEISHU_ENABLED: 'false'
+    // 飞书渠道为常驻能力, gateway boot 时总起 (无总开关)。app_id/secret 按绑定存 DB, 无全局 secret。
+    // FEISHU_DOMAIN: API endpoint 域名前缀 ('feishu' 国内 / 'lark' 海外)。
     FEISHU_DOMAIN: 'feishu'
 
     // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
