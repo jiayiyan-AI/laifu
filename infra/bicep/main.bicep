@@ -32,6 +32,9 @@ param webBaseUrl string = ''
 @description('邮件域 (助手邮箱 + Resend 出站 + CF 入站 catch-all). 默认 laifu.uncagedai.org; prod 用 mail.laifu.uncagedai.org')
 param emailDomain string = 'laifu.uncagedai.org'
 
+@description('飞书渠道总开关. true 时 gateway 为每条 active 飞书绑定起一条 WS 长连接 (凭据按绑定存 DB, 无需全局 secret). 默认关, 按环境在 parameters.*.json 覆盖。')
+param feishuEnabled bool = false
+
 // ─────────── 资源命名 ───────────
 var rgSuffix = '${namePrefix}-${env}'
 var caeName = 'cae-${rgSuffix}'
@@ -414,9 +417,9 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
 
-    // 飞书渠道: 默认关闭。FEISHU_ENABLED=true 时 gateway 为每个 active 飞书绑定起一条 WS 长连接。
-    // 非敏感, 明文写死 (appid/secret 等敏感值后续再加 KV reference)。
-    FEISHU_ENABLED: 'false'
+    // 飞书渠道: 开关由 feishuEnabled 参数控制 (各环境 parameters.*.json 覆盖, 默认关)。
+    // true 时 gateway 为每个 active 飞书绑定起一条 WS 长连接; 凭据按绑定存 DB, 无全局 secret。
+    FEISHU_ENABLED: string(feishuEnabled)
     FEISHU_DOMAIN: 'feishu'
 
     // 邮件能力 (子项 B):入站走 CF Email Routing → Worker → /api/email/inbound,出站走 Resend。
