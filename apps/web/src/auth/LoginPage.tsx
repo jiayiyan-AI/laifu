@@ -14,7 +14,6 @@ const authErrorMessage = (e: unknown, mode: Mode): string => {
     switch (e.code) {
       case 'invalid_email': return '邮箱格式不正确';
       case 'password_too_short': return `密码至少 ${MIN_PASSWORD_LENGTH} 位`;
-      case 'nickname_required': return '请填写称呼';
       case 'email_taken': return '该邮箱已注册，请直接登录';
       case 'invalid_credentials': return '邮箱或密码错误';
       default: return `${mode === 'login' ? '登录' : '注册'}失败：${e.message}`;
@@ -34,7 +33,6 @@ export const LoginPage = () => {
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [nickname, setNickname] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -56,7 +54,7 @@ export const LoginPage = () => {
       if (mode === 'login') {
         await api.login({ email, password });
       } else {
-        await api.register({ email, password, nickname });
+        await api.register({ email, password });
       }
       await actions.refresh();
       nav('/desktop', { replace: true });
@@ -108,12 +106,6 @@ export const LoginPage = () => {
         </div>
 
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {mode === 'register' && (
-            <input
-              placeholder="你的称呼" value={nickname} autoComplete="nickname"
-              onChange={(e) => setNickname(e.target.value)} style={inputStyle}
-            />
-          )}
           <input
             placeholder="邮箱" type="email" value={email} autoComplete="email"
             onChange={(e) => setEmail(e.target.value)} style={inputStyle}

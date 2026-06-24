@@ -112,14 +112,12 @@ export interface PasswordLoginRequest {
 export interface PasswordRegisterRequest {
   email: string;
   password: string;
-  nickname: string;
 }
 
 /** 注册/登录失败的稳定错误码。前端据此给精确提示，不靠英文文案字符串匹配。 */
 export type AuthErrorCode =
   | 'invalid_email'
   | 'password_too_short'
-  | 'nickname_required'
   | 'email_taken'
   | 'invalid_credentials';
 

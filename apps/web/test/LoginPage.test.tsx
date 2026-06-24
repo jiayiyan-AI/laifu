@@ -25,11 +25,12 @@ describe('LoginPage', () => {
     });
   });
 
-  it('切到注册态: 多出"称呼"输入,主按钮变"注册并进入"', async () => {
+  it('切到注册态: 仍是邮箱/密码,主按钮变"注册并进入"(不再要求称呼)', async () => {
     render(wrap(<LoginPage />));
     await waitFor(() => screen.getByText('注册'));
     fireEvent.click(screen.getByRole('button', { name: '注册' }));
-    expect(screen.getByPlaceholderText('你的称呼')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('你的称呼')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('邮箱')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '注册并进入' })).toBeInTheDocument();
   });
 

@@ -26,7 +26,6 @@ export interface UsersDao {
   }): Promise<{ id: string } | null>;
   createPasswordUser(input: {
     email: string;
-    nickname: string;
     hash: string;
   }): Promise<{ id: string } | null>;
   getPasswordUserByEmail(email: string): Promise<(UserRow & { password_hash: string | null }) | null>;
@@ -71,14 +70,14 @@ export const makeUsersDao = (db: Db): UsersDao => {
       return rows[0] ?? null;
     },
 
-    async createPasswordUser({ email, nickname, hash }) {
+    async createPasswordUser({ email, hash }) {
       const rows = await db.insert(u).values({
         provider: 'password',
         // external_id 是小写化的查找键(复用 provider+external_id 唯一索引);
         // email 列保留用户输入的原始大小写用于展示。全局唯一性由 lower(email) 索引保证。
         external_id: email.toLowerCase(),
         email,
-        nickname,
+        // nickname 不在注册时收集(列可空), 展示处统一 fallback "未命名"。
         password_hash: hash,
       }).onConflictDoNothing().returning({ id: u.id });
       return rows[0] ?? null;  // null = 邮箱已存在
