@@ -5,7 +5,8 @@ import { entitlementsAtom } from '../../states/entitlements.atom.js';
 import type { Capability } from '../../lib/capabilities.js';
 
 const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 30_000;
+const POLL_TIMEOUT_MS = 30_000;            // CapabilityRemove(退订)仍用 30s, 本期不动
+const EQUIP_TIMEOUT_MS = 180_000;          // CapabilityEquip(装备)放宽到 180s
 
 /** 居中弹窗外壳(装备/退订共用)。 */
 const Modal = ({ children }: { children: ReactNode }) => (
@@ -49,7 +50,7 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
       await api.enableFeature(cap.id);
       setPhase('polling');
       intervalRef.current = window.setInterval(() => { void refetch(); }, POLL_INTERVAL_MS);
-      timeoutRef.current = window.setTimeout(() => { cleanup(); setPhase('timeout'); }, POLL_TIMEOUT_MS);
+      timeoutRef.current = window.setTimeout(() => { cleanup(); setPhase('timeout'); }, EQUIP_TIMEOUT_MS);
       void refetch();
     } catch (err) {
       setPhase('failed');
@@ -95,7 +96,7 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
           {phase === 'polling' && (
             <>
               <div style={{ fontWeight: 600 }}>正在装备到助理…</div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>预计 5 - 15 秒</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>冷启动时助理上线约需 1 分钟,请稍候</div>
             </>
           )}
           {phase === 'failed' && (
@@ -110,8 +111,8 @@ export const CapabilityEquip = ({ cap, onReady }: { cap: Capability; onReady?: (
           )}
           {phase === 'timeout' && (
             <>
-              <div style={{ fontWeight: 600 }}>装备未完成</div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>请稍后在"我的助理"重试</div>
+              <div style={{ fontWeight: 600, color: 'var(--err, #c00)' }}>装备失败</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>助理迟迟没有上线,请重试</div>
               <div style={{ marginTop: 14, display: 'flex', gap: 8, justifyContent: 'center' }}>
                 <button className="btn" onClick={() => setPhase('idle')}>关闭</button>
                 <button className="btn btn-primary" onClick={() => void handleEnable()}>立即重试</button>

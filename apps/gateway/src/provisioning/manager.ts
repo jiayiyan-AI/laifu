@@ -3,6 +3,7 @@ import * as azureModule from './azure.js';
 import { shareNameFor } from './naming.js';
 import { provisionContainerLocal, signTokenAndInjectLocal, restartContainerAppLocal } from './local.js';
 import { config } from '../config.js';
+import { getContainerToken } from '../lib/aca-call.js';
 
 // 与 spec §1.1 用户旅程里 6 步进度文案一致
 const STEPS = [
@@ -86,4 +87,43 @@ export const syncUserContainer = async (userId: string): Promise<void> => {
     await signTokenAndInjectLocal(userId, tokenVersion);
     await restartContainerAppLocal(userId);
   }
+};
+
+/** resync 容器调用的超时: 覆盖冷容器 0→1 唤醒最坏 (~冷启动 60-90s+); 超时则靠容器 bootstrap 安全网兜底。 */
+const RESYNC_TIMEOUT_MS = 180_000;
+
+/**
+ * 装备(enable)轻量 resync (方案 A, 见 plans/2026-06-23-entitlement-live-resync):
+ * 推 desired 给容器新端点, 容器建软链后同响应回 observed, 直接落库。不 bump token_version、不滚 revision。
+ *  - 容器未 ready: 早退。desired 已在 DB, 待容器 bootstrap 的 sync-entitlements 自然读到并回报 (安全网)。
+ *  - 现签当前版本 token (不 bump, 容器 requireBearer 不校 version, 天然收)。
+ *  - 落 observed + 把 policy_hash 对齐当前策略 —— 否则下次聊天 checkAndReconcileACA 误判漂移再多滚一次 revision。
+ * provisioner 不分支: azure / local 都走容器 HTTP (container_url 由 DB 给)。
+ */
+export const resyncEntitlements = async (userId: string): Promise<void> => {
+  const mapping = await dao.containerMapping.getByUserId(userId);
+  if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
+    console.log(`[entitlements] resync skip (container not ready) for ${userId}`);
+    return;
+  }
+  const desired = await dao.entitlements.listActive(userId);
+  const tokenVersion = (await dao.users.getTokenVersion(userId)) ?? 0;
+  const token = await getContainerToken(userId);
+
+  const resp = await fetch(`${mapping.container_url}/internal/resync-entitlements`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ entitlements: desired, token_version: tokenVersion }),
+    signal: AbortSignal.timeout(RESYNC_TIMEOUT_MS),
+  });
+  if (!resp.ok) throw new Error(`resync HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as { observed?: string[]; token_version?: number };
+  const observed = Array.isArray(data.observed) ? data.observed : [];
+  await dao.observedState.upsert({
+    user_id: userId,
+    observed_entitlements: observed,
+    observed_token_version: typeof data.token_version === 'number' ? data.token_version : tokenVersion,
+  });
+  await dao.containerMapping.setPolicyHash(userId, azureModule.policyHashFor(userId));
 };

@@ -29,6 +29,10 @@ import { callHermes, asyncChatAndCallback } from './chat.ts';
 import { requireBearer } from './auth.ts';
 import { handleInboxImage } from './inbox.ts';
 import { log } from './logger.ts';
+// 绝对路径 /opt/lingxi-scripts/* —— 镜像里 scripts 被 COPY 到 /opt/lingxi-scripts (不在 /app/scripts),
+// 故 server 跨目录引 scripts 模块必须走绝对路径 (与 chat.ts 引 lib.ts 同) + tsconfig paths 映射回 ./scripts/*。
+// 相对 '../scripts/...' 只在源码树成立, 在镜像里解析不到会让整个 http.ts 加载失败、容器起不来。
+import { applyEntitlements } from '/opt/lingxi-scripts/sync-entitlements.ts';
 
 // `hermes sessions delete` 是纯 SQLite 操作 (state.db 里 sessions/messages 几条 UPDATE),
 // 正常 < 1s; 15s 上限只防 state.db 被 hermes writer 长锁的极端情况。
@@ -42,6 +46,7 @@ export async function handle(req: Request): Promise<Response> {
   const denied = requireBearer(req);
   if (denied) return denied;
 
+  if (req.method === 'POST' && url.pathname === '/internal/resync-entitlements') return handleResyncEntitlements(req);
   if (req.method === 'GET' && url.pathname === '/history') return handleHistory(url);
   if (req.method === 'POST' && url.pathname === '/chat') return handleChat(req);
   if (req.method === 'POST' && url.pathname === '/inbox/image') return handleInboxImage(req);
@@ -174,5 +179,37 @@ async function handleDeleteSession(url: URL): Promise<Response> {
     }
     log.error({ event: 'session.delete', session: sessionName, status: 'error', err: err.message ?? String(e) });
     return Response.json({ error: err.message ?? String(e) }, { status: 500 });
+  }
+}
+
+interface ResyncRequestBody {
+  entitlements?: string[];
+  token_version?: number;
+}
+
+// POST /internal/resync-entitlements
+//
+// gateway 装备能力时推一份 desired 过来, 容器声明式建/删软链后在同一响应回 observed。
+// 不回调 gateway、不重启 —— 软链即生效 (Hermes CLI 每条消息现 spawn 时重读 ~/.hermes/skills)。
+// 过 requireBearer (与其它业务端点同, 见 handle()); 不校 token_version, 故能收 gateway 现签 token。
+// apply 参数默认 applyEntitlements, 单测注入假实现避免碰真 FS。
+export async function handleResyncEntitlements(
+  req: Request,
+  apply: (desired: string[]) => string[] = applyEntitlements,
+): Promise<Response> {
+  let body: ResyncRequestBody;
+  try {
+    body = (await req.json()) as ResyncRequestBody;
+  } catch {
+    return Response.json({ error: 'invalid json' }, { status: 400 });
+  }
+  const desired = Array.isArray(body.entitlements) ? body.entitlements : [];
+  const tokenVersion = typeof body.token_version === 'number' ? body.token_version : 0;
+  try {
+    const observed = apply(desired);
+    return Response.json({ observed, token_version: tokenVersion });
+  } catch (e) {
+    log.error({ event: 'resync.entitlements.failed', err: (e as Error).message });
+    return Response.json({ error: (e as Error).message }, { status: 500 });
   }
 }

@@ -5,7 +5,8 @@ import { entitlementsAtom } from '../../states/entitlements.atom.js';
 type Phase = 'idle' | 'confirm' | 'posting' | 'polling' | 'ready' | 'failed' | 'timeout';
 
 const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 30_000;
+// 装备点亮 observed 要等容器建软链(热 ~1-2s; 冷启动最坏 ~1min)。放宽到 180s 兜底, 到点才判失败。
+const EQUIP_TIMEOUT_MS = 180_000;
 
 export const BuyCloudButton = ({ onReady }: { onReady: () => void }) => {
   const [ent, { refetch }] = entitlementsAtom.use();
@@ -40,7 +41,7 @@ export const BuyCloudButton = ({ onReady }: { onReady: () => void }) => {
       timeoutRef.current = window.setTimeout(() => {
         cleanup();
         setPhase('timeout');
-      }, POLL_TIMEOUT_MS);
+      }, EQUIP_TIMEOUT_MS);
       void refetch();
     } catch (err) {
       setPhase('failed');
@@ -98,7 +99,9 @@ export const BuyCloudButton = ({ onReady }: { onReady: () => void }) => {
             {phase === 'polling' && (
               <>
                 <div style={{ fontWeight: 600 }}>正在装备到助理…</div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>预计 5 - 15 秒</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  冷启动时助理上线约需 1 分钟,请稍候
+                </div>
               </>
             )}
             {phase === 'failed' && (
@@ -113,9 +116,9 @@ export const BuyCloudButton = ({ onReady }: { onReady: () => void }) => {
             )}
             {phase === 'timeout' && (
               <>
-                <div style={{ fontWeight: 600 }}>装备未完成</div>
+                <div style={{ fontWeight: 600, color: 'var(--err, #c00)' }}>装备失败</div>
                 <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  请稍后在"我的助理"重试
+                  助理迟迟没有上线,请重试
                 </div>
                 <div style={{ marginTop: 14, display: 'flex', gap: 8, justifyContent: 'center' }}>
                   <button className="btn" onClick={() => setPhase('idle')}>关闭</button>

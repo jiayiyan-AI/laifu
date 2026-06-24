@@ -6,7 +6,7 @@ import { dao } from '../db/index.js';
 /** 允许通过此端点开关的能力。新增能力时在此追加(与前端 catalog 同步)。 */
 const ALLOWED_FEATURES = new Set<string>(MANAGEABLE_FEATURES);
 
-import { syncUserContainer } from '../provisioning/manager.js';
+import { syncUserContainer, resyncEntitlements } from '../provisioning/manager.js';
 
 export interface EntitlementsRouterDeps {
   /** enable 成功后的可选副作用钩子(如 email 自动分配 handle)。失败不阻断装备。 */
@@ -17,44 +17,72 @@ export interface EntitlementsRouterDeps {
 export const buildEntitlementsRouter = (deps: EntitlementsRouterDeps): RouterType => {
   const router = Router();
 
-  const makeHandler = (kind: 'enable' | 'disable'): RequestHandler => async (req: Request, res: Response) => {
+  /** 校验 feature 白名单并解出 userId。若 feature 不合法则直接写 404 并返回 null。 */
+  const resolveFeatureUser = (
+    req: Request,
+    res: Response,
+  ): { feature: string; userId: string } | null => {
     const feature = req.params['feature'] as string;
     if (!ALLOWED_FEATURES.has(feature)) {
       res.status(404).json({ error: `unknown feature: ${feature}` });
-      return;
+      return null;
     }
-    const userId = req.session!.user_id;
-    try {
-      const { changed } = kind === 'enable'
-        ? await dao.entitlements.enable(userId, feature)
-        : await dao.entitlements.disable(userId, feature);
+    return { feature, userId: req.session!.user_id };
+  };
 
-      if (changed) {
-        await dao.entitlements.bumpTokenVersion(userId);
-      }
-      if (kind === 'enable' && deps.onEnable) {
+  /** 查当前有效权益列表并回写成功响应。 */
+  const sendActive = async (res: Response, userId: string, changed: boolean): Promise<void> => {
+    const active = await dao.entitlements.listActive(userId);
+    const body: EntitlementChangeResponse = { ok: true, entitlements: active, changed };
+    res.json(body);
+  };
+
+  // enable: 纯加法, 不 bump token_version; 轻量 resync 推 desired 给热容器建软链 + 回报 observed (不滚 revision)。
+  const enableHandler: RequestHandler = async (req: Request, res: Response) => {
+    const ctx = resolveFeatureUser(req, res);
+    if (!ctx) return;
+    const { feature, userId } = ctx;
+    try {
+      const { changed } = await dao.entitlements.enable(userId, feature);
+      if (deps.onEnable) {
         try {
           await deps.onEnable(userId, feature);
         } catch (err) {
           console.error(`[entitlements] onEnable hook failed for ${userId}/${feature}:`, err);
         }
       }
-      // 把改装后的新 token 整份推进容器并重载 (azure 自滚新 revision / local 写盘+docker restart)。
-      // fire-and-forget: azure 分支是 beginUpdateAndWait (10-30s+ 控制面操作), 绝不阻塞 HTTP 响应 (§3.2)。
-      // DB 改装已提交, 前端轮询 /api/status 感知容器回归; 失败仅记录 (token 不进哈希, 无 hash 兜底, 靠用户重试)。
-      void syncUserContainer(userId).catch((err) =>
-        console.error(`[entitlements] syncUserContainer failed for ${userId}:`, err),
+      // fire-and-forget: resync 在热容器上 ~1-2s 完成, 前端轮询 /api/status 看 observed 翻转。
+      // 冷容器 / resync 失败时 desired 已落库, 容器 bootstrap 的 sync-entitlements 会自然收敛 (安全网)。
+      void resyncEntitlements(userId).catch((err) =>
+        console.error(`[entitlements] resync failed for ${userId}:`, err),
       );
-      const active = await dao.entitlements.listActive(userId);
-      const body: EntitlementChangeResponse = { ok: true, entitlements: active, changed };
-      res.json(body);
+      await sendActive(res, userId, changed);
     } catch (err) {
       res.status(500).json({ error: 'internal', message: String(err) });
     }
   };
 
-  router.post('/api/entitlements/:feature/enable', deps.sessionMw, makeHandler('enable'));
-  router.post('/api/entitlements/:feature/disable', deps.sessionMw, makeHandler('disable'));
+  // disable: 保留旧逻辑 —— bump token_version (顺带真吊销旧 token) + syncUserContainer (滚 revision 重投)。
+  const disableHandler: RequestHandler = async (req: Request, res: Response) => {
+    const ctx = resolveFeatureUser(req, res);
+    if (!ctx) return;
+    const { feature, userId } = ctx;
+    try {
+      const { changed } = await dao.entitlements.disable(userId, feature);
+      if (changed) {
+        await dao.entitlements.bumpTokenVersion(userId);
+      }
+      void syncUserContainer(userId).catch((err) =>
+        console.error(`[entitlements] syncUserContainer failed for ${userId}:`, err),
+      );
+      await sendActive(res, userId, changed);
+    } catch (err) {
+      res.status(500).json({ error: 'internal', message: String(err) });
+    }
+  };
+
+  router.post('/api/entitlements/:feature/enable', deps.sessionMw, enableHandler);
+  router.post('/api/entitlements/:feature/disable', deps.sessionMw, disableHandler);
 
   return router;
 };
