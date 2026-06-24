@@ -29,7 +29,10 @@ import { callHermes, asyncChatAndCallback } from './chat.ts';
 import { requireBearer } from './auth.ts';
 import { handleInboxImage } from './inbox.ts';
 import { log } from './logger.ts';
-import { applyEntitlements } from '../scripts/sync-entitlements.ts';
+// 绝对路径 /opt/lingxi-scripts/* —— 镜像里 scripts 被 COPY 到 /opt/lingxi-scripts (不在 /app/scripts),
+// 故 server 跨目录引 scripts 模块必须走绝对路径 (与 chat.ts 引 lib.ts 同) + tsconfig paths 映射回 ./scripts/*。
+// 相对 '../scripts/...' 只在源码树成立, 在镜像里解析不到会让整个 http.ts 加载失败、容器起不来。
+import { applyEntitlements } from '/opt/lingxi-scripts/sync-entitlements.ts';
 
 // `hermes sessions delete` 是纯 SQLite 操作 (state.db 里 sessions/messages 几条 UPDATE),
 // 正常 < 1s; 15s 上限只防 state.db 被 hermes writer 长锁的极端情况。
