@@ -48,6 +48,10 @@ function newEntityId(prefix: EntityPrefix): string {
   return `${prefix}_${ulid()}`;
 }
 
+// trace_id 仅用 ms 时间戳不足以保证同毫秒唯一(不像实体 id 带 80-bit 随机)。
+// 进程内单调序号兜底, 保证每个 burst/请求拿到互不相同的 trace, 不破坏日志关联。
+let traceSeq = 0;
+
 class IdGenerator {
   get thread(): string {
     return newEntityId('thr');
@@ -66,7 +70,7 @@ class IdGenerator {
   }
 
   get trace() {
-    return `trace_${Date.now()}`;
+    return `trace_${Date.now()}_${(traceSeq++).toString(36)}`;
   }
 }
 

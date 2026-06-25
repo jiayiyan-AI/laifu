@@ -166,7 +166,7 @@ const dispatchMerged = async (
     ? buildInboxPrompt(joinedText, attachments, fetchErrors)
     : joinedText;
 
-  // 插入 user 消息 + 创建 agent loop。content 存**原文**(纯图为 ''), prompt 单独走 dispatch。
+  // 插入 user 消息 + 创建 agent loop。content 与 dispatch 同存 promptText(含图片本地路径标注; 纯图也带前缀), 与 feishu 一致。
   const userMsgId = genId.message;
   const loopId = genId.agentLoop;
   try {

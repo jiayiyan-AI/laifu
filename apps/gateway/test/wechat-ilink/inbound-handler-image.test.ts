@@ -132,7 +132,7 @@ describe('handleInbound — image attachments', () => {
     __resetPendingLoopsForTests();
   });
 
-  it('text + image: wakes container, uploads, inserts plain text message, dispatches prompt with path', async () => {
+  it('text + image: wakes container, uploads, stores prompt as content, dispatches prompt with path', async () => {
     const fetchImpl = dispatch202();
     const client = mockClient();
     const handle = makeHandleInbound()(mockBinding(), client);
@@ -148,7 +148,8 @@ describe('handleInbound — image attachments', () => {
 
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content_type).toBe('text');
-    expect(insertArg.content).toBe('看看这张图');
+    expect(insertArg.content).toContain('看看这张图');
+    expect(insertArg.content).toContain('img_abc123.jpg');
 
     const chatCall = vi.mocked(fetchImpl).mock.calls.find((c) => String(c[0]).endsWith('/chat'));
     expect(chatCall).toBeDefined();
@@ -242,7 +243,8 @@ describe('handleInbound — image attachments', () => {
     expect(uploadImageStream).toHaveBeenCalledTimes(2);
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content_type).toBe('text');
-    expect(insertArg.content).toBe(''); // 纯图无文字 → 存空串
+    expect(insertArg.content).toContain('/c/img_1.jpg'); // content = 派发 prompt(纯图也带图片路径标注)
+    expect(insertArg.content).toContain('/c/img_2.png');
     // 两张图的路径都进了派发给 hermes 的 prompt
     const chatCall = vi.mocked(fetchImpl).mock.calls.find((c) => String(c[0]).endsWith('/chat'));
     const message = JSON.parse(String((chatCall![1] as { body: string }).body)).message;
