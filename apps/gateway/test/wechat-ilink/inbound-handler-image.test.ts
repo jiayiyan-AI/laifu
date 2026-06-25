@@ -20,7 +20,7 @@ vi.mock('../../src/wechat-ilink/wechat-media-fetcher.js', () => {
   };
 });
 
-vi.mock('../../src/wechat-ilink/inbox-uploader.js', () => ({
+vi.mock('../../src/lib/inbox-image-uploader.js', () => ({
   uploadImageStream: vi.fn(),
 }));
 
@@ -32,14 +32,14 @@ vi.mock('../../src/lib/container-warm-cache.js', () => ({
 import { dao } from '../../src/db/index.js';
 import {
   makeHandleInbound,
-  buildHermesPrompt,
   wechatReplyContexts,
 } from '../../src/wechat-ilink/inbound-handler.js';
+import { buildInboxPrompt } from '../../src/lib/inbox-image-prompt.js';
 import {
   openDecryptedImageStream,
   MediaTooLargeError,
 } from '../../src/wechat-ilink/wechat-media-fetcher.js';
-import { uploadImageStream } from '../../src/wechat-ilink/inbox-uploader.js';
+import { uploadImageStream } from '../../src/lib/inbox-image-uploader.js';
 import { ensureContainerWarm } from '../../src/lib/container-warm-cache.js';
 import type { WechatBinding } from '../../src/db/wechat-binding-dao.js';
 import type { IlinkClient } from '../../src/wechat-ilink/client.js';
@@ -271,34 +271,5 @@ describe('handleInbound — image attachments', () => {
     expect(uploadImageStream).not.toHaveBeenCalled();
     expect(vi.mocked(fetchImpl).mock.calls.some((c) => String(c[0]).endsWith('/chat'))).toBe(false);
     expect(dao.messages.insert).not.toHaveBeenCalled();
-  });
-});
-
-describe('buildHermesPrompt', () => {
-  it('returns text unchanged when no attachments and no errors', () => {
-    expect(buildHermesPrompt('hello', [], [])).toBe('hello');
-  });
-
-  it('lists attachment paths and includes the original text', () => {
-    const out = buildHermesPrompt('描述这张图', [
-      { kind: 'image', cache_path: '/c/img_x.jpg', content_type: 'image/jpeg', size: 1_258_291 },
-    ], []);
-    expect(out).toContain('收到 1 张图片');
-    expect(out).toContain('/c/img_x.jpg (image/jpeg, 1.2 MB)');
-    expect(out).toContain('描述这张图');
-  });
-
-  it('keeps prompt without user text when text is empty', () => {
-    const out = buildHermesPrompt('', [
-      { kind: 'image', cache_path: '/c/img_x.jpg', content_type: 'image/jpeg', size: 240 * 1024 },
-    ], []);
-    expect(out).toContain('收到 1 张图片');
-    expect(out).toContain('240 KB');
-  });
-
-  it('appends a failure notice when fetchErrors present', () => {
-    const out = buildHermesPrompt('hi', [], ['boom']);
-    expect(out).toContain('⚠️ 1 张图片下载失败');
-    expect(out).toContain('hi');
   });
 });

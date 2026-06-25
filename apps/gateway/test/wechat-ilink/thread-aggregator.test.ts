@@ -10,9 +10,9 @@ import {
   SPLIT_THRESHOLD,
   type AggregatedBurst,
 } from '../../src/wechat-ilink/thread-aggregator.js';
-import type { WechatAttachmentRef } from '@lingxi/shared';
+import type { InboxAttachmentRef } from '@lingxi/shared';
 
-const att = (path: string): WechatAttachmentRef => ({
+const att = (path: string): InboxAttachmentRef => ({
   kind: 'image', cache_path: path, content_type: 'image/jpeg', size: 100,
 });
 

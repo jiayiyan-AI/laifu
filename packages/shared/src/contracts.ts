@@ -253,10 +253,10 @@ export type FeishuBindingInfoResponse =
 
 export interface FeishuUnbindResponse { ok: true }
 
-// === 微信附件 (P1: 图片) ===
+// === 渠道入站附件 (P1: 图片) ===
 
-/** 微信附件在 hermes 容器内的引用 (临时缓存, 7 天 TTL)。 */
-export interface WechatAttachmentRef {
+/** 渠道入站附件在 hermes 容器内的引用 (临时缓存, 7 天 TTL)。微信/飞书等渠道共用。 */
+export interface InboxAttachmentRef {
   kind: 'image';                  // P2 扩 'file'|'voice'|'video'
   cache_path: string;             // 容器内绝对路径, e.g. /home/hermes/.hermes/cache/images/img_xxx.jpg
   content_type: string;           // image/jpeg | image/png | ...

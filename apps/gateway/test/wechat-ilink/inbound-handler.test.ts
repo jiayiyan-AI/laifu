@@ -5,8 +5,12 @@ vi.mock('../../src/db/index.js', async () => {
   return mockDaoModule();
 });
 
+const { dropThreadSilently } = vi.hoisted(() => ({ dropThreadSilently: vi.fn() }));
+vi.mock('../../src/lib/drop-thread.js', () => ({ dropThreadSilently }));
+
 import { dao } from '../../src/db/index.js';
 import { makeHandleInbound, wechatReplyContexts } from '../../src/wechat-ilink/inbound-handler.js';
+import { dropThreadSilently } from '../../src/lib/drop-thread.js';
 import type { WechatBinding } from '../../src/db/wechat-binding-dao.js';
 import type { IlinkClient } from '../../src/wechat-ilink/client.js';
 import {
@@ -307,6 +311,35 @@ describe('handleInbound', () => {
     await expect(makeHandleInbound()(mockBinding(), client as any)(validInbound()))
       .resolves.toBeUndefined();
     await settle();
+  });
+
+  it('slash /drop (无 args): 静默删旧 thread + 建新 thread + 回确认, 不派发', async () => {
+    const fetchImpl = stubFetch(async () => new Response('{}', { status: 202 }));
+    const client = mockClient();
+    const binding = mockBinding({ thread_id: 'thr_old' });
+    await makeHandleInbound()(binding, client)(validInbound('/drop'));
+    await settle();
+    expect(dropThreadSilently).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dropThreadSilently).mock.calls[0]![0]).toMatchObject({
+      userId: 'u_alice', threadId: 'thr_old', source: 'wechat', containerUrl: 'http://container:8080',
+    });
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dao.wechatBindings.bindThread).toHaveBeenCalledTimes(1);
+    expect(binding.thread_id).not.toBe('thr_old');
+    expect(client.sendText).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('slash /drop + args: 删旧 + 建新 + args 作为首条派发', async () => {
+    const fetchImpl = stubFetch(async () => new Response('{}', { status: 202 }));
+    const client = mockClient();
+    await makeHandleInbound()(mockBinding({ thread_id: 'thr_old' }), client)(validInbound('/drop 继续聊'));
+    await settle();
+    expect(dropThreadSilently).toHaveBeenCalledTimes(1);
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dao.messages.insert).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', content: '继续聊' }));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    for (const [k] of wechatReplyContexts) wechatReplyContexts.delete(k);
   });
 });
 

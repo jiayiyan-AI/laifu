@@ -21,7 +21,7 @@
  * 故绝不会在图还没传完就派发。slot 读写都在 onMessage(poll loop `for...of await`,per-binding
  * 严格串行)→ 无数据竞争。进程内状态,重启即丢。
  */
-import type { WechatAttachmentRef } from '@lingxi/shared';
+import type { InboxAttachmentRef } from '@lingxi/shared';
 import { log } from '../lib/logger.js';
 import { genId } from '@lingxi/db';
 import { runWithTrace, getTraceId } from '../lib/trace-context.js';
@@ -53,7 +53,7 @@ export interface AggregatedBurst {
   /** 各条文字片段(原文,未拼 prompt)。 */
   texts: string[];
   /** 已上传到容器的图片附件(cache_path 稳定,无 TTL 风险)。 */
-  attachments: WechatAttachmentRef[];
+  attachments: InboxAttachmentRef[];
   /** 图片下载/上传失败原因(供 prompt 标注)。 */
   fetchErrors: string[];
 }
@@ -67,7 +67,7 @@ export interface AggregateOpts {
    * 本条图片的上传任务:串进 slot.uploadChain,flush 时 await。无图则省略。
    * 约定**自行吞错**(失败写进返回的 fetchErrors),不要 throw。
    */
-  upload?: () => Promise<{ attachments: WechatAttachmentRef[]; fetchErrors: string[] }>;
+  upload?: () => Promise<{ attachments: InboxAttachmentRef[]; fetchErrors: string[] }>;
   /**
    * 窗口到期、上传落地后调用,用**最新一条**的上下文派发合并 burst。每次 aggregate 覆盖,
    * flush 用最新(故回复发给最近一条消息的 context_token)。
@@ -77,7 +77,7 @@ export interface AggregateOpts {
 
 interface Slot {
   texts: string[];
-  attachments: WechatAttachmentRef[];
+  attachments: InboxAttachmentRef[];
   fetchErrors: string[];
   uploadChain: Promise<void>;
   onFlush: (burst: AggregatedBurst) => void;

@@ -68,6 +68,7 @@ const Static = (msg: string): SlashRenderer => () => msg;
 // session 元操作 — 跟 web UI 直接冲突,引导用户用界面
 const REJECT_SESSION = {
   'new':      '请点击页面"新对话"按钮新建会话。灵犀的会话由系统自动管理,无法在聊天框里手动新建。',
+  'drop':     '请在页面左侧会话列表中删除当前会话。',
   'reset':    '请点击页面"新对话"按钮新建会话。',
   'clear':    '请点击页面"新对话"按钮新建会话。',
   'undo':     '灵犀暂不支持撤回上一轮对话,如需重新提问请直接重发。',
