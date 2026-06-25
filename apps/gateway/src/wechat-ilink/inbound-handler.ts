@@ -12,15 +12,17 @@ import { genId } from '@lingxi/db';
 import { storePendingLoop, emitLoopEvent, HARD_DEADLINE_MS } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
 import { classifyMessage, runIntercept } from '../lib/slash-filter.js';
+import { dropThreadSilently } from '../lib/drop-thread.js';
 import type { InboundPart } from './inbound.js';
-import type { WechatAttachmentRef } from '@lingxi/shared';
+import type { InboxAttachmentRef } from '@lingxi/shared';
 import { ensureContainerWarm } from '../lib/container-warm-cache.js';
 import {
   openDecryptedImageStream,
   MediaTooLargeError,
   WECHAT_IMAGE_MAX_BYTES,
 } from './wechat-media-fetcher.js';
-import { uploadImageStream } from './inbox-uploader.js';
+import { uploadImageStream } from '../lib/inbox-image-uploader.js';
+import { buildInboxPrompt } from '../lib/inbox-image-prompt.js';
 import { enqueueThreadTask } from '../lib/thread-serializer.js';
 import {
   aggregateInbound,
@@ -75,40 +77,6 @@ const isQuotaExhausted = async (userId: string): Promise<boolean> => {
     return false;
   }
 };
-
-/** bytes → 人类可读 (MB / KB / B), 用于 prompt 里标注图片大小。 */
-const formatSize = (bytes: number): string => {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-};
-
-/**
- * 拼给 hermes 的 prompt: 纯文本时原样返回; 带附件 / 有下载失败时, 把本地路径
- * 清单 + 用户原文 + 失败计数拼成一段, 让 agent 用 vision / PIL 直接读路径。
- */
-export const buildHermesPrompt = (
-  text: string,
-  attachments: WechatAttachmentRef[],
-  fetchErrors: string[],
-): string => {
-  if (attachments.length === 0 && fetchErrors.length === 0) return text;
-  const lines: string[] = [];
-  if (attachments.length > 0) {
-    lines.push(`[微信附件] 收到 ${attachments.length} 张图片，已下载到本地：`);
-    for (const a of attachments) {
-      lines.push(`- ${a.cache_path} (${a.content_type}, ${formatSize(a.size)})`);
-    }
-    lines.push('');
-  }
-  lines.push(text);
-  if (fetchErrors.length > 0) {
-    lines.push('');
-    lines.push(`⚠️ ${fetchErrors.length} 张图片下载失败`);
-  }
-  return lines.join('\n');
-};
-
 /**
  * 构造一条消息的「图片下载+上传容器」任务(eager-fetch)。在 onMessage 内即建、串进聚合层的
  * uploadChain 立刻跑 —— 因 iLink download_url 带 TTL,绝不能拖到 flush 后(可能等一个数分钟的
@@ -120,8 +88,8 @@ const buildUploadThunk = (
   msg: ParsedMsg,
   imageParts: ImagePart[],
   containerUrl: string,
-) => async (): Promise<{ attachments: WechatAttachmentRef[]; fetchErrors: string[] }> => {
-  const attachments: WechatAttachmentRef[] = [];
+) => async (): Promise<{ attachments: InboxAttachmentRef[]; fetchErrors: string[] }> => {
+  const attachments: InboxAttachmentRef[] = [];
   const fetchErrors: string[] = [];
 
   // wake 容器(避免冷启动期 CDN 连接被挂导致 RST), 再逐张 streaming 下载+上传。
@@ -142,6 +110,8 @@ const buildUploadThunk = (
         userId: binding.user_id,
         body: stream.body,
         contentType: stream.content_type,
+        maxBytes: WECHAT_IMAGE_MAX_BYTES,
+        channel: 'wechat',
       });
       attachments.push({ kind: 'image', cache_path: up.cache_path, content_type: up.content_type, size: up.size });
     } catch (e) {
@@ -193,10 +163,10 @@ const dispatchMerged = async (
   }
 
   const promptText = attachments.length > 0 || fetchErrors.length > 0
-    ? buildHermesPrompt(joinedText, attachments, fetchErrors)
+    ? buildInboxPrompt(joinedText, attachments, fetchErrors)
     : joinedText;
 
-  // 插入 user 消息 + 创建 agent loop。content 存**原文**(纯图为 ''), prompt 单独走 dispatch。
+  // 插入 user 消息 + 创建 agent loop。content 与 dispatch 同存 promptText(含图片本地路径标注; 纯图也带前缀), 与 feishu 一致。
   const userMsgId = genId.message;
   const loopId = genId.agentLoop;
   try {
@@ -276,7 +246,15 @@ const handleWechatNew = async (
   client: WechatClient,
   msg: ParsedMsg,
   args: string,
+  dropOld = false,
 ): Promise<void> => {
+  // /drop: 先把当前 thread 静默删掉 (DB + ACA session, fire-and-forget, 不等待不管成败)
+  const oldThreadId = binding.thread_id;
+  if (dropOld && oldThreadId) {
+    const m = dao.cache.get(binding.user_id);
+    const containerUrl = m?.status === 'ready' && m.container_url ? m.container_url : null;
+    dropThreadSilently({ userId: binding.user_id, threadId: oldThreadId, source: 'wechat', containerUrl });
+  }
   const newThreadId = genId.thread;
   try {
     await dao.threads.create({ id: newThreadId, user_id: binding.user_id, source: 'wechat', title: '微信' });
@@ -289,9 +267,10 @@ const handleWechatNew = async (
   // in-memory 同步,后续轮次直接复用,不必再 select binding
   binding.thread_id = newThreadId;
   log.info({ event: 'wechat.slash.new', user_id: binding.user_id, new_thread_id: newThreadId, has_args: args.length > 0 });
+  const opened = dropOld ? '已删除当前会话并开启新会话' : '已开启新会话';
 
   if (!args) {
-    await safeSendText(client, msg, '✓ 已开启新会话,你可以开始新的对话了。');
+    await safeSendText(client, msg, `✓ ${opened},你可以开始新的对话了。`);
     return;
   }
   // 带 args: 配额闸 → 先确认新会话已开 → 派发首条消息(避免用户等 LLM 才看到反馈)
@@ -299,7 +278,7 @@ const handleWechatNew = async (
     await safeSendText(client, msg, QUOTA_EXHAUSTED_TEXT);
     return;
   }
-  await safeSendText(client, msg, '✓ 已开启新会话,正在处理你的消息…');
+  await safeSendText(client, msg, `✓ ${opened},正在处理你的消息…`);
   // /new 单条无图: 直接进车道, 无需聚合
   enqueueThreadTask(newThreadId, () =>
     dispatchMerged(binding, { client, msg }, newThreadId, { texts: [args], attachments: [], fetchErrors: [] }),
@@ -346,6 +325,9 @@ async function onWechatInbound(
     if (binding.thread_id) await flush(binding.thread_id);
     if (slash.cmd === 'new') {
       return await handleWechatNew(binding, client, msg, slash.args);
+    }
+    if (slash.cmd === 'drop') {
+      return await handleWechatNew(binding, client, msg, slash.args, true);
     }
     const reply = await runIntercept(slash, {
       userId: binding.user_id,

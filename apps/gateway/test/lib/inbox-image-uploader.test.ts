@@ -5,8 +5,9 @@ vi.mock('../../src/db/index.js', async () => {
   return mockDaoModule();
 });
 
-import { uploadImageStream } from '../../src/wechat-ilink/inbox-uploader.js';
-import { WECHAT_IMAGE_MAX_BYTES } from '../../src/wechat-ilink/wechat-media-fetcher.js';
+import { uploadImageStream } from '../../src/lib/inbox-image-uploader.js';
+
+const MAX_BYTES = 10 * 1024 * 1024;
 
 const streamOf = (bytes: Uint8Array): ReadableStream<Uint8Array> =>
   new ReadableStream({
@@ -51,6 +52,8 @@ describe('uploadImageStream', () => {
       userId: 'u_alice',
       body: streamOf(payload),
       contentType: 'image/jpeg',
+      maxBytes: MAX_BYTES,
+      channel: 'wechat',
       filename: 'photo.jpg',
     });
 
@@ -67,7 +70,7 @@ describe('uploadImageStream', () => {
 
     const headers = seenInit?.headers as Record<string, string>;
     expect(headers.Authorization).toMatch(/^Bearer .+/);
-    expect(headers['X-Max-Bytes']).toBe(String(WECHAT_IMAGE_MAX_BYTES));
+    expect(headers['X-Max-Bytes']).toBe(String(MAX_BYTES));
     expect(headers['Content-Type']).toBe('image/jpeg');
     expect(headers['X-Filename']).toBe('photo.jpg');
   });
@@ -80,6 +83,8 @@ describe('uploadImageStream', () => {
         userId: 'u_alice',
         body: streamOf(new Uint8Array([1, 2, 3])),
         contentType: 'image/jpeg',
+        maxBytes: MAX_BYTES,
+        channel: 'feishu',
       }),
     ).rejects.toThrow(/http 500/);
   });

@@ -10,9 +10,9 @@ import {
   SPLIT_THRESHOLD,
   type AggregatedBurst,
 } from '../../src/wechat-ilink/thread-aggregator.js';
-import type { WechatAttachmentRef } from '@lingxi/shared';
+import type { InboxAttachmentRef } from '@lingxi/shared';
 
-const att = (path: string): WechatAttachmentRef => ({
+const att = (path: string): InboxAttachmentRef => ({
   kind: 'image', cache_path: path, content_type: 'image/jpeg', size: 100,
 });
 
@@ -79,7 +79,7 @@ describe('thread-aggregator', () => {
     expect(flushed[0]!.attachments.map((a) => a.cache_path)).toEqual(['/c/slow.jpg']);
   });
 
-  it('长文(近 ~2048 切分阈值)用更长窗口 SPLIT_WAIT', async () => {
+  it('长文(近 ~2048 切分阈值)用 SPLIT_WAIT 窗口(短于 TEXT_GRACE)', async () => {
     vi.useFakeTimers();
     const flushed: AggregatedBurst[] = [];
     aggregateInbound('t1', {
@@ -87,10 +87,11 @@ describe('thread-aggregator', () => {
       hasImage: false,
       onFlush: (b) => flushed.push(b),
     });
-    // TEXT_GRACE 到期未触发(用了 SPLIT_WAIT)
-    await vi.advanceTimersByTimeAsync(TEXT_GRACE_MS + 10);
+    // 长文走 SPLIT_WAIT(4s): 比 TEXT_GRACE(5s)短 —— 切分分片紧随而来, 不像尾随图会迟到。
+    // 跨过 SPLIT_WAIT 即结算, 且早于 TEXT_GRACE → 证明用的是 SPLIT 窗口而非 TEXT_GRACE。
+    await vi.advanceTimersByTimeAsync(SPLIT_WAIT_MS - 10);
     expect(flushed).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(SPLIT_WAIT_MS - TEXT_GRACE_MS + 10);
+    await vi.advanceTimersByTimeAsync(20);
     expect(flushed).toHaveLength(1);
   });
 

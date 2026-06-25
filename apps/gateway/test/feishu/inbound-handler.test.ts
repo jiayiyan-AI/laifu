@@ -18,6 +18,9 @@ const { dispatchHermesChat } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/lib/aca-call.js', () => ({ dispatchHermesChat }));
 
+const { dropThreadSilently } = vi.hoisted(() => ({ dropThreadSilently: vi.fn() }));
+vi.mock('../../src/lib/drop-thread.js', () => ({ dropThreadSilently }));
+
 import { dao } from '../../src/db/index.js';
 import {
   makeFeishuInbound,
@@ -25,6 +28,7 @@ import {
   __resetSeenForTests,
 } from '../../src/feishu/inbound-handler.js';
 import { __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
+import { dropThreadSilently } from '../../src/lib/drop-thread.js';
 import type { FeishuBinding } from '../../src/db/feishu-binding-dao.js';
 
 const OWNER = 'ou_owner';
@@ -119,10 +123,10 @@ describe('makeFeishuInbound', () => {
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
   });
 
-  it('非 text 类型 → 回提示, 不 dispatch', async () => {
+  it('不支持类型(audio) → 回提示, 不 dispatch', async () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
-    await handle(evt({ type: 'image', messageId: 'img1' }));
+    await handle(evt({ type: 'audio', messageId: 'aud1' }));
     expect(dispatchHermesChat).not.toHaveBeenCalled();
     expect(client.im.message.create).toHaveBeenCalledTimes(1);
   });
@@ -151,5 +155,73 @@ describe('makeFeishuInbound', () => {
     // 重复同一 message_id → 仍被去重
     await handle(evt({ messageId: 'before_clear', text: 'first again' }));
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('slash /help → 网关自答, 不 dispatch 不入库', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    await handle(evt({ messageId: 'sh1', text: '/help' }));
+    expect(dispatchHermesChat).not.toHaveBeenCalled();
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+    expect(client.im.message.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('slash /new (无 args) → 建新 thread + bindThread, 回确认, 不 dispatch', async () => {
+    const client = mockClient();
+    const binding = mockBinding();
+    const handle = makeFeishuInbound()(binding, client);
+    await handle(evt({ messageId: 'sh2', text: '/new' }));
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dao.feishuBindings.bindThread).toHaveBeenCalledTimes(1);
+    expect(binding.thread_id).toBeTruthy();
+    expect(dispatchHermesChat).not.toHaveBeenCalled();
+    expect(client.im.message.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('slash /new + args → 建新 thread 后把 args 作为首条派发', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    await handle(evt({ messageId: 'sh3', text: '/new 顺便问下天气' }));
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
+    const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string };
+    expect(arg.message).toBe('顺便问下天气');
+  });
+
+  it('slash /drop (无 args) → 静默删旧 thread + 建新 thread, 回确认, 不 dispatch', async () => {
+    const client = mockClient();
+    const binding = mockBinding({ thread_id: 'thr_old' });
+    const handle = makeFeishuInbound()(binding, client);
+    await handle(evt({ messageId: 'dr1', text: '/drop' }));
+    // 删旧 thread (DB+session 由 dropThreadSilently 接管)
+    expect(dropThreadSilently).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dropThreadSilently).mock.calls[0]![0]).toMatchObject({
+      userId: 'u_alice', threadId: 'thr_old', source: 'feishu',
+    });
+    // 建新 thread
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dao.feishuBindings.bindThread).toHaveBeenCalledTimes(1);
+    expect(binding.thread_id).not.toBe('thr_old');
+    expect(dispatchHermesChat).not.toHaveBeenCalled();
+    expect(client.im.message.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('slash /drop + args → 删旧 + 建新 + 把 args 作为首条派发', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding({ thread_id: 'thr_old' }), client);
+    await handle(evt({ messageId: 'dr2', text: '/drop 重新开始' }));
+    expect(dropThreadSilently).toHaveBeenCalledTimes(1);
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
+    const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string };
+    expect(arg.message).toBe('重新开始');
+  });
+
+  it('slash /drop 无当前 thread → 不调 dropThreadSilently, 仍建新会话', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding({ thread_id: null }), client);
+    await handle(evt({ messageId: 'dr3', text: '/drop' }));
+    expect(dropThreadSilently).not.toHaveBeenCalled();
+    expect(dao.threads.create).toHaveBeenCalledTimes(1);
   });
 });

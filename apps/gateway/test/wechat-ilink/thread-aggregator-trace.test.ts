@@ -13,11 +13,11 @@ afterEach(() => {
 });
 
 describe('thread-aggregator × burst trace', () => {
-  it('onFlush 在 burst trace 上下文里跑, 带到一个 tr_ id', async () => {
+  it('onFlush 在 burst trace 上下文里跑, 带到一个 trace_ id', async () => {
     let seen: string | undefined;
     aggregateInbound('t1', { text: 'hi', hasImage: false, onFlush: () => { seen = getTraceId(); } });
     await flush('t1');
-    expect(seen).toMatch(/^tr_/);
+    expect(seen).toMatch(/^trace_/);
   });
 
   it('同一窗口的 upload 与 onFlush 共享同一个 burst trace', async () => {
@@ -35,7 +35,7 @@ describe('thread-aggregator × burst trace', () => {
     });
     aggregateInbound('t2', { text: '补一句', hasImage: false, onFlush: () => { flushTrace = getTraceId(); } });
     await flush('t2');
-    expect(uploadTrace).toMatch(/^tr_/);
+    expect(uploadTrace).toMatch(/^trace_/);
     expect(flushTrace).toBe(uploadTrace); // 一个 burst 一个 trace, upload 与派发同源
   });
 
@@ -46,8 +46,8 @@ describe('thread-aggregator × burst trace', () => {
     await flush('t3');
     aggregateInbound('t3', { text: 'b', hasImage: false, onFlush: () => { second = getTraceId(); } });
     await flush('t3');
-    expect(first).toMatch(/^tr_/);
-    expect(second).toMatch(/^tr_/);
+    expect(first).toMatch(/^trace_/);
+    expect(second).toMatch(/^trace_/);
     expect(second).not.toBe(first);
   });
 
