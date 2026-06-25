@@ -45,6 +45,7 @@ import { makeFeishuInbound, feishuReplyContexts } from './feishu/inbound-handler
 import { sendFeishuMessage } from './feishu/client.js';
 import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
 import { loadPromptStore } from './lib/prompt-store.js';
+import { buildOAuthRouter as buildOAuthIntegrationRouter } from './integrations/oauth/routes.js';
 
 export interface CreateAppOptions {
   /**
@@ -173,6 +174,14 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       }
     };
     app.use(buildCallbackRouter({ containerAuth, wechatReplier, feishuReplier }));
+
+    // OAuth 集成路由 (connect/callback/token/connection), 统管所有 provider。containerAuth 复用上面的实例。
+    app.use(buildOAuthIntegrationRouter({
+      sessionMw,
+      containerAuth,
+      publicBaseUrl: config.auth.publicBaseUrl,
+      frontendBaseUrl: config.auth.frontendBaseUrl,
+    }));
 
     // P1 routes (entitlements + container-side + token refresh)
     app.use(buildEntitlementsRouter({

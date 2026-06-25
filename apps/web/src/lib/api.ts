@@ -26,6 +26,9 @@ import type {
   FeishuActivateResponse,
   FeishuBindingInfoResponse,
   FeishuUnbindResponse,
+  GithubConnectUrlResponse,
+  GithubConnectionResponse,
+  GithubDisconnectResponse,
 } from '@lingxi/shared';
 
 export class AuthError extends Error {
@@ -220,6 +223,16 @@ export const getMyFeishuBind = (): Promise<FeishuBindingInfoResponse> =>
 
 export const unbindFeishu = (): Promise<FeishuUnbindResponse> =>
   json('/api/feishu/bind/unbind', { method: 'POST' });
+
+// === GitHub 集成 ===
+export const getGithubConnection = (): Promise<GithubConnectionResponse> =>
+  json('/api/me/oauth/github/connection');
+
+export const getGithubConnectUrl = (): Promise<GithubConnectUrlResponse> =>
+  json('/api/me/oauth/github/connect-url');
+
+export const disconnectGithub = (): Promise<GithubDisconnectResponse> =>
+  json('/api/me/oauth/github/connection', { method: 'DELETE' });
 
 // === Cloud Drive (P4+P5) ===
 

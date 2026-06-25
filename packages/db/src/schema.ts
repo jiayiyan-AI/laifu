@@ -263,3 +263,33 @@ export const agentLoops = pgTable('agent_loops', {
   index('agent_loops_thread').on(t.thread_id, t.created_at),
   index('agent_loops_active').on(t.thread_id, t.created_at).where(sql`completed_at is null`),
 ]);
+
+// ── user_oauth_connections ──────────────────────────────────────────────
+// 用户授权灵犀代其操作第三方服务的 OAuth 连接 (GitHub / GitLab / Figma / Google …)。
+// 一张表统管所有 provider; 接新 provider = 加 providers/<id>.ts def + config 项, 不动表。
+//
+// - 每用户每 provider 最多 1 条 (UNIQUE user_id+provider); 代理键 id 留路: 将来要支持
+//   "同 provider 多账号"只需 DROP 该 unique, 不动主键。
+// - 一个外部账号只绑一个灵犀用户 (UNIQUE provider+external_account_id)。
+// - encrypted_access_token / encrypted_refresh_token 存 AES-256-GCM 密文 base64
+//   (key 走 Key Vault, 全 provider 共用一把), DB dump 泄露不直接等于 token 泄露。
+// - access_token_expires_at NULL = 不过期 (GitHub OAuth App); 有值且 provider 支持
+//   refresh 时, token-service 在过期前用 refresh_token 续。详见 docs/todo/github.md。
+export const userOauthConnections = pgTable('user_oauth_connections', {
+  id:                      uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  user_id:                 uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider:                text('provider').notNull(),                    // 'github' | 'gitlab' | 'figma' | ...
+  external_account_id:     text('external_account_id').notNull(),         // provider 内稳定账号 id (github numeric id 等转 text)
+  external_login:          text('external_login'),                        // 展示用 handle / email
+  encrypted_access_token:  text('encrypted_access_token').notNull(),      // secretbox 密文 base64
+  encrypted_refresh_token: text('encrypted_refresh_token'),               // 无 refresh 的 provider (GitHub) 留空
+  access_token_expires_at: timestamp('access_token_expires_at', { withTimezone: true }), // NULL = 不过期
+  token_scopes:            text('token_scopes').array().notNull().default(sql`'{}'`),     // 实际授到的 scopes
+  metadata:                jsonb('metadata'),                             // provider 专属字段 (installation_id / team_id / workspace …)
+  connected_at:            timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
+  last_used_at:            timestamp('last_used_at', { withTimezone: true }), // 每次颁 token 命中更新
+}, (t) => [
+  uniqueIndex('user_oauth_connections_user_provider_unique').on(t.user_id, t.provider),
+  uniqueIndex('user_oauth_connections_provider_account_unique').on(t.provider, t.external_account_id),
+  index('user_oauth_connections_user').on(t.user_id),
+]);

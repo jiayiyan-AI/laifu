@@ -253,6 +253,22 @@ export type FeishuBindingInfoResponse =
 
 export interface FeishuUnbindResponse { ok: true }
 
+// === GitHub 集成 (docs/todo/github.md) ===
+
+export interface GithubConnectUrlResponse { url: string; dev?: boolean }
+
+export type GithubConnectionResponse =
+  | { connected: false }
+  | {
+      connected: true;
+      login: string;
+      scopes: string[];
+      connected_at: string;
+      last_used_at: string | null;
+    };
+
+export interface GithubDisconnectResponse { disconnected: true }
+
 // === 渠道入站附件 (P1: 图片) ===
 
 /** 渠道入站附件在 hermes 容器内的引用 (临时缓存, 7 天 TTL)。微信/飞书等渠道共用。 */

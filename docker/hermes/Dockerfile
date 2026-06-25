@@ -54,6 +54,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && npm install -g pnpm@latest \
     && npm cache clean --force
 
+# ============ GitHub CLI (git/gh 凭证链路, docs/todo/github.md §三) ============
+# 装 gh CLI (官方 apt repo), 真 gh 改名 gh.real 给 wrapper 调。刻意放系统包区 (与下方
+# scripts/ server COPY 无关), 改脚本/改代码不触发重装 gh, 命中缓存。软链 + helper 配置
+# 依赖 scripts/ 已 COPY, 留在下面那段。
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+         > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update && apt-get install -y --no-install-recommends gh \
+ && mv /usr/bin/gh /usr/bin/gh.real \
+ && rm -rf /var/lib/apt/lists/*
+
 # ============ Bun (TypeScript runtime for our HTTP server + bootstrap scripts) ============
 # 装到 /usr/local/bin/bun, 世界可读, hermes 用户能直接调。
 # 选 Bun 而非继续 Node 的理由 (vs Phase 1):
@@ -184,6 +197,17 @@ COPY scripts/ /opt/lingxi-scripts/
 RUN chmod -R a+rX /opt/lingxi-scripts
 # 不切回 hermes — 后续 mkdir /opt/hermes-skills + pip install -e 都需要 root,
 # 最末尾 line ~130 才统一切回 hermes。
+
+# ============ git/gh 凭证链路: 软链 + 系统级 credential.helper (docs/todo/github.md §三) ============
+# git-credential.ts / gh-wrapper.ts 已随 scripts/ COPY 到 /opt/lingxi-scripts/, 这里挂软链 +
+# 系统级 credential.helper (写 /etc/gitconfig, 用户 home volume 覆盖不到 → 所有用户、所有
+# 从 sleep 拉起的容器, 第一次 git push 就走我们的链路, agent 完全无感)。
+RUN chmod +x /opt/lingxi-scripts/git-credential.ts /opt/lingxi-scripts/gh-wrapper.ts \
+ && ln -sf /opt/lingxi-scripts/git-credential.ts /usr/local/bin/lingxi-git-credential \
+ && ln -sf /opt/lingxi-scripts/gh-wrapper.ts /usr/local/bin/gh \
+ && git config --system credential.https://github.com.helper /usr/local/bin/lingxi-git-credential
+# 注: 不配 credential.useHttpPath true — 当前 helper 不按仓库区分 token,
+#     P3 切 GitHub App + 仓库级 scope 收窄时再加, 届时 helper 才用得上 path 字段。
 
 # ============ Hermes skills 占位目录 ============
 # P1 阶段为 cloud_file 留一个能软链的目标 (SKILL.md 占位)。

@@ -6,6 +6,7 @@ import { CAPABILITIES, MARKET_CAPABILITIES, isEquipped } from '../../lib/capabil
 import { CapabilityEquip, CapabilityRemove } from './CapabilityAction.js';
 import { useAssistantName, assistantAtom } from '../../states/assistant.atom.js';
 import { useIMCount } from '../../states/imBindings.atom.js';
+import { GithubPanel } from './GithubPanel.js';
 
 type Tab = 'equip' | 'market';
 
@@ -93,6 +94,8 @@ export const ManageApp = ({ onOpenIM }: { onOpenIM: () => void }) => {
             IM 绑定{imCount > 0 ? ` · ${imCount}` : ''}
           </button>
         </div>
+
+        <GithubPanel />
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
           <button
