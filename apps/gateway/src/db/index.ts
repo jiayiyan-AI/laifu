@@ -20,6 +20,7 @@ import { makeEmailDao, type EmailDao } from './email-dao.js';
 import { makeEntitlementsDao, type EntitlementsDao } from './entitlements-dao.js';
 import { makeUsageDao, type UsageDao } from './usage-dao.js';
 import { makeObservedStateDao, type ObservedStateDao } from './observed-state-dao.js';
+import { makeOauthConnectionsDao, type OauthConnectionsDao } from './oauth-connections-dao.js';
 import { ContainerMappingCache } from './cache.js';
 
 export interface Dao {
@@ -34,6 +35,7 @@ export interface Dao {
   entitlements: EntitlementsDao;
   usage: UsageDao;
   observedState: ObservedStateDao;
+  oauthConnections: OauthConnectionsDao;
   cache: ContainerMappingCache;
 }
 
@@ -49,6 +51,7 @@ const factories: Record<keyof Dao, () => unknown> = {
   entitlements: () => makeEntitlementsDao(getDb()),
   usage: () => makeUsageDao(getDb()),
   observedState: () => makeObservedStateDao(getDb()),
+  oauthConnections: () => makeOauthConnectionsDao(getDb()),
   cache: () => new ContainerMappingCache(getDb()),
 };
 
@@ -86,5 +89,5 @@ export { ContainerMappingCache };
 export type {
   UsersDao, ContainerMappingDao, MessageDao, ThreadsDao,
   AgentLoopDao, WechatBindingDao, FeishuBindingDao, EmailDao, EntitlementsDao,
-  UsageDao, ObservedStateDao,
+  UsageDao, ObservedStateDao, OauthConnectionsDao,
 };

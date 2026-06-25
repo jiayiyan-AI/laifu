@@ -414,6 +414,16 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     GOOGLE_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-id)'
     GOOGLE_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=google-client-secret)'
 
+    // OAuth 集成 (docs/todo/github.md): 授权灵犀代用户操作第三方服务。一张表统管所有 provider。
+    // 每个 provider 的 client 凭证各自一对。部署前手工灌 KV:
+    //   az keyvault secret set --vault-name ${kv.name} -n github-oauth-client-id      --value 'Iv1.xxxx'
+    //   az keyvault secret set --vault-name ${kv.name} -n github-oauth-client-secret  --value '<from GitHub>'
+    // 改 KV reference 后 App Service 不自动 re-resolve, 须重启 (known-issues #9)。
+    // 注: token 落库加密 key (OAUTH_TOKEN_ENCRYPTION_KEY) 暂在 config.ts 内置写死, 不走 KV
+    //     (用户决策 2026-06-25); 想通后改回 KV 时在此加回 reference。
+    GITHUB_OAUTH_CLIENT_ID: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=github-oauth-client-id)'
+    GITHUB_OAUTH_CLIENT_SECRET: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=github-oauth-client-secret)'
+
     // 飞书渠道为常驻能力, gateway boot 时总起 (无总开关)。app_id/secret 按绑定存 DB, 无全局 secret。
     // FEISHU_DOMAIN: API endpoint 域名前缀 ('feishu' 国内 / 'lark' 海外)。
     FEISHU_DOMAIN: 'feishu'

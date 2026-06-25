@@ -56,7 +56,7 @@ export const config = {
     // ⚠️ 镜像版本写死在代码里 (不走 env), 因为改 tag 本就必须连带部署 gateway 才能触发 reconcile
     //   (gateway 启动算 policyHashFor 才会拉齐存量用户)。写死 → 进 git 可 review/revert、零跨文件漂移。
     //   bump 镜像: 改这一行 hermes:vN (单调递增, 禁用 :latest) + 部署 gateway。详见 dynamic-update-aca.md §5.2。
-    hermesImageTag: 'hermes:v19',
+    hermesImageTag: 'hermes:v20',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
@@ -119,6 +119,44 @@ export const config = {
     // 附件专用 Blob 容器(与云盘 laifu-cloud 分开)
     attachmentContainer: process.env['EMAIL_ATTACHMENT_CONTAINER'] ?? 'email-attachments',
   },
+
+  // OAuth 集成: 授权灵犀代用户操作第三方服务 (GitHub / GitLab / Figma / Google …)。
+  // 一张表 (user_oauth_connections) + 一个路由 (oauth/:provider) 统管所有 provider。
+  // 接新 provider: providers 里加一项 + integrations/oauth/providers/<id>.ts 加 def + KV 灌 client secret。
+  // 与 auth.providers (站内登录身份) 是两回事, 别混 (docs/todo/github.md §一)。
+  oauth: {
+    // 全 provider 共用一把 token 落库加密 key: 32 字节 base64。AES-256-GCM (Node 内置 crypto)。
+    // TODO(暂行, 用户决策 2026-06-25): key 暂内置写死, 不进 Key Vault。env 仍可覆盖。
+    //   代价: 任何能读源码者 + DB dump = 解出全部用户 token (key 不再只在 KV)。
+    //   因当前尚未接真 OAuth 码流、仅本地/受控 dev 使用, 暂可接受。想通后改回 KV:
+    //   灌 oauth-token-encryption-key + 在 kv-secrets.ts/bicep 加回引用 + 删下面这个默认值。
+    tokenEncryptionKey:
+      process.env['OAUTH_TOKEN_ENCRYPTION_KEY'] ?? '6FFFfXjCq7cf/dUG3Ntkl4oPEvs04Al3LJ7mL6tZL/A=',
+    // 每 provider 的 OAuth App 凭证 (clientId 非 secret, clientSecret 走 KV)。
+    // scopes / endpoint 是 provider 固有属性, 放 providers/<id>.ts def, 不放这里。
+    providers: {
+      github: {
+        clientId: process.env['GITHUB_OAUTH_CLIENT_ID'] ?? '',
+        clientSecret: process.env['GITHUB_OAUTH_CLIENT_SECRET'] ?? '',
+        // 仅 provisioner==='local' 生效: 跳过真 OAuth flow, 用本地 gh token 短路绑定 (§六.11)。
+        // 其它 provider 无此短路 (依赖 `gh auth token`), 一律 null。
+        localDevToken: process.env['GITHUB_LOCAL_DEV_TOKEN'] ?? null,
+      },
+    } as Record<string, { clientId: string; clientSecret: string; localDevToken: string | null }>,
+  },
+};
+
+/**
+ * 某 OAuth provider 是否可走 connect 流程。
+ * - local: 该 provider 配了 localDevToken + 加密 key 即可 (短路, 不需 OAuth App 凭证)
+ * - 其它环境: clientId + clientSecret + 加密 key 三者齐
+ */
+export const oauthConnectEnabled = (provider: string): boolean => {
+  if (!config.oauth.tokenEncryptionKey) return false;
+  const p = config.oauth.providers[provider];
+  if (!p) return false;
+  if (config.provisioner === 'local' && p.localDevToken) return true;
+  return Boolean(p.clientId && p.clientSecret);
 };
 
 // 仅在实际启动 server 时校验，单元测试可跳过
@@ -160,4 +198,35 @@ export const validateConfig = () => {
   if (config.auth.gatewaySecret === 'dev-only-gateway-secret') {
     console.warn('[config] GATEWAY_SECRET is the dev default — set a real one for prod');
   }
+  // ── OAuth 集成校验 (docs/todo/github.md §六.3) ──
+  const oauth = config.oauth;
+  // 加密 key 若配了, 必须解码出 32 字节 (全 provider 共用)
+  if (oauth.tokenEncryptionKey) {
+    const keyLen = Buffer.from(oauth.tokenEncryptionKey, 'base64').length;
+    if (keyLen !== 32) {
+      throw new Error(
+        `OAUTH_TOKEN_ENCRYPTION_KEY must decode to 32 bytes (got ${keyLen}). Generate: openssl rand -base64 32`,
+      );
+    }
+  }
+  const enabledOauth: string[] = [];
+  for (const [id, p] of Object.entries(oauth.providers)) {
+    const U = id.toUpperCase();
+    // dev 短路绝不能进非 local 环境
+    if (config.provisioner !== 'local' && p.localDevToken) {
+      throw new Error(
+        `${U}_LOCAL_DEV_TOKEN set but PROVISIONER!=local — dev shortcut must never reach a cloud env. Unset it.`,
+      );
+    }
+    // OAuth App 凭证要么全配要么全空
+    if ([p.clientId, p.clientSecret].filter(Boolean).length === 1) {
+      throw new Error(`OAuth ${id}: set both ${U}_OAUTH_CLIENT_ID and ${U}_OAUTH_CLIENT_SECRET, or neither.`);
+    }
+    // 启用了集成 (有 OAuth 凭证或 dev token) 却没加密 key → token 无处加密
+    if ((p.clientId || p.localDevToken) && !oauth.tokenEncryptionKey) {
+      throw new Error(`OAuth ${id} enabled but OAUTH_TOKEN_ENCRYPTION_KEY missing.`);
+    }
+    if (oauthConnectEnabled(id)) enabledOauth.push(id);
+  }
+  console.log(`[config] OAuth integrations enabled: ${enabledOauth.length ? enabledOauth.join(',') : '(none)'}`);
 };

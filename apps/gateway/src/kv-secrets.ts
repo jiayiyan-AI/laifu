@@ -91,6 +91,18 @@ export const KV_SECRETS = {
     consumers: ['gateway.env.INBOUND_WEBHOOK_SECRET'],
     seed: { kind: 'generate', cmd: 'openssl rand -hex 32' },
   },
+  'github-oauth-client-id': {
+    description: 'GitHub OAuth App client ID (集成: 用户授权操作自己的仓库)',
+    source: 'GitHub → Settings → Developer settings → OAuth Apps',
+    consumers: ['gateway.env.GITHUB_OAUTH_CLIENT_ID'],
+    seed: { kind: 'prompt', hint: 'Iv1.xxxxxxxxxxxx' },
+  },
+  'github-oauth-client-secret': {
+    description: 'GitHub OAuth App client secret',
+    source: 'GitHub OAuth App → Generate a new client secret (只显示一次)',
+    consumers: ['gateway.env.GITHUB_OAUTH_CLIENT_SECRET'],
+    seed: { kind: 'prompt', hint: '<40-char hex>' },
+  },
 } as const satisfies Record<string, KvSecretSpec>;
 
 /** Compile-time union of all valid KV secret names. azure.ts/scripts 引用时拿这个做强类型。 */

@@ -89,6 +89,14 @@ export const createMockDao = () => ({
     loadAll: vi.fn(async () => {}),
     entries: vi.fn(() => []),
   },
+  oauthConnections: {
+    getByUserAndProvider: vi.fn(async () => null),
+    getByProviderAccount: vi.fn(async () => null),
+    upsertByUserAndProvider: vi.fn(async () => null),
+    updateTokens: vi.fn(async () => {}),
+    touchLastUsed: vi.fn(async () => {}),
+    deleteByUserAndProvider: vi.fn(async () => {}),
+  },
 });
 
 /** 返回一个可直接作为 vi.mock 工厂的对象 */

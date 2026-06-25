@@ -43,6 +43,13 @@
       "when": 1782209341499,
       "tag": "0005_dark_fantastic_four",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782391528632,
+      "tag": "0006_breezy_vargas",
+      "breakpoints": true
     }
   ]
 }
