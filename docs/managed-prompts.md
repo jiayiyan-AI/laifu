@@ -1,6 +1,6 @@
 # Managed system prompts — 实施现状
 
-> 状态: **代码已实施, 等部署实测**。 (2026-06-05)
+> 状态: **SOUL.md 托管已移除 — ~/.hermes/SOUL.md 完全交还用户; 本机制现仅管 system-prompt.md**。 (2026-07-01 更新; 原 2026-06-05 版见 git 历史)
 >
 > 本文档是当前架构的事实记录。早期 WIP 讨论稿已被本版取代——其中有若干技术细节是**未经源码验证的瞎猜**, 实施过程中被逐一推翻:
 >
@@ -30,7 +30,7 @@
 
 | 入口 | 路径/形式 | 注入位置 | session 内会变? | 适合什么 |
 |---|---|---|---|---|
-| **`~/.hermes/SOUL.md`** | 文件, 写死路径 | cached / stable, session 起始一次 | ❌ | 长期人格/灵魂层 |
+| **`~/.hermes/SOUL.md`** | 文件, 写死路径 | cached / stable, session 起始一次 | ❌ | 长期人格/灵魂层 (**我们不托管, 完全交还用户**) |
 | **`.hermes.md` / `HERMES.md`** | cwd → git root, first-match | cached / context | ❌ | 项目级 prompt; 我们 server/ cwd 是 `/home/hermes` |
 | **`AGENTS.md` / `CLAUDE.md` / `.cursorrules`** | 类似上面, first-match | cached / context | ❌ | 兼容其他 agent 生态 |
 | **`config.yaml: agent.system_prompt`** | yaml 字段 | ephemeral, 每 turn 拼到 cached 后面 | 启动时读 env, 启动后不变 | 业务规则层 |
@@ -86,11 +86,10 @@ if effective_system:
     Promise.allSettled 并行 GET 变化的文件 → ~/dynamic_prompts/<name>
     远端不再包含的 → 删 ~/dynamic_prompts/<name>
     更新 ~/dynamic_prompts/manifest.json
-    副作用: 下载到 SOUL.md → 镜像写 ~/.hermes/SOUL.md
             │
             ▼
 [hermes 行为]
-  启动时读 ~/.hermes/SOUL.md → cached prompt
+  启动时读 ~/.hermes/SOUL.md → cached prompt (该文件是用户自留区, 我们不写)
   /chat 时 server/hermes-proc.ts 读 ~/dynamic_prompts/system-prompt.md
         → 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT 给子进程
         → hermes 拼到 cached 后, byte-stable 时 cache 命中
@@ -100,9 +99,10 @@ if effective_system:
 
 ```
 apps/gateway/prompts/
-├── SOUL.md            ← 镜像到 ~/.hermes/SOUL.md, cached 层
 └── system-prompt.md   ← 留在 ~/dynamic_prompts/, 由 server/hermes-proc.ts 注入 env
 ```
+
+SOUL.md 已移除: `~/.hermes/SOUL.md` 完全交还用户, hermes 首启自 seed 默认 persona, 此后用户自由编辑。
 
 ### Manifest 协议
 
@@ -111,7 +111,6 @@ apps/gateway/prompts/
 {
   "version": 1,
   "files": {
-    "SOUL.md":          "a3f2c1d4...",  // sha256[:16]
     "system-prompt.md": "9e8b7a6c..."
   }
 }
@@ -122,8 +121,8 @@ apps/gateway/prompts/
 ### 删除规则
 
 - 远端 manifest 不含某文件 → 删 `~/dynamic_prompts/<name>`
-- **不删** `~/.hermes/SOUL.md`: hermes 自带默认 persona, 删了破坏默认行为; 一旦镜像就保留, 直到下次 SOUL.md 又出现在 manifest 再覆盖
-- system-prompt.md 不需要这种保留: `HERMES_EPHEMERAL_SYSTEM_PROMPT` 默认就是空, server/hermes-proc.ts 自动 unset 等于"回归默认"
+- `~/.hermes/SOUL.md` 不在本机制管辖内 (完全交还用户), 删规则不涉及它
+- system-prompt.md: `HERMES_EPHEMERAL_SYSTEM_PROMPT` 默认就是空, server/hermes-proc.ts 自动 unset 等于"回归默认"
 
 ---
 
@@ -131,16 +130,16 @@ apps/gateway/prompts/
 
 | 决策 | 结论 | 时间 |
 |---|---|---|
-| 主载体用 cached 类机制 | ✅ SOUL.md 走 cached; system-prompt.md 走 ephemeral 但同样 cache 友好 | 2026-06-04 |
+| 主载体用 cached 类机制 | ⚠️ 原 SOUL.md 走 cached, **已废除**; 现仅 system-prompt.md 走 ephemeral (cache 友好) | 2026-06-04 / 2026-07-01 废除 SOUL |
 | 不用 prefill_messages 做主方案 | ✅ 那是 few-shot 用的 | 2026-06-04 |
 | Prompt 内容存 git, 不存 DB | ✅ | 2026-06-04 |
 | Manifest push (inline env) vs Pull (HTTP) | ✅ Pull (作为整个 runtime-config pull 的一部分) | 2026-06-05 |
-| 多 .md 文件分层管理 | ⚠️ hermes 原生不支持 append-all; 当前接受单 SOUL.md + 单 system-prompt.md | 2026-06-05 修正 |
+| 多 .md 文件分层管理 | ⚠️ hermes 原生不支持 append-all; 现仅 system-prompt.md 一个托管文件 | 2026-06-05 / 2026-07-01 |
 | `LAIFU_USER_TOKEN` 鉴权 content endpoint | ✅ | 2026-06-04 |
 | 按用户分组差异化 | 推后 (架构 ready, post-MVP 实现) | 2026-06-04 |
 | Manifest 同步时机 | ✅ Pull 模型自然解决: 容器冷启动时 sync, "等用户下次冷启动"策略 | 2026-06-05 |
 | Prompt 文件存放位置 | ✅ `apps/gateway/prompts/`, vite plugin 复制到 `dist/prompts/` | 2026-06-05 |
-| 初版 prompt 文件结构 | ✅ `SOUL.md` + `system-prompt.md` 各一个文件 | 2026-06-05 |
+| SOUL.md 是否托管 | ❌ 移除, `~/.hermes/SOUL.md` 完全交还用户 (不镜像/不覆盖) | 2026-07-01 |
 | Hot-reload (改 .md 自动重算 sha) | ❌ 不做, 必须 redeploy gateway | 2026-06-05 |
 | system-prompt.md 注入方式 | ✅ server/hermes-proc.ts (Phase 1 server.mjs / Python 时同) 运行时读文件注入 env, 不写 config.yaml | 2026-06-05 |
 | Manifest 协议加 version 字段 | ✅ 留协议演进空间 | 2026-06-05 |
@@ -182,11 +181,11 @@ function manifestFor(userId: string): PromptsManifest {
 
 ## 六、已知坑
 
-### 6.1 `~/.hermes/SOUL.md` 不可逆接管
+### 6.1 SOUL.md 已交还用户 (原"不可逆接管"坑已消除)
 
-一旦运营把 SOUL.md 放进 gateway prompts/, 容器一次同步就**永久覆盖** hermes 默认的 SOUL.md。后续就算从 prompts/ 删了, 容器侧也**不会**自动恢复 hermes 原版 (我们的删除规则就是不动这个文件)。
+原方案把 gateway 的 SOUL.md 镜像覆盖 `~/.hermes/SOUL.md`, 会永久接管并抹掉用户在使用过程中对该文件的迭代编辑。**已移除**: 现在本机制完全不碰 `~/.hermes/SOUL.md` —— hermes 首启自 seed 默认 persona, 此后由用户/agent 自由编辑, 我们既不镜像也不删。
 
-要恢复默认: 进容器 `rm ~/.hermes/SOUL.md`, 重启 hermes (它发现文件没了会用默认 persona)。
+存量卷说明: 已被旧方案镜像过灵犀 persona 的卷, 该内容原样留在 `~/.hermes/SOUL.md`, 即刻起视为用户自留内容 (可自由编辑、不再被覆盖)。想回 hermes 默认: 进容器 `rm ~/.hermes/SOUL.md` 重启即可。
 
 ### 6.2 hermes 的 prompt cache 命中条件
 
@@ -207,7 +206,7 @@ function manifestFor(userId: string): PromptsManifest {
 | `apps/gateway/src/api/me-runtime-config.ts` | runtime-config 和 prompts/:name 两个端点 |
 | `apps/gateway/vite.config.ts` | `copyPromptsPlugin`: build 时 cpSync 到 dist |
 | `apps/gateway/prompts/` | 真实 prompt 文件存放处 |
-| `docker/hermes/scripts/sync-prompts.ts` | manifest diff + 并行下载 + SOUL.md 镜像 |
+| `docker/hermes/scripts/sync-prompts.ts` | manifest diff + 并行下载 (仅 system-prompt.md; 不再镜像 SOUL.md) |
 | `docker/hermes/scripts/bootstrap.ts` | 编排入口 |
 | `docker/hermes/server/hermes-proc.ts` `buildSubprocessEnv()` | 每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT |
 | `packages/shared/src/contracts.ts` `RuntimeConfig` / `PromptsManifest` | 协议类型 |
