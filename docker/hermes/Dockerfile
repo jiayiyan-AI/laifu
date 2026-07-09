@@ -99,7 +99,7 @@ RUN useradd -m -s /bin/bash hermes \
 # 把整个 /opt/hermes-agent (~1.5GB) 在新层复制一份, 镜像凭空多 ~500MB 压缩体积。
 # uv 创建的 venv 不自带 pip, 先 ensurepip 再 pip install。
 #
-# ★ HERMES_REF 双 pin: 同时锁 install.sh 脚本本身 (raw URL 用 SHA) +
+# ★ HERMES_REF 双 pin: 同时锁 install.sh 脚本本身 (api.github.com/contents?ref=SHA) +
 #   install.sh 内部 git clone 的 hermes-agent 仓库 (--commit 参数)。
 #   两边同一个 SHA → 脚本逻辑跟它装的代码完全自洽, 重复 build 完全可复现。
 #   不 pin 时拉 main, 镜像体积 / behavior 会跟着上游每次 commit 漂移
@@ -125,7 +125,7 @@ ARG HERMES_REF=95715dcb03003eab086eb0494083e6dc1c65f3b3
 RUN export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
     && export UV_PYTHON_BIN_DIR=/usr/local/bin \
     && export UV_NO_CONFIG=1 \
-    && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh" \
+    && curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh" \
     | bash -s -- --dir /opt/hermes-agent --hermes-home /tmp/install-home --commit "${HERMES_REF}" \
     && ln -sf /opt/hermes-agent/venv/bin/hermes /usr/local/bin/hermes \
     && /opt/hermes-agent/venv/bin/python -m ensurepip --upgrade \

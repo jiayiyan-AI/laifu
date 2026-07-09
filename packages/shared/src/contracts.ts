@@ -352,10 +352,11 @@ export interface RefreshTokenResponse {
  * files:   name → sha256[:16]
  *
  * 已知文件名:
- *   - SOUL.md         下载后镜像写到 ~/.hermes/SOUL.md (Hermes 默认读那个位置);
- *                     远端删除时不动 ~/.hermes/SOUL.md (避免破坏 hermes 默认行为)
- *   - system-prompt.md  目前只镜像到 ~/.hermes/system-prompt.md, 是否被 hermes
- *                       注入待进一步验证
+ *   - system-prompt.md  下载到 ~/dynamic_prompts/, 由 server/hermes-proc.ts 每次 chat
+ *                       注入 HERMES_EPHEMERAL_SYSTEM_PROMPT (系统级 prompt 唯一载体)
+ *
+ * 注: SOUL.md 不再由本机制管理 —— ~/.hermes/SOUL.md 完全交还用户, hermes 首启自 seed
+ *     默认 persona, 此后用户自由编辑, 我们不镜像/不覆盖。
  */
 export interface PromptsManifest {
   version: number;

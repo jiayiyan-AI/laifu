@@ -1,15 +1,14 @@
 // Prompt 文件同步: 跟远端 manifest diff, 并行下载变化的文件, 写 ~/dynamic_prompts/。
-// 副作用: 下载到的 SOUL.md 同时镜像写一份到 ~/.hermes/SOUL.md (hermes 默认读那里)。
 //
 // 落盘结构 (NFS volume, 持久化):
 //   ~/dynamic_prompts/manifest.json     ← 本地"上次已同步"快照, 用来 diff
 //   ~/dynamic_prompts/<name>            ← 下载下来的原始文件
-//   ~/.hermes/SOUL.md                   ← SOUL.md 的镜像 (hermes 默认读)
+//
+// 注: ~/.hermes/SOUL.md 完全交还用户, 本脚本不再镜像/覆盖它 (hermes 首启自 seed 默认 persona,
+//     此后由用户自由编辑)。系统级 prompt 只走 system-prompt.md → HERMES_EPHEMERAL_SYSTEM_PROMPT。
 //
 // 删除策略:
 //   - 远端 manifest 里没有的文件 → 删 ~/dynamic_prompts/<name>
-//   - 但 ~/.hermes/SOUL.md 永远不动 — 删了 hermes 默认 persona 行为可能异常,
-//     一旦镜像过去就保留, 直到下次 SOUL.md 又出现在 manifest 再覆盖。
 //
 // Manifest 协议:
 //   远端: { version: number, files: { name: sha } }
@@ -21,7 +20,6 @@ import { log, warn, readToken, httpJson, HOME_DIR } from './lib.ts';
 
 export const DYNAMIC_DIR = `${HOME_DIR}/dynamic_prompts`;
 export const LOCAL_MANIFEST = `${DYNAMIC_DIR}/manifest.json`;
-const HERMES_SOUL = `${HOME_DIR}/.hermes/SOUL.md`;
 
 /** 容器侧支持的最高协议版本。远端 version 高于此 → 跳过同步, 不破坏本地。 */
 const SUPPORTED_VERSION = 1;
@@ -60,17 +58,6 @@ async function downloadOne(gateway: string, token: string, name: string): Promis
     throw new Error(`HTTP ${status}: ${body.slice(0, 200)}`);
   }
   return body;
-}
-
-/**
- * 处理单文件下载副作用 — 主要是 SOUL.md 镜像到 ~/.hermes/SOUL.md。
- * 集中一处方便后续加更多 mirror。
- */
-function applyDownloadSideEffect(name: string, content: string): void {
-  if (name === 'SOUL.md') {
-    writeFileSync(HERMES_SOUL, content);
-    log(`mirrored SOUL.md → ~/.hermes/SOUL.md`);
-  }
 }
 
 /**
@@ -120,7 +107,6 @@ export async function syncPrompts(remoteManifest: RemoteManifest | null | undefi
     toDownload.map(async (name) => {
       const content = await downloadOne(GATEWAY, token, name);
       writeFileSync(`${DYNAMIC_DIR}/${name}`, content);
-      applyDownloadSideEffect(name, content);
       synced[name] = remoteFiles[name];
       log(`downloaded prompt: ${name}`);
     }),
@@ -135,7 +121,7 @@ export async function syncPrompts(remoteManifest: RemoteManifest | null | undefi
     }
   }
 
-  // 删除: 只动 ~/dynamic_prompts/, 不动 ~/.hermes/ 下的镜像
+  // 删除: 只动 ~/dynamic_prompts/ (~/.hermes/ 下无我们的镜像; SOUL.md 已交还用户)
   for (const name of toDelete) {
     const p = `${DYNAMIC_DIR}/${name}`;
     if (existsSync(p)) {
