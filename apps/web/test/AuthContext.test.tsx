@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { WithStore } from '../src/atom/index.js';
+import { WithStore } from '@lingxi/atom'
 import { authAtom } from '../src/states/auth.atom.js';
 
 const Probe = () => {

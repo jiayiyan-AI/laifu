@@ -1,0 +1,64 @@
+[package]
+name = "lingxi-desktop"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "来福桌面同步盘客户端（gateway 客户端 / SAS 缓存 / rclone bisync 编排 / Tauri 壳）"
+
+# 文档决策②：单一 Rust crate，不在 repo 根设 Cargo workspace，自成独立 crate。
+#
+# 依赖分两层：
+#   - 默认 feature：纯逻辑核心（contracts/gateway/sas/state/sync 逻辑），
+#     不依赖 tauri/keyring/notify 的系统集成，`cargo test` 快且稳定。
+#   - `app` feature：Tauri 壳 + keyring + notify 的系统集成实现。真正打包桌面 app 时启用，
+#     需完整 tauri 工具链（build.rs + tauri_build + 前端 dist + 各平台系统库）。
+#     该 feature 下的模块为完整实现，但依赖当前 headless 环境不具备的系统库，故默认不编译。
+
+[lib]
+name = "lingxi_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "Laifu"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "fs", "process", "sync"] }
+thiserror = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+# --- app feature：系统集成实现（默认不编译）---
+tauri = { version = "2", optional = true , features = ["tray-icon"] }
+keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service"] }
+notify = { version = "6", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+# 系统浏览器打开 OAuth 链接（Google 禁止内嵌 WebView 走 OAuth）+ deep link 收 `laifu://auth-callback`。
+tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-deep-link = { version = "2", optional = true }
+# 跨平台系统 home 目录解析（macOS `/Users/x` vs Windows `C:\Users\x`），本地数据统一收拢到 `~/.laifu/`。
+dirs = { version = "6", optional = true }
+
+[features]
+default = []
+# 启用完整 Tauri 桌面 app（需 build.rs + tauri_build + 前端 dist，见模块 app/mod.rs 注释）。
+app = [
+    "dep:tauri",
+    "dep:keyring",
+    "dep:notify",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-deep-link",
+    "dep:tauri-build",
+    "dep:dirs",
+]
+
+# tauri_build 只在 app feature 打包时需要。作 optional build-dep，默认不编译。
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dev-dependencies]
+mockito = "1"
+tempfile = "3"

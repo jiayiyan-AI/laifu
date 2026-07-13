@@ -1,0 +1,5 @@
+# Rust / Cargo 构建产物（决策②：独立 crate，构建产物就近忽略）。
+/target
+
+# Tauri 构建时自动生成的 ACL/schema（build 时重生成，不进 git）。
+/gen

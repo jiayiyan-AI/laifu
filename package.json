@@ -13,6 +13,12 @@
     "dev:hermes": "scripts/dev-hermes.sh",
     "dev:gateway": "cd apps/gateway && DOTENV_CONFIG_PATH=.env.local pnpm exec tsx -r dotenv/config src/entry.ts",
     "dev:web": "pnpm --filter @lingxi/web dev",
+    "dev:desktop": "pnpm --filter @lingxi/desktop dev",
+    "dev:desktop:canary": "pnpm --filter @lingxi/desktop dev:canary",
+    "dev:desktop:stable": "pnpm --filter @lingxi/desktop dev:stable",
+    "desktop:fetch-rclone": "node scripts/fetch-rclone.mjs",
+    "desktop:fetch-rclone:universal": "node scripts/fetch-rclone.mjs --universal-apple",
+    "desktop:version": "node scripts/desktop-version.mjs",
     "dev:check": "scripts/dev-check.sh"
   },
   "packageManager": "pnpm@11.5.2",

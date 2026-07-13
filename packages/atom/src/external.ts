@@ -9,15 +9,12 @@ const EMPTY = Symbol('empty');
  * @equal 函数可以用来比较新旧对象，如果返回 true，则使用旧对象，否则使用新对象
  */
 export function external(sub: (update: VoidFunction) => VoidFunction) {
-  return function <T>(
-    calc: () => T,
-    equal: ((prev: T, next: T) => boolean) = Object.is,
-  ) {
+  return function <T>(calc: () => T, equal: (prev: T, next: T) => boolean = Object.is) {
     const listeners = new Set<VoidFunction>();
     let value: T | typeof EMPTY = EMPTY;
     let cleanup = NOOP;
 
-    function get() {
+    function get(): T {
       return value === EMPTY ? (value = calc()) : value;
     }
 
@@ -26,7 +23,7 @@ export function external(sub: (update: VoidFunction) => VoidFunction) {
         const next = calc();
         if (equal(get(), next)) return;
         value = next;
-        listeners.forEach(l => l());
+        listeners.forEach((l) => l());
       });
       cleanup = () => {
         off();
@@ -48,5 +45,5 @@ export function external(sub: (update: VoidFunction) => VoidFunction) {
       return useSyncExternalStore(listen, get, get);
     }
     return { use };
-  }
+  };
 }

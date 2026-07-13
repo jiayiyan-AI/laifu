@@ -69,6 +69,27 @@ export function signLaifuUserToken(input: SignInput): string {
   return jwt.sign(payload, input.secret, { algorithm: ALGORITHM });
 }
 
+/**
+ * 同 `signLaifuUserToken`，额外把签发时算出的 `exp` 转成 ISO-8601 一并返回。
+ *
+ * 背景：`device-token.ts` / `auth-refresh.ts` 原先各自用本地常量重算一遍
+ * "now + 90d" 作为响应里的 `expires_at`——跟 JWT 内真正的 `exp` 是两份独立计算，
+ * 值碰巧相同全靠两处常量手动保持一致，一旦某处改动就会让响应字段撒谎。
+ * 这里直接从签发时的同一个 `exp` 派生，消除该重复。
+ */
+export function signLaifuUserTokenWithExpiry(input: SignInput): { token: string; expiresAt: string } {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + TOKEN_LIFETIME_SECONDS;
+  const payload: JwtPayload = {
+    user_id: input.userId,
+    token_version: input.tokenVersion,
+    iat: now,
+    exp,
+  };
+  const token = jwt.sign(payload, input.secret, { algorithm: ALGORITHM });
+  return { token, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
 export function verifyLaifuUserToken(token: string, input: VerifyInput): DecodedPayload {
   // Step 1: signature + structural verification with skew tolerance for grace.
   // `ignoreExpiration: true` skips JWT's built-in exp check; we do it ourselves below

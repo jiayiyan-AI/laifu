@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { WithStore } from '../src/atom/index.js';
+import { WithStore } from '@lingxi/atom'
 import * as api from '../src/lib/api.js';
 import { ManageApp } from '../src/apps/manage/ManageApp.js';
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { BuyCloudButton } from '../src/apps/manage/BuyCloudButton.js';
-import { WithStore } from '../src/atom/index.js';
+import { WithStore } from '@lingxi/atom'
 
 vi.mock('../src/lib/api.js', () => ({
   enableCloud: vi.fn(),

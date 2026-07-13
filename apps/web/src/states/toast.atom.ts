@@ -1,4 +1,4 @@
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 
 export type ToastKind = 'success' | 'error' | 'info';
 export interface ToastItem { id: string; msg: string; kind: ToastKind; }
