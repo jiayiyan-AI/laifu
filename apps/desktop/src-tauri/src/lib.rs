@@ -10,6 +10,7 @@
 //!   - [`auth::refresh`] JWT 续期判定（纯函数）
 //!   - [`sync::rclone_config`] rclone 配置生成
 //!   - [`sync::engine`] bisync 命令构造 + 退出码分类
+//!   - [`sync::location`] 同步目录空目录校验与同卷原子迁移
 //!   - [`sync::poller`] 远端快照 diff
 //!   - [`state`]     认证/同步状态机类型 + 触发去抖
 //!

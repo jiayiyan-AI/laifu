@@ -4,9 +4,11 @@
 //   logout() -> Result<(), String>
 //   is_authed() -> Result<bool, String>
 //   open_sync_window() -> Result<(), String>     // 唤出（或聚焦）原生同步盘窗口，经系统菜单「同步盘 → 打开同步盘」触发
-//   pick_sync_dir() -> Result<string | null, String>   // 原生目录选择对话框
-//   set_sync_dir(dir: String) -> Result<(), String>     // 落盘 + 热重启同步会话
-//   get_sync_dir() -> Result<string | null, String>     // 回读已配置目录
+//   pick_empty_sync_dir() -> Result<string | null, String>        // 选择严格空目录候选
+//   pick_sync_move_destination() -> Result<string | null, String> // 选择目录移动的目标上级目录
+//   configure_empty_sync_dir(dir) -> Result<(), String>            // 校验空目录后热切换
+//   relocate_sync_dir(destination_parent) -> Result<(), String>    // 同卷原子移动当前目录
+//   get_sync_dir() -> Result<string | null, String>                // 回读已配置目录
 //   get_sync_status() -> Result<String, String>
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -31,14 +33,24 @@ export function openSyncWindow(): Promise<void> {
   return invoke<void>('open_sync_window');
 }
 
-/** 弹原生目录选择对话框，返回所选目录绝对路径；取消返回 null。 */
-export function pickSyncDir(): Promise<string | null> {
-  return invoke<string | null>('pick_sync_dir');
+/** 选择一个将作为严格空同步目录的候选路径；取消返回 null。 */
+export function pickEmptySyncDir(): Promise<string | null> {
+  return invoke<string | null>('pick_empty_sync_dir');
 }
 
-/** 设置本地同步目录（Rust 落盘持久化 + 热重启同步会话）。 */
-export function setSyncDir(dir: string): Promise<void> {
-  return invoke<void>('set_sync_dir', { dir });
+/** 选择物理移动当前同步目录时的目标上级目录；取消返回 null。 */
+export function pickSyncMoveDestination(): Promise<string | null> {
+  return invoke<string | null>('pick_sync_move_destination');
+}
+
+/** 校验目录为空后，停止旧会话并以新路径重新建立同步基线。 */
+export function configureEmptySyncDir(dir: string): Promise<void> {
+  return invoke<void>('configure_empty_sync_dir', { dir });
+}
+
+/** 将当前同步目录原子移动到目标上级目录下；跨磁盘会被拒绝。 */
+export function relocateSyncDir(destinationParent: string): Promise<void> {
+  return invoke<void>('relocate_sync_dir', { destinationParent });
 }
 
 /** 回读当前已配置的同步目录（启动回显；未配置返回 null）。 */

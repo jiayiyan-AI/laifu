@@ -139,7 +139,10 @@ mod tests {
             sas_token: "sig=x".into(),
             expires_at: "2026-07-09T00:15:00Z".into(),
         };
-        assert_eq!(sas.rclone_sas_url(), "https://acct.blob.core.windows.net/c?sig=x");
+        assert_eq!(
+            sas.rclone_sas_url(),
+            "https://acct.blob.core.windows.net/c?sig=x"
+        );
     }
 
     #[test]

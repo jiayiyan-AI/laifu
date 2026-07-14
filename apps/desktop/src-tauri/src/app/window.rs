@@ -62,7 +62,14 @@ pub(super) fn apply_saved_geometry(win: &tauri::WebviewWindow, label: &str) {
         .available_monitors()
         .map(|ms| {
             ms.iter()
-                .map(|m| (m.position().x, m.position().y, m.size().width, m.size().height))
+                .map(|m| {
+                    (
+                        m.position().x,
+                        m.position().y,
+                        m.size().width,
+                        m.size().height,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();

@@ -36,9 +36,17 @@ export const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  function goToDesktop(): void {
+    if (isTauri()) {
+      // 同步盘登录窗依赖一次真实导航到 /desktop 让 native 层读取 session cookie。
+      window.location.replace('/desktop');
+      return;
+    }
+    nav('/desktop', { replace: true });
+  }
 
   if (state.status === 'authenticated') {
-    nav('/desktop', { replace: true });
+    goToDesktop();
     return null;
   }
 
@@ -58,7 +66,7 @@ export const LoginPage = () => {
         await api.register({ email, password });
       }
       await actions.refresh();
-      nav('/desktop', { replace: true });
+      goToDesktop();
     } catch (e) {
       console.error('[LoginPage] auth failed:', e);
       setError(authErrorMessage(e, mode));

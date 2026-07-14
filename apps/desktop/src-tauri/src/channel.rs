@@ -160,7 +160,10 @@ mod tests {
         assert_eq!(login_url_for(Channel::Dev), "http://localhost:3000/login");
         assert_eq!(scheme_for(Channel::Dev), "laifu-dev");
         assert_eq!(keychain_service_for(Channel::Dev), "com.lingxi.desktop.dev");
-        assert_eq!(data_dir_components_for(Channel::Dev), &[".laifu", "dev-data"]);
+        assert_eq!(
+            data_dir_components_for(Channel::Dev),
+            &[".laifu", "dev-data"]
+        );
     }
 
     #[test]
@@ -171,8 +174,14 @@ mod tests {
         assert_eq!(home_url_for(Channel::Canary), format!("{gw}/"));
         assert_eq!(login_url_for(Channel::Canary), format!("{gw}/login"));
         assert_eq!(scheme_for(Channel::Canary), "laifu-canary");
-        assert_eq!(keychain_service_for(Channel::Canary), "com.lingxi.desktop.canary");
-        assert_eq!(data_dir_components_for(Channel::Canary), &[".laifu", "canary-data"]);
+        assert_eq!(
+            keychain_service_for(Channel::Canary),
+            "com.lingxi.desktop.canary"
+        );
+        assert_eq!(
+            data_dir_components_for(Channel::Canary),
+            &[".laifu", "canary-data"]
+        );
     }
 
     #[test]

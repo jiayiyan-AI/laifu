@@ -91,4 +91,19 @@ describe('LoginPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Google/ }));
     expect(tauriCore.invoke).toHaveBeenCalledWith('open_oauth_in_browser', { provider: 'google' });
   });
+
+  it('Tauri 已登录时通过真实导航到 /desktop 通知同步盘原生层', async () => {
+    vi.mocked(tauriCore.isTauri).mockReturnValue(true);
+    vi.spyOn(api, 'me').mockResolvedValue({
+      user_id: 'u1', provider: 'password', external_id: 'a@b.com',
+      email: 'a@b.com', nickname: 'Qiang', avatar_url: null, email_domain: 'laifu.local',
+    });
+    const replaceSpy = vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+
+    render(wrap(<LoginPage />));
+
+    await waitFor(() => {
+      expect(replaceSpy).toHaveBeenCalledWith('/desktop');
+    });
+  });
 });

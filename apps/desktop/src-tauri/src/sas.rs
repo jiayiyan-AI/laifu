@@ -45,7 +45,11 @@ pub struct SasCache {
 }
 
 impl SasCache {
-    pub fn new(gateway: GatewayClient, jwt_provider: JwtProvider, cache_path: impl AsRef<Path>) -> Self {
+    pub fn new(
+        gateway: GatewayClient,
+        jwt_provider: JwtProvider,
+        cache_path: impl AsRef<Path>,
+    ) -> Self {
         Self {
             gateway,
             jwt_provider,
@@ -184,11 +188,19 @@ mod tests {
     async fn get_reuses_fresh_disk_cache_without_fetch() {
         let mut server = mockito::Server::new_async().await;
         // 不应打 gateway：磁盘缓存新鲜。
-        let m = server.mock("GET", "/api/cloud/sas").expect(0).create_async().await;
+        let m = server
+            .mock("GET", "/api/cloud/sas")
+            .expect(0)
+            .create_async()
+            .await;
 
         let tmp = tempfile::tempdir().unwrap();
         let cache_path = tmp.path().join("_cloud_sas.json");
-        std::fs::write(&cache_path, serde_json::to_vec(&sas_expiring_in(900)).unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&sas_expiring_in(900)).unwrap(),
+        )
+        .unwrap();
 
         let gateway = GatewayClient::new(server.url());
         let mut cache = SasCache::new(gateway, Box::new(|| "dev.jwt".into()), &cache_path);
@@ -212,7 +224,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache_path = tmp.path().join("_cloud_sas.json");
         // 写一个已过期的缓存
-        std::fs::write(&cache_path, serde_json::to_vec(&sas_expiring_in(10)).unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&sas_expiring_in(10)).unwrap(),
+        )
+        .unwrap();
 
         let gateway = GatewayClient::new(server.url());
         let mut cache = SasCache::new(gateway, Box::new(|| "dev.jwt".into()), &cache_path);
@@ -235,7 +251,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let gateway = GatewayClient::new(server.url());
-        let mut cache = SasCache::new(gateway, Box::new(|| "dev.jwt".into()), tmp.path().join("s.json"));
+        let mut cache = SasCache::new(
+            gateway,
+            Box::new(|| "dev.jwt".into()),
+            tmp.path().join("s.json"),
+        );
         cache.force_refresh().await.unwrap();
         cache.force_refresh().await.unwrap();
         m.assert_async().await;
@@ -253,8 +273,15 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let gateway = GatewayClient::new(server.url());
-        let mut cache = SasCache::new(gateway, Box::new(|| "expired.jwt".into()), tmp.path().join("s.json"));
+        let mut cache = SasCache::new(
+            gateway,
+            Box::new(|| "expired.jwt".into()),
+            tmp.path().join("s.json"),
+        );
         let err = cache.get().await.unwrap_err();
-        assert!(matches!(err, SasError::Gateway(GatewayError::Unauthorized(_))));
+        assert!(matches!(
+            err,
+            SasError::Gateway(GatewayError::Unauthorized(_))
+        ));
     }
 }

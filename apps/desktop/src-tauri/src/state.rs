@@ -103,7 +103,10 @@ mod tests {
     use super::*;
 
     fn tok(jwt: &str) -> TokenResponse {
-        TokenResponse { token: jwt.into(), expires_at: "2026-10-07T00:00:00Z".into() }
+        TokenResponse {
+            token: jwt.into(),
+            expires_at: "2026-10-07T00:00:00Z".into(),
+        }
     }
 
     #[test]

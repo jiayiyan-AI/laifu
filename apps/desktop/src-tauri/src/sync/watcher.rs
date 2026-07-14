@@ -54,8 +54,8 @@ pub fn watch(dir: &Path) -> Result<(impl Watcher, Receiver<()>)> {
                     break;
                 }
                 match raw_rx.recv_timeout(deadline - now) {
-                    Ok(()) => continue,          // 又一个事件，继续吸收（不延长窗口）
-                    Err(_) => break,             // 超时：窗口结束
+                    Ok(()) => continue, // 又一个事件，继续吸收（不延长窗口）
+                    Err(_) => break,    // 超时：窗口结束
                 }
             }
             if debounced_tx.send(()).is_err() {

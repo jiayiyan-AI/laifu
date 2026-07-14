@@ -52,7 +52,9 @@ mod tests {
     use super::*;
 
     fn t(iso: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(iso).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]

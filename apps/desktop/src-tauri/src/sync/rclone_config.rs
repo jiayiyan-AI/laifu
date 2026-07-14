@@ -38,7 +38,10 @@ pub const SYNC_SUBDIR: &str = "sync";
 /// SAS 签在 `<user_id>/`（目录 SAS 授权覆盖其所有子 blob），`sync/` 在其内，访问不越权。
 pub fn remote_path(sas: &CloudWriteSas) -> String {
     let user_prefix = sas.prefix.trim_end_matches('/');
-    format!("{}:{}/{}/{}", REMOTE_NAME, sas.container, user_prefix, SYNC_SUBDIR)
+    format!(
+        "{}:{}/{}/{}",
+        REMOTE_NAME, sas.container, user_prefix, SYNC_SUBDIR
+    )
 }
 
 #[cfg(test)]

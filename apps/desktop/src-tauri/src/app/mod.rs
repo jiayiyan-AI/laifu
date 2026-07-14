@@ -57,8 +57,10 @@ pub fn run() {
             auth_commands::is_authed,
             sync_commands::open_sync_window,
             auth_commands::open_oauth_in_browser,
-            sync_commands::pick_sync_dir,
-            sync_commands::set_sync_dir,
+            sync_commands::pick_empty_sync_dir,
+            sync_commands::pick_sync_move_destination,
+            sync_commands::configure_empty_sync_dir,
+            sync_commands::relocate_sync_dir,
             sync_commands::get_sync_dir,
             sync_commands::get_sync_status,
         ])
@@ -89,17 +91,22 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // 恢复上次选择的同步目录 → 广播到编排器，重启后自动续跑，无需用户重选。
-            //
-            // 用 `send_replace` 而非 `send`：此刻 `spawn_sync_orchestrator` 的 `subscribe()`
-            // 还没跑（它在下面异步 spawn 的 task 里，等 `restore_from_keychain().await` 完成后
-            // 才订阅），`sync_dir_tx` 订阅者数为 0。`send()` 在零订阅者时直接返回 `Err` 且**不
-            // 写入内部值**（tokio watch 文档原话），之前用 `send` + `let _ =` 吞掉这个错误，
-            // 导致恢复的目录从未真正写进 channel——`get_sync_dir` 永远读到 `None`，UI 显示
-            // "未选择"，即使 `~/.laifu/config.json` 里的值一直是对的。`send_replace` 无论有无
-            // 订阅者都无条件写值，才能保证后来才订阅的 orchestrator 能看到它。
-            if let Some(dir) = persist::load(config_dir()).sync_dir {
-                core_setup.sync_dir_tx.send_replace(Some(dir));
+            // 在启动同步前先恢复可能卡在 `rename` 与配置提交之间的目录移动。
+            // 模糊状态不猜测目录归属，直接进入 NeedsAttention 并禁止自动同步。
+            match persist::recover_pending_move(config_dir()) {
+                Ok(_) => {
+                    if let Some(dir) = persist::load(config_dir()).sync_dir {
+                        core_setup.sync_dir_tx.send_replace(Some(dir));
+                    }
+                }
+                Err(error) => {
+                    let core_recovery = core_setup.clone();
+                    tauri::async_runtime::spawn(async move {
+                        *core_recovery.sync.lock().await = crate::state::SyncState::NeedsAttention(
+                            format!("同步目录移动未完成：{error}"),
+                        );
+                    });
+                }
             }
 
             // 桌面「系统浏览器走 OAuth」回流：deep link 命中渠道专属 scheme
@@ -115,13 +122,19 @@ pub fn run() {
                         if url.scheme() != crate::channel::deep_link_scheme() {
                             continue;
                         }
-                        let Some(code) = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v.into_owned()) else {
+                        let Some(code) = url
+                            .query_pairs()
+                            .find(|(k, _)| k == "code")
+                            .map(|(_, v)| v.into_owned())
+                        else {
                             continue;
                         };
                         let app2 = app_dl.clone();
                         let core2 = core_dl.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = auth_commands::complete_desktop_oauth(&app2, &core2, &code).await {
+                            if let Err(e) =
+                                auth_commands::complete_desktop_oauth(&app2, &core2, &code).await
+                            {
                                 eprintln!("[deep-link] complete_desktop_oauth failed: {e}");
                                 let _ = app2.emit("login-failed", e);
                             }
@@ -137,7 +150,9 @@ pub fn run() {
                 app,
                 HOME_WINDOW,
                 tauri::WebviewUrl::External(
-                    auth_commands::home_url().parse().map_err(|e| format!("bad home url: {e}"))?,
+                    auth_commands::home_url()
+                        .parse()
+                        .map_err(|e| format!("bad home url: {e}"))?,
                 ),
             )
             .title(&home_title)
@@ -149,12 +164,18 @@ pub fn run() {
             // 系统托盘：home/sync 窗口关了也不退出 app（见 attach_hide_on_close），
             // 托盘是重新唤出窗口 / 真正退出的入口。左键点图标唤出 home；菜单「退出」
             // 才是唯一真退出路径（置位 quitting 后 app.exit(0)，见下方 run 回调）。
-            let show_item = tauri::menu::MenuItem::with_id(app, "tray-show", "显示来福", true, None::<&str>)?;
-            let quit_item = tauri::menu::MenuItem::with_id(app, "tray-quit", "退出", true, None::<&str>)?;
+            let show_item =
+                tauri::menu::MenuItem::with_id(app, "tray-show", "显示来福", true, None::<&str>)?;
+            let quit_item =
+                tauri::menu::MenuItem::with_id(app, "tray-quit", "退出", true, None::<&str>)?;
             let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
             let quitting_menu = quitting_tray.clone();
             tauri::tray::TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().expect("bundle.icon 未配置"))
+                .icon(
+                    app.default_window_icon()
+                        .cloned()
+                        .expect("bundle.icon 未配置"),
+                )
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .tooltip(format!("来福{}", crate::channel::display_suffix()))

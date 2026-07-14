@@ -79,7 +79,12 @@ mod tests {
     use super::*;
 
     fn geo(w: u32, h: u32, x: i32, y: i32) -> WindowGeometry {
-        WindowGeometry { width: w, height: h, x, y }
+        WindowGeometry {
+            width: w,
+            height: h,
+            x,
+            y,
+        }
     }
 
     #[test]

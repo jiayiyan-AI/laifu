@@ -1,8 +1,8 @@
 # 用户数据同步盘（Tauri 客户端 + gateway，双向）
 
-> Status: **同步引擎 + 前端产品化外壳 + home/sync 三窗口拆分 + 桌面 Google OAuth（系统浏览器 + deep link）+ 系统托盘/后台常驻 + dev/canary/stable 三渠道已完成并本地编译验证通过；macOS stable/canary universal `.dmg` 已本地构建并验证免费 ad-hoc 签名；`desktop-<semver>` tag 触发的四包 GitHub Release 工作流已实现、待首次 GitHub runner 验证；无摩擦的公开分发/单实例/P2 数据语义加固待做**
+> Status: **同步引擎 + 前端产品化外壳 + 安全同步目录切换/同卷迁移 + home/sync 三窗口拆分 + 桌面 Google OAuth（系统浏览器 + deep link）+ 系统托盘/后台常驻 + dev/canary/stable 三渠道已完成并本地编译验证通过；macOS stable/canary universal `.dmg` 已本地构建并验证免费 ad-hoc 签名；`desktop-<semver>` tag 触发的四包 GitHub Release 工作流已实现、待首次 GitHub runner 验证；无摩擦的公开分发/单实例/P2 数据语义加固待做**
 > 技术栈：Tauri（Rust + React）+ rclone `bisync` + gateway + Azure Blob User Delegation SAS。
-> 最后更新：2026-07-14（本轮新增：`scripts/fetch-rclone.mjs` 固定下载 rclone `v1.74.4`，可按 target 获取 macOS/Windows sidecar，且在 macOS 用 `lipo` 合成 universal rclone；实际构建 stable/canary universal `.dmg`，挂载 DMG 后验证两者主程序+rclone 均含 `x86_64`/`arm64`，ad-hoc 签名完整，canary 的 identifier/scheme 为 `com.lingxi.desktop.canary`/`laifu-canary`。新增 `scripts/desktop-version.mjs`，统一 set/check package/Cargo/Tauri 三份版本；新增 `.github/workflows/desktop-release.yml`：`desktop-<semver>` tag 先校验版本并并行构建 macOS universal stable/canary + Windows x64 NSIS stable/canary，只有四份 Actions artifact 全成功时才由单一 publish job 创建/更新 GitHub Release。前端 tsc、Rust app feature 74 tests、脚本语法、版本失配阻断均已本地验证；尚未在真实 GitHub runner 或 Windows VM 跑通）。
+> 最后更新：2026-07-14（本轮新增：同步目录不再允许任意替换；只允许改用严格空目录，或用同卷原子 `rename` 移动整个目录。目录操作串行化，先经有确认的控制通道强制完成一轮**非 resync** 同步，再等待在途 rclone 结束；初始基线尚未建立时拒绝修改目录。`config.json` 以 `pending_move` 日志覆盖 rename 与配置提交之间的崩溃窗；启动时自动恢复无歧义状态，歧义状态进入 NeedsAttention。设置页新增强风险确认框。新增 Rust 目录/日志/控制通道单测；Rust app feature 85 tests、desktop tsc、Rust clippy 通过。真实 rclone 目录迁移尚待真机验证）。
 
 ---
 
@@ -224,9 +224,9 @@ OS Keychain 中的设备 JWT（`com.lingxi.desktop` service）不受影响——
 
 ### 5.8 `sync` 壳自定义命令缺 ACL 声明（2026-07-13）
 
-`open_login`/`logout`/`is_authed`/`open_sync_window`/`pick_sync_dir`/`set_sync_dir`/`get_sync_dir`/`get_sync_status` 这 8 个自定义命令从未声明过 `permissions/*.toml`——真机点击登录直接报 `"open_login not allowed. Command not found"`。根因与 §9.8 踩过的 `open_oauth_in_browser` 坑同源：Tauri v2 对自定义 command 从不自动放行（`core:default` 只覆盖内置 core 命令），必须显式建 permission 文件 + 在 capability 里引用。
+2026-07-13 当时的 8 个命令（含旧 `pick_sync_dir`/`set_sync_dir`）从未声明过 `permissions/*.toml`，真机点击登录直接报 `"open_login not allowed. Command not found"`。根因与 §9.8 踩过的 `open_oauth_in_browser` 坑同源：Tauri v2 对自定义 command 从不自动放行（`core:default` 只覆盖内置 core 命令），必须显式建 permission 文件 + 在 capability 里引用。
 
-修复：新增 `permissions/app-commands.toml`（`allow-app-commands`，`commands.allow` 覆盖上述 8 个命令），`capabilities/default.json`（覆盖 `home`/`sync`/`login` 三窗口）新增引用。`cargo build` 后 `gen/schemas/acl-manifests.json` 的 `__app-acl__` 下可见该权限项。`pnpm dev:desktop` 每次启动会重新编译 + 重生成 manifest，无需额外操作，重启即生效。
+修复时新增 `permissions/app-commands.toml`（`allow-app-commands`）并在 `capabilities/default.json`（覆盖 `home`/`sync`/`login` 三窗口）引用。2026-07-14 的安全目录改造已把 ACL 清单同步替换为 §5.11 的四个受限目录命令；旧命令已删除。`cargo build` 后 `gen/schemas/acl-manifests.json` 的 `__app-acl__` 下可见该权限项。
 
 真机验证：修复后用户实测 `home` 窗口与 `sync` 壳均登录成功，且 `sync` 壳登录时未见到登录表单（一闪而过）——间接证实了 §9.7 标记 `[INFERENCE]` 的"跨 `WebviewWindow` 共享 cookie jar → 免二次登录"确实成立（前提：先在 `home` 完成登录）。
 
@@ -253,9 +253,21 @@ OS Keychain 中的设备 JWT（`com.lingxi.desktop` service）不受影响——
 
 **根因**：`app/core.rs` `AppCore::new()` 建 channel 时只留 `Sender`（`watch::channel(None).0`），配对 `Receiver` 立即丢弃；真正的订阅者 `spawn_sync_orchestrator`（`app/tasks.rs` 的 `sync_dir_tx.subscribe()`）是在 `setup()` 之后才异步 spawn、且还要等 `restore_from_keychain().await` 完才跑到订阅那行。而 `app/mod.rs` `setup()` 里恢复持久化目录用的是 `sync_dir_tx.send(Some(dir))`——tokio 文档原话："This method fails if the channel is closed... when send fails, the value isn't made available for future receivers"，具体到源码 `Sender::send()`：`receiver_count() == 0` 时直接 `return Err(...)`，**跳过 `send_replace`，压根不写内部值**。原实现 `let _ = ...send(...)` 把这个 `Err` 吞掉，于是恢复的目录从未真正进入 channel，`sync_dir_tx.borrow()`（`get_sync_dir` 读的就是它）永远是初始值 `None`。`sync_commands::set_sync_dir` 命令原先也用同一个有 hazard 的 `send()`——虽然运行时该命令触发时编排器早已订阅（不复现），但语义上同样脆弱，一并改掉。
 
-**修复**：`mod.rs` 恢复逻辑 + `sync_commands::set_sync_dir` 都改用 `Sender::send_replace()`——无条件写值、不检查订阅者数，保证不论调用时机，值都能被之后才订阅的 receiver 看到。
+**修复**：启动恢复逻辑与当时的旧 `set_sync_dir` 都改为 `Sender::send_replace()`——无条件写值、不检查订阅者数，保证后来才订阅的编排器可见。旧 `set_sync_dir` 已在 §5.11 删除；新的目录操作在提交配置后仍使用相同的 `send_replace` 语义。
 
 **教训**：`watch::Sender::send()` 不是"广播型 setter"，是"通知型 setter"——没人听就不存。任何"启动时预先灌入初始值，消费者稍后才订阅"的场景一律用 `send_replace`/`send_modify`/`send_if_modified`，`send()` 只适合"消费者一定已经在等"的运行期更新。
+
+### 5.11 同步目录只能改用空目录或同卷移动（2026-07-14）
+
+此前 Settings 页的 `set_sync_dir(dir)` 可把任何目录直接落盘并通过 `watch` 热切换；非空目录会与远端 `--resync` 数据混合，且旧 rclone 运行尚未结束时便可能触发新会话，存在覆盖或混乱风险。现已删除该通用命令，并将前端 ACL 收紧为：`pick_empty_sync_dir` / `configure_empty_sync_dir` 和 `pick_sync_move_destination` / `relocate_sync_dir`。
+
+- **改用空目录**：Rust 会对候选目录 `canonicalize`，拒绝非目录、包含任意项目（含 `.DS_Store`）、与当前目录相同或父子嵌套；在真正提交前再次校验，防止用户确认期间目录被写入。旧目录不移动、不删除，但停止同步；新会话以 `--resync` 从远端重建基线。
+- **移动到新位置**：用户选择目标**上级目录**，新根固定为 `<目标上级>/<旧目录名>`，且目标不得存在；只调用一次 `std::fs::rename`，因此只支持同一磁盘/卷。跨卷或权限错误不会退化为递归复制，旧目录和配置保持原样。旧同步根若是符号链接会直接拒绝，避免把链接指向的真实目录移走、留下悬空链接。
+- **同步收敛与互斥**：目录操作先通过 `SyncControl::Flush` 请求编排器完成一轮**正常** bisync；结果不是 Success 则操作失败，绝不带着未收敛的本地改动进入路径变更。若当前会话还在 `--resync` 建立初始基线，也拒绝操作而非拿 resync 结果当最终同步。之后 `AppCore` 的 operation `Mutex` 串行请求，公平 `RwLock` 等待在途 rclone 结束并阻止旧路径再启动；`tasks.rs` 在取得读锁前后检查 `watch` 版本。
+- **崩溃恢复**：移动前把 `{ from, to }` 写入 `config.json.pending_move`；rename 后再提交 `sync_dir`。启动恢复中，只有“旧在新不在”或“旧不在新在”两种状态会自动收敛；两个路径同存或同失时保留日志并进 `NeedsAttention`，绝不猜测。
+- **UX**：配置后显示「改用空目录」与「移动到新位置」两项，选择后必须在包含旧/新路径和后果的 AlertDialog 中勾选确认才可提交；跨卷移动的限制与中断后不应手动删除目录的提示均显式展示。
+
+验证：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features app` 85/85 通过；`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features app --all-targets -- -D warnings` 通过；`pnpm --filter @lingxi/desktop lint` 通过。仍须真机覆盖：同步进行时操作、空目录下载、同卷移动后的双向同步、跨卷拒绝、以及 rename 后配置提交前中断的启动恢复。
 
 ---
 
@@ -349,7 +361,7 @@ apps/desktop/
 | 项 | 状态 | 说明 |
 |---|---:|---|
 | 真实登录 webview | ✅ | 见 §9.4 |
-| 原生目录选择 | ✅ | `pick_sync_dir` + Settings 页 |
+| 原生目录选择 / 安全目录切换 | ✅（编译+单测）/ ⬜（未真机） | 严格空目录改用 + 同卷原子移动 + 崩溃日志，见 §5.11 / §9.5 |
 | home/sync 三窗口拆分 | ✅（编译）/ ⬜（部分真机） | 见 §9.7；启动展示已验证，`sync` 唤出/免二次登录待验证 |
 | 桌面 Google OAuth（系统浏览器 + deep link） | ✅ | 见 §9.8，真机验证通过 |
 | 系统托盘 / 后台常驻 | ✅（编译+单测）/ ⬜（未真机验证） | 见 §9.9；`home`/`sync` 关窗隐藏、托盘显示/退出、Dock 重新激活；单实例仍缺（见下一行「插件接线」） |
@@ -432,16 +444,19 @@ graph TD
 命令契约（`app/auth_commands.rs` + `app/sync_commands.rs` + `lib/ipc.ts`）：
 
 ```text
-- exchange_device_token(session_cookie) -> String     // 已删（httpOnly 下不可行）
-+ open_login() -> ()                                   // 建登录 webview；成功后 emit "authed"
-+ open_sync_window() -> ()                             // 唤出/聚焦 sync 窗口（系统菜单「同步盘」入口）
-+ pick_sync_dir() -> Option<String>                    // 原生目录对话框（tauri-plugin-dialog）
-  logout() / is_authed() / set_sync_dir() / get_sync_status()   // 保留
+- exchange_device_token(session_cookie) -> String       // 已删（httpOnly 下不可行）
++ open_login() -> ()                                     // 建登录 webview；成功后 emit "authed"
++ open_sync_window() -> ()                               // 唤出/聚焦 sync 窗口（系统菜单「同步盘」入口）
++ pick_empty_sync_dir() -> Option<String>                // 选择空目录候选
++ configure_empty_sync_dir(dir) -> ()                    // Rust 严格校验后切换
++ pick_sync_move_destination() -> Option<String>         // 选择移动目标上级目录
++ relocate_sync_dir(destination_parent) -> ()            // 同卷原子移动
+  logout() / is_authed() / get_sync_dir() / get_sync_status() // 保留
 ```
 
-### 9.5 原生目录选择
+### 9.5 原生目录选择与安全切换
 
-`pick_sync_dir`（`app/sync_commands.rs`）用 `tauri-plugin-dialog` 的 `blocking_pick_folder()`（放 blocking 线程避免卡 UI），返回所选目录绝对路径；Settings 页选定即 `set_sync_dir` 启 watcher+poller，替换手打路径。
+目录选择仍用 `tauri-plugin-dialog` 的 `blocking_pick_folder()`（放 blocking 线程避免卡 UI），但 IPC 不再暴露通用 setter。首次配置或「改用空目录」只允许候选目录为空；已有同步目录还可选择上级目录并走 `relocate_sync_dir`，由 Rust 写迁移日志、同卷 `rename`、再重新建立 `bisync` 基线。Settings 页在执行前显示不可轻视的 AlertDialog，必须勾选风险确认；详细不变量见 §5.11。
 
 ### 9.6 开放项 / 待真机验证
 

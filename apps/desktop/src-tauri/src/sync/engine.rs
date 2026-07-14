@@ -84,10 +84,16 @@ pub fn classify(exit_code: i32, stderr: &str) -> BisyncOutcome {
         return BisyncOutcome::Success;
     }
     let lower = stderr.to_ascii_lowercase();
-    if lower.contains("403") || lower.contains("authenticationfailed") || lower.contains("authorizationfailure") {
+    if lower.contains("403")
+        || lower.contains("authenticationfailed")
+        || lower.contains("authorizationfailure")
+    {
         return BisyncOutcome::SasExpired;
     }
-    if lower.contains("--resync") || lower.contains("run resync") || lower.contains("cannot find prior") {
+    if lower.contains("--resync")
+        || lower.contains("run resync")
+        || lower.contains("cannot find prior")
+    {
         return BisyncOutcome::NeedsResync;
     }
     BisyncOutcome::Failed(exit_code)
@@ -99,7 +105,10 @@ pub fn classify(exit_code: i32, stderr: &str) -> BisyncOutcome {
 /// 用 [`classify`] 分类退出码。命令构造与分类均已单测覆盖；此函数是它们的 IO 外壳。
 /// 需 rclone 二进制就位才能真跑；不就位时返回启动错误。
 #[cfg(feature = "app")]
-pub async fn run_bisync(rclone_bin: &std::path::Path, plan: &BisyncPlan) -> std::io::Result<BisyncOutcome> {
+pub async fn run_bisync(
+    rclone_bin: &std::path::Path,
+    plan: &BisyncPlan,
+) -> std::io::Result<BisyncOutcome> {
     let output = tokio::process::Command::new(rclone_bin)
         .args(plan.to_args())
         .output()
@@ -164,7 +173,18 @@ mod tests {
         assert_eq!(args[0], "bisync");
         assert_eq!(args[1], "laifu:laifu-cloud/u123/sync");
         assert_eq!(args[2], "/home/me/laifu");
-        for flag in ["--resilient", "--recover", "--conflict-resolve", "newer", "--max-lock", "2m", "--compare", "size,modtime", "--max-delete", "50"] {
+        for flag in [
+            "--resilient",
+            "--recover",
+            "--conflict-resolve",
+            "newer",
+            "--max-lock",
+            "2m",
+            "--compare",
+            "size,modtime",
+            "--max-delete",
+            "50",
+        ] {
             assert!(args.iter().any(|a| a == flag), "missing flag {flag}");
         }
         assert!(!args.contains(&"--resync".to_string()));
@@ -183,8 +203,15 @@ mod tests {
 
     #[test]
     fn uses_remote_name_constant() {
-        let plan = BisyncPlan::new(&sample_sas(), &PathBuf::from("/l"), &PathBuf::from("/c"), false);
-        assert!(plan.remote.starts_with(&format!("{}:", super::super::rclone_config::REMOTE_NAME)));
+        let plan = BisyncPlan::new(
+            &sample_sas(),
+            &PathBuf::from("/l"),
+            &PathBuf::from("/c"),
+            false,
+        );
+        assert!(plan
+            .remote
+            .starts_with(&format!("{}:", super::super::rclone_config::REMOTE_NAME)));
     }
 
     #[test]
@@ -195,7 +222,10 @@ mod tests {
     #[test]
     fn classify_403_as_sas_expired() {
         assert_eq!(
-            classify(1, "ERROR: AuthenticationFailed 403 Server failed to authenticate"),
+            classify(
+                1,
+                "ERROR: AuthenticationFailed 403 Server failed to authenticate"
+            ),
             BisyncOutcome::SasExpired
         );
     }
@@ -203,7 +233,10 @@ mod tests {
     #[test]
     fn classify_resync_hint() {
         assert_eq!(
-            classify(2, "Bisync critical error: cannot find prior listing, run resync"),
+            classify(
+                2,
+                "Bisync critical error: cannot find prior listing, run resync"
+            ),
             BisyncOutcome::NeedsResync
         );
     }
@@ -223,7 +256,12 @@ mod tests {
     }
 
     fn sample_plan() -> BisyncPlan {
-        BisyncPlan::new(&sample_sas(), &PathBuf::from("/l"), &PathBuf::from("/c"), false)
+        BisyncPlan::new(
+            &sample_sas(),
+            &PathBuf::from("/l"),
+            &PathBuf::from("/c"),
+            false,
+        )
     }
 
     // run_sync_once 用一个共享计数器记录 runner/refresh 调用次数，验证重试语义。
@@ -235,8 +273,14 @@ mod tests {
         let refreshes = Cell::new(0);
         let out = run_sync_once::<(), _, _, _, _>(
             &sample_plan(),
-            |_plan| { runs.set(runs.get() + 1); async { Ok(BisyncOutcome::Success) } },
-            || { refreshes.set(refreshes.get() + 1); async { Ok(()) } },
+            |_plan| {
+                runs.set(runs.get() + 1);
+                async { Ok(BisyncOutcome::Success) }
+            },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
         )
         .await
         .unwrap();
@@ -256,10 +300,17 @@ mod tests {
                 let n = runs.get();
                 async move {
                     // 首跑 403，刷新后二跑成功。
-                    Ok(if n == 1 { BisyncOutcome::SasExpired } else { BisyncOutcome::Success })
+                    Ok(if n == 1 {
+                        BisyncOutcome::SasExpired
+                    } else {
+                        BisyncOutcome::Success
+                    })
                 }
             },
-            || { refreshes.set(refreshes.get() + 1); async { Ok(()) } },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
         )
         .await
         .unwrap();
@@ -274,8 +325,14 @@ mod tests {
         let refreshes = Cell::new(0);
         let out = run_sync_once::<(), _, _, _, _>(
             &sample_plan(),
-            |_plan| { runs.set(runs.get() + 1); async { Ok(BisyncOutcome::SasExpired) } },
-            || { refreshes.set(refreshes.get() + 1); async { Ok(()) } },
+            |_plan| {
+                runs.set(runs.get() + 1);
+                async { Ok(BisyncOutcome::SasExpired) }
+            },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
         )
         .await
         .unwrap();
@@ -302,7 +359,10 @@ mod tests {
         let out = run_sync_once::<&str, _, _, _, _>(
             &sample_plan(),
             |_plan| async { Err("run failed") },
-            || { refreshes.set(refreshes.get() + 1); async { Ok(()) } },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
         )
         .await;
         assert_eq!(out, Err("run failed"));

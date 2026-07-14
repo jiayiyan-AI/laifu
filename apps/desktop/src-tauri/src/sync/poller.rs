@@ -94,7 +94,10 @@ mod tests {
     }
 
     fn snap(files: Vec<CloudFileItem>) -> Snapshot {
-        Snapshot::from_list(&CloudListResponse { folders: vec![], files })
+        Snapshot::from_list(&CloudListResponse {
+            folders: vec![],
+            files,
+        })
     }
 
     #[test]

@@ -4,20 +4,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::auth::keychain;
+use crate::auth::keychain::StoredCredential;
 use crate::auth::refresh::{self, RefreshDecision};
 use crate::contracts::CloudWriteSas;
 use crate::gateway::GatewayError;
 use crate::sas::SasCache;
 use crate::state::{AuthState, SyncState, TriggerGate};
 use crate::sync::engine::{self, BisyncOutcome, BisyncPlan};
-use crate::sync::{poller, rclone_config};
-use crate::auth::keychain::StoredCredential;
 use crate::sync::watcher;
+use crate::sync::{poller, rclone_config};
 
-use super::core::{config_dir, AppCore};
+use super::core::{config_dir, AppCore, SyncControl};
 
 /// JWT 续期守护（文档 §11.4）：每 24h 检查一次，进入续期窗口则调 refresh-token。
 /// 续期 401（token_version 被 bump/超宽限）→ 清凭据回 Unauthed。
@@ -63,6 +63,10 @@ pub(super) async fn spawn_refresh_guard(core: Arc<AppCore>) {
 /// 再以新目录重起会话——无需重启整个 App。
 pub(super) async fn spawn_sync_orchestrator(core: Arc<AppCore>) {
     let mut dir_rx = core.sync_dir_tx.subscribe();
+    let Some(mut control_rx) = core.take_sync_control_receiver().await else {
+        eprintln!("[sync] control receiver already taken");
+        return;
+    };
 
     // 会话无关的公共资源：工作目录 + SAS 缓存，跨目录切换复用（SAS 只与账号绑定）。
     // 与 config.json 共用 `~/.laifu/`，本地数据统一收拢一处。
@@ -76,7 +80,13 @@ pub(super) async fn spawn_sync_orchestrator(core: Arc<AppCore>) {
     // 故捕获 Arc 克隆、async 块内 lock。jwt_provider 每次从 keychain 取最新 JWT（续期守护滚动更新）。
     let sas_cache = Arc::new(Mutex::new(SasCache::new(
         core.gateway.clone(),
-        Box::new(|| keychain::load().ok().flatten().map(|c| c.jwt).unwrap_or_default()),
+        Box::new(|| {
+            keychain::load()
+                .ok()
+                .flatten()
+                .map(|c| c.jwt)
+                .unwrap_or_default()
+        }),
         &cache_path,
     )));
 
@@ -103,6 +113,7 @@ pub(super) async fn spawn_sync_orchestrator(core: Arc<AppCore>) {
             &rclone_bin,
             sas_cache.clone(),
             &mut dir_rx,
+            &mut control_rx,
         )
         .await;
     }
@@ -117,6 +128,7 @@ async fn run_sync_session(
     rclone_bin: &Path,
     sas_cache: Arc<Mutex<SasCache>>,
     dir_rx: &mut watch::Receiver<Option<String>>,
+    control_rx: &mut mpsc::Receiver<SyncControl>,
 ) {
     // 触发汇流通道：watcher(fs) + poller(远端轮询) → 编排主循环。
     let (trig_tx, mut trig_rx) = tokio::sync::mpsc::channel::<()>(8);
@@ -151,7 +163,11 @@ async fn run_sync_session(
             let mut prev = poller::Snapshot::default();
             loop {
                 interval.tick().await;
-                let jwt = keychain::load().ok().flatten().map(|c| c.jwt).unwrap_or_default();
+                let jwt = keychain::load()
+                    .ok()
+                    .flatten()
+                    .map(|c| c.jwt)
+                    .unwrap_or_default();
                 if jwt.is_empty() {
                     continue; // 未登录/凭据被清，跳过本轮
                 }
@@ -180,6 +196,28 @@ async fn run_sync_session(
     loop {
         tokio::select! {
             _ = dir_rx.changed() => break,
+            control = control_rx.recv() => {
+                let Some(SyncControl::Flush(reply)) = control else {
+                    break;
+                };
+                if first_run {
+                    let _ = reply.send(Err("同步正在建立初始基线，请完成后再修改同步目录".into()));
+                    continue;
+                }
+                let run_guard = core.sync_run_lock.read().await;
+                *core.sync.lock().await = SyncState::Syncing;
+                let outcome = run_one_sync(
+                    sas_cache.clone(),
+                    local_dir,
+                    config_path,
+                    rclone_bin,
+                    first_run,
+                )
+                .await;
+                first_run = false;
+                drop(run_guard);
+                let _ = reply.send(record_sync_outcome(core, &outcome).await);
+            },
             recv = trig_rx.recv() => {
                 if recv.is_none() {
                     break;
@@ -188,6 +226,16 @@ async fn run_sync_session(
                     continue; // 已在跑，已标 dirty
                 }
                 loop {
+                    // 目录操作先申请写锁；其一旦排队，tokio 的公平 RwLock 不再让新读锁插队。
+                    // 这里在获取读锁前后都检查 watch 版本，确保已暂停的旧会话不会再起一轮 rclone。
+                    if dir_rx.has_changed().unwrap_or(true) {
+                        break;
+                    }
+                    let run_guard = core.sync_run_lock.read().await;
+                    if dir_rx.has_changed().unwrap_or(true) {
+                        drop(run_guard);
+                        break;
+                    }
                     *core.sync.lock().await = SyncState::Syncing;
                     let outcome = run_one_sync(
                         sas_cache.clone(),
@@ -198,20 +246,9 @@ async fn run_sync_session(
                     )
                     .await;
                     first_run = false;
+                    drop(run_guard);
 
-                    *core.sync.lock().await = match outcome {
-                        Ok(BisyncOutcome::Success) => SyncState::Idle,
-                        Ok(BisyncOutcome::NeedsResync) => {
-                            SyncState::NeedsAttention("同步基线丢失，需重建（--resync）".into())
-                        }
-                        Ok(BisyncOutcome::SasExpired) => {
-                            SyncState::Error("SAS 刷新后仍鉴权失败".into())
-                        }
-                        Ok(BisyncOutcome::Failed(code)) => {
-                            SyncState::Error(format!("bisync 失败（退出码 {code}）"))
-                        }
-                        Err(e) => SyncState::Error(e),
-                    };
+                    let _ = record_sync_outcome(core, &outcome).await;
 
                     if !gate.on_finish() {
                         break; // 期间无新触发
@@ -224,6 +261,31 @@ async fn run_sync_session(
     poller_task.abort();
 }
 
+/// 将一次 bisync 结果同步到 UI 状态；控制面调用者还会收到同一份成功/失败结果。
+async fn record_sync_outcome(
+    core: &AppCore,
+    outcome: &Result<BisyncOutcome, String>,
+) -> Result<(), String> {
+    let (state, result) = match outcome {
+        Ok(BisyncOutcome::Success) => (SyncState::Idle, Ok(())),
+        Ok(BisyncOutcome::NeedsResync) => {
+            let message = "同步基线丢失，需重建（--resync）".to_string();
+            (SyncState::NeedsAttention(message.clone()), Err(message))
+        }
+        Ok(BisyncOutcome::SasExpired) => {
+            let message = "SAS 刷新后仍鉴权失败".to_string();
+            (SyncState::Error(message.clone()), Err(message))
+        }
+        Ok(BisyncOutcome::Failed(code)) => {
+            let message = format!("bisync 失败（退出码 {code}）");
+            (SyncState::Error(message.clone()), Err(message))
+        }
+        Err(error) => (SyncState::Error(error.clone()), Err(error.clone())),
+    };
+    *core.sync.lock().await = state;
+    result
+}
+
 /// 单次同步：确保 SAS 新鲜 + 写 rclone config，然后跑 `run_sync_once`（含 403 重试）。
 async fn run_one_sync(
     sas_cache: Arc<Mutex<SasCache>>,
@@ -233,7 +295,12 @@ async fn run_one_sync(
     first_run: bool,
 ) -> Result<BisyncOutcome, String> {
     // 1. 拿新鲜 SAS 并写入 rclone config 的 sas_url。
-    let sas = sas_cache.lock().await.get().await.map_err(|e| e.to_string())?;
+    let sas = sas_cache
+        .lock()
+        .await
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
     write_rclone_config(config_path, &sas).map_err(|e| e.to_string())?;
     let plan = BisyncPlan::new(&sas, local_dir, config_path, first_run);
 
@@ -255,7 +322,12 @@ async fn run_one_sync(
             let sc = sc.clone();
             let cfg = cfg.clone();
             async move {
-                let sas = sc.lock().await.force_refresh().await.map_err(|e| e.to_string())?;
+                let sas = sc
+                    .lock()
+                    .await
+                    .force_refresh()
+                    .await
+                    .map_err(|e| e.to_string())?;
                 write_rclone_config(&cfg, &sas).map_err(|e| e.to_string())
             }
         },
@@ -276,7 +348,11 @@ pub(super) fn rclone_bin_path() -> PathBuf {
     // dev 兜底：指向仓库内已 fetch 的 sidecar。仅 debug 构建启用，release 打包不受影响。
     #[cfg(debug_assertions)]
     {
-        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+        let ext = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
         let dev_sidecar = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(format!("rclone-{}{}", DEV_RCLONE_TARGET_TRIPLE, ext));
@@ -326,7 +402,11 @@ mod tests {
         // ② dev 构建、无 env 覆盖时，解析到仓库内已 fetch 的 sidecar。
         //    这是"免 LINGXI_RCLONE_BIN 前缀"这一行为的实证：sidecar 就位则 dev 零配置可用。
         std::env::remove_var("LINGXI_RCLONE_BIN");
-        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+        let ext = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
         let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(format!("rclone-{DEV_RCLONE_TARGET_TRIPLE}{ext}"));
