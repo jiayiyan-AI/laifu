@@ -17,7 +17,6 @@
     "dev:desktop:canary": "pnpm --filter @lingxi/desktop dev:canary",
     "dev:desktop:stable": "pnpm --filter @lingxi/desktop dev:stable",
     "desktop:fetch-rclone": "node scripts/fetch-rclone.mjs",
-    "desktop:fetch-rclone:universal": "node scripts/fetch-rclone.mjs --universal-apple",
     "desktop:version": "node scripts/desktop-version.mjs",
     "dev:check": "scripts/dev-check.sh"
   },

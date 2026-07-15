@@ -231,6 +231,7 @@ pub fn run() {
             }
         }
         // macOS Dock 图标被点击且当前无可见窗口（home/sync 均处于 hide 状态）：唤出 home。
+        #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows,
             ..

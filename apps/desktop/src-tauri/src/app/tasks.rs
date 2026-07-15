@@ -367,18 +367,18 @@ pub(super) fn rclone_bin_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("rclone"))
 }
 
-/// dev sidecar 的 target-triple（对齐 `scripts/fetch-rclone.sh` 命名）。
-/// 只支持 macOS 与 Windows 的 x86_64 / aarch64（用户决策：不考虑 Linux）。
+/// dev sidecar 的 target-triple（对齐 `scripts/fetch-rclone.mjs` 命名）。
+/// 支持 Apple Silicon macOS，以及 aarch64 / x86_64 Windows（不考虑 Linux 与 Intel Mac）。
 #[cfg(debug_assertions)]
 const DEV_RCLONE_TARGET_TRIPLE: &str = {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
     } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
         "aarch64-pc-windows-msvc"
-    } else {
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         "x86_64-pc-windows-msvc"
+    } else {
+        panic!("Laifu desktop supports Apple Silicon macOS and Windows only")
     }
 };
 
