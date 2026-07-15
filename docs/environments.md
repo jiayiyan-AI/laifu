@@ -19,13 +19,13 @@
 | 维度 | dev (本地) | prod (Azure) | 谁切 |
 |---|---|---|---|
 | Provisioner | `local` — 共享单个 docker | `azure` — 每用户独立 ACA | `PROVISIONER` env |
-| Hermes 实例 | `scripts/dev-hermes.sh` 起 docker | gateway 运行时 SDK 创建 | provisioner 分支 |
+| Hermes 实例 | `scripts/dev-hermes.mjs` 起 docker | gateway 运行时 SDK 创建 | provisioner 分支 |
 | 前端访问 API | Vite proxy :3000 → :9000 | 同进程同域 `express.static` | dev 走 vite, prod 走 dist |
 | Postgres | 本地 docker PG (`./scripts/dev-db.sh start`, 端口 54422) | Supabase Cloud 真实库 (Drizzle 直连, 不走 supabase-js) | `DATABASE_URL` env |
 | OAuth redirect | `:9000/api/auth/google/callback` | `https://<host>/api/auth/google/callback` | `PUBLIC_BASE_URL` + Google Console |
 | Secret 来源 | `apps/gateway/.env.local` 手填 | KV → App Service appSettings 注入 | bicep KV reference |
 | 前后端域 | 跨端口 (9000 / 3000) | 同域 | `FRONTEND_BASE_URL` env |
-| 容器 → gateway 回调 (entrypoint 拉 entitlements) | `host.docker.internal:9000` (dev-hermes.sh 注入) | `https://<app-service>` (Azure 路径下 gateway provisioning 时注入) | `GATEWAY_BASE_URL` env (容器视角) |
+| 容器 → gateway 回调 (entrypoint 拉 entitlements) | `host.docker.internal:9000` (dev-hermes.mjs 注入) | `https://<app-service>` (Azure 路径下 gateway provisioning 时注入) | `GATEWAY_BASE_URL` env (容器视角) |
 | 容器 JWT 签发密钥 (LAIFU_USER_TOKEN) | `.env.local` 手填随便值 | KV `gateway-secret` → App Service → 容器读 | `GATEWAY_SECRET` env (gateway 侧) |
 | 云盘 storage | dev 用同一个 HNS account `stlingxidev` (或 azurite) | prod HNS account `stlingxiprod` | `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_CONTAINER` |
 
@@ -130,7 +130,7 @@ const defaultProvisioner = async (args) => {
 2. 最后把 `container_url` 设成 **固定值 `LOCAL_CONTAINER_URL=http://localhost:8080`**
 3. 状态置 `ready`
 
-**前提**：`pnpm dev` 同时通过 `scripts/dev-hermes.sh` 起了 docker 监听 `:8080`。**所有 dev 用户共用这一个容器**。
+**前提**：`pnpm dev` 同时通过 `scripts/dev-hermes.mjs` 起了 docker 监听 `:8080`。**所有 dev 用户共用这一个容器**。
 
 ### prod (`PROVISIONER=azure`) 在做什么
 
