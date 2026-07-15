@@ -21,15 +21,15 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 11.5.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -37,6 +37,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build desktop workspace dependencies
+        run: pnpm --filter @lingxi/shared --filter @lingxi/atom build
+
 
       - id: release
         name: Validate desktop manifests
@@ -73,30 +76,30 @@ jobs:
       matrix:
         include:
           - channel: stable
-            artifact: macos-stable
+            artifact: macos-arm64-stable
             executable: Laifu
             identifier: com.lingxi.desktop
             scheme: laifu
-            args: --features app --target universal-apple-darwin --bundles dmg
+            args: --features app --target aarch64-apple-darwin --bundles dmg
           - channel: canary
-            artifact: macos-canary
+            artifact: macos-arm64-canary
             executable: Laifu Canary
             identifier: com.lingxi.desktop.canary
             scheme: laifu-canary
-            args: --features app --target universal-apple-darwin --bundles dmg --config src-tauri/tauri.conf.canary.json
+            args: --features app --target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.conf.canary.json
     env:
       CI: "true"
       LAIFU_CHANNEL: ${{ matrix.channel }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 11.5.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -104,13 +107,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build desktop workspace dependencies
+        run: pnpm --filter @lingxi/shared --filter @lingxi/atom build
 
-      - name: Fetch universal rclone sidecar
-        run: node scripts/fetch-rclone.mjs --universal-apple
+
+      - name: Fetch arm64 rclone sidecar
+        run: node scripts/fetch-rclone.mjs --target aarch64-apple-darwin
 
       - name: Test app integration on stable build
         if: matrix.channel == 'stable'
@@ -120,13 +126,13 @@ jobs:
         working-directory: apps/desktop
         run: pnpm exec tauri build ${{ matrix.args }}
 
-      - name: Verify signed universal app inside DMG
+      - name: Verify signed arm64 app inside DMG
         env:
           EXECUTABLE: ${{ matrix.executable }}
           BUNDLE_IDENTIFIER: ${{ matrix.identifier }}
           DEEP_LINK_SCHEME: ${{ matrix.scheme }}
         run: |
-          DMG=$(echo apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          DMG=$(echo apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
           MOUNT=$(mktemp -d)
           cleanup() {
             hdiutil detach "$MOUNT" -quiet || true
@@ -139,14 +145,14 @@ jobs:
           codesign --verify --deep --strict "$APP"
           test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = "$BUNDLE_IDENTIFIER"
           test "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$APP/Contents/Info.plist")" = "$DEEP_LINK_SCHEME"
-          lipo -archs "$APP/Contents/MacOS/$EXECUTABLE" | grep -Eq 'arm64.*x86_64|x86_64.*arm64'
-          lipo -archs "$APP/Contents/MacOS/rclone" | grep -Eq 'arm64.*x86_64|x86_64.*arm64'
+          test "$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE")" = "arm64"
+          test "$(lipo -archs "$APP/Contents/MacOS/rclone")" = "arm64"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           if-no-files-found: error
-          path: apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
   build-windows:
     name: Build Windows ${{ matrix.channel }}
@@ -166,15 +172,15 @@ jobs:
       CI: "true"
       LAIFU_CHANNEL: ${{ matrix.channel }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 11.5.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -184,6 +190,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build desktop workspace dependencies
+        run: pnpm --filter @lingxi/shared --filter @lingxi/atom build
+
 
       - name: Fetch x64 rclone sidecar
         run: node scripts/fetch-rclone.mjs --target x86_64-pc-windows-msvc
@@ -200,7 +209,7 @@ jobs:
             throw "Expected one NSIS installer, found $($installer.Count)"
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           if-no-files-found: error
@@ -218,15 +227,15 @@ jobs:
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: release-assets
 
       - name: Name the four release assets
         run: |
           set -euo pipefail
-          mac_stable=(release-assets/macos-stable/*.dmg)
-          mac_canary=(release-assets/macos-canary/*.dmg)
+          mac_stable=(release-assets/macos-arm64-stable/*.dmg)
+          mac_canary=(release-assets/macos-arm64-canary/*.dmg)
           windows_stable=(release-assets/windows-stable/*-setup.exe)
           windows_canary=(release-assets/windows-canary/*-setup.exe)
           test "${#mac_stable[@]}" -eq 1
@@ -234,8 +243,8 @@ jobs:
           test "${#windows_stable[@]}" -eq 1
           test "${#windows_canary[@]}" -eq 1
           mkdir publish-assets
-          cp "${mac_stable[0]}" "publish-assets/laifu-${VERSION}-macos-universal.dmg"
-          cp "${mac_canary[0]}" "publish-assets/laifu-canary-${VERSION}-macos-universal.dmg"
+          cp "${mac_stable[0]}" "publish-assets/laifu-${VERSION}-macos-arm64.dmg"
+          cp "${mac_canary[0]}" "publish-assets/laifu-canary-${VERSION}-macos-arm64.dmg"
           cp "${windows_stable[0]}" "publish-assets/laifu-${VERSION}-windows-x64-setup.exe"
           cp "${windows_canary[0]}" "publish-assets/laifu-canary-${VERSION}-windows-x64-setup.exe"
 

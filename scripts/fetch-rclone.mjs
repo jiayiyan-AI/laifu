@@ -12,19 +12,15 @@ const RCLONE_VERSION = process.env.RCLONE_VERSION ?? 'v1.74.4';
 
 const TARGETS = new Map([
   ['aarch64-apple-darwin', { os: 'osx', arch: 'arm64', extension: '' }],
-  ['x86_64-apple-darwin', { os: 'osx', arch: 'amd64', extension: '' }],
   ['x86_64-pc-windows-msvc', { os: 'windows', arch: 'amd64', extension: '.exe' }],
 ]);
 
 function usage() {
-  throw new Error(
-    'Usage: node scripts/fetch-rclone.mjs [--target <triple> | --universal-apple]',
-  );
+  throw new Error('Usage: node scripts/fetch-rclone.mjs [--target <triple>]');
 }
 
 function hostTarget() {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'aarch64-apple-darwin';
-  if (process.platform === 'darwin' && process.arch === 'x64') return 'x86_64-apple-darwin';
   if (process.platform === 'win32' && process.arch === 'x64') return 'x86_64-pc-windows-msvc';
 
   throw new Error(`Unsupported host platform: ${process.platform}/${process.arch}`);
@@ -105,24 +101,10 @@ async function fetchTarget(target) {
   }
 }
 
-async function createUniversalAppleBinary() {
-  if (process.platform !== 'darwin') {
-    throw new Error('--universal-apple requires macOS because it invokes lipo');
-  }
-
-  const arm64 = await fetchTarget('aarch64-apple-darwin');
-  const x64 = await fetchTarget('x86_64-apple-darwin');
-  const universal = join(BIN_DIR, 'rclone-universal-apple-darwin');
-  await run('lipo', ['-create', arm64, x64, '-output', universal]);
-  await chmod(universal, 0o755);
-  console.log(`[fetch-rclone] installed ${basename(universal)}`);
-}
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
   await fetchTarget(hostTarget());
-} else if (args.length === 1 && args[0] === '--universal-apple') {
-  await createUniversalAppleBinary();
 } else if (args.length === 2 && args[0] === '--target') {
   await fetchTarget(args[1]);
 } else {
