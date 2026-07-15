@@ -1,3 +1,4 @@
+import { isTauri, invoke } from '@tauri-apps/api/core';
 import type {
   AuthMeResponse,
   CloudListResponse,
@@ -257,6 +258,23 @@ export const cloudDownloadUrl = (path: string, dispose: 'inline' | 'attachment' 
   const params = new URLSearchParams({ path });
   if (dispose === 'attachment') params.set('dispose', 'attachment');
   return `/api/cloud/download?${params.toString()}`;
+};
+
+/**
+ * 触发「下载到本地」。
+ *  - 浏览器：`window.open` 跟随 302 到 SAS 直链，由浏览器下载管理器落盘。
+ *  - 桌面（Tauri 内嵌 WKWebView）：无下载管理器、`window.open('_blank')` 被吞，改调原生
+ *    `download_cloud_file` 命令——弹系统「另存为」对话框 + Rust 侧读 session cookie 命中
+ *    下载端点写盘（见 apps/desktop/src-tauri/src/app/auth_commands.rs）。
+ * `fileName` 仅桌面用作「另存为」默认文件名（浏览器路径的文件名由 SAS 的 rscd 决定）。
+ * 桌面路径返回 native 保存结果的 Promise；用户取消对话框时静默 resolve。
+ */
+export const downloadCloudFile = async (path: string, fileName: string): Promise<void> => {
+  if (isTauri()) {
+    await invoke('download_cloud_file', { virtualPath: path, fileName });
+    return;
+  }
+  window.open(cloudDownloadUrl(path, 'attachment'), '_blank');
 };
 
 export interface CloudUploadOpts {

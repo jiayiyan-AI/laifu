@@ -80,9 +80,16 @@ export const FilesApp = () => {
   const canPreview = selected.size === 1 && selectedFiles.length === 1 && isPreviewable(selectedFiles[0]!);
 
   const onPreview = () => { const f = selectedFiles[0]; if (f) setPreview(f); };
-  const onDownload = () => {
+  const onDownload = async () => {
+    // 桌面走原生「另存为」（逐个 await，避免多文件同时弹多个对话框）；浏览器里 await 即刻返回。
     for (const f of selectedFiles) {
-      window.open(api.cloudDownloadUrl(f.virtual_path, 'attachment'), '_blank');
+      try {
+        await api.downloadCloudFile(f.virtual_path, f.title);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[download] failed', f.virtual_path, err);
+        setError(`下载失败：${msg}`);
+      }
     }
   };
 

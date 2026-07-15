@@ -34,7 +34,7 @@ export const Preview = ({ file, onClose }: Props) => {
         <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
           <span style={{ fontWeight: 600 }}>{file.title}</span>
           <div style={{ flex: 1 }} />
-          <button className="btn" onClick={() => window.open(api.cloudDownloadUrl(file.virtual_path, 'attachment'), '_blank')} style={{ marginRight: 8 }}>下载</button>
+          <button className="btn" onClick={() => { api.downloadCloudFile(file.virtual_path, file.title).catch((err) => { console.error('[download] failed', file.virtual_path, err); window.alert(`下载失败：${err instanceof Error ? err.message : String(err)}`); }); }} style={{ marginRight: 8 }}>下载</button>
           <button className="btn" onClick={onClose}>关闭</button>
         </div>
         <div style={{ flex: 1, background: '#222' }}>

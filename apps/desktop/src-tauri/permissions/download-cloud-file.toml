@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-download-cloud-file"
+description = "允许远程 home 窗口调用 download_cloud_file：把云盘文件经原生「另存为」保存到本地（内嵌 WKWebView 无下载管理器，web 端 302→SAS 下载在桌面里静默失败）。"
+commands.allow = ["download_cloud_file"]
