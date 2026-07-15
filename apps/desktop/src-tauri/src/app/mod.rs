@@ -63,6 +63,7 @@ pub fn run() {
             auth_commands::is_authed,
             sync_commands::open_sync_window,
             auth_commands::open_oauth_in_browser,
+            auth_commands::download_cloud_file,
             sync_commands::pick_empty_sync_dir,
             sync_commands::pick_sync_move_destination,
             sync_commands::configure_empty_sync_dir,

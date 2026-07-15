@@ -254,6 +254,127 @@ pub(super) async fn open_oauth_in_browser(
     })
 }
 
+/// web 首页「下载」按钮触发：把云盘文件保存到本地（原生「另存为」对话框）。
+///
+/// 内嵌 WKWebView 无下载管理器、`window.open('_blank')` 被吞，故 web 端「302 → SAS 直链」
+/// 的下载在桌面里静默失败。这里 Rust 侧闭环：读已登录 `home` 窗口的 session cookie（下载
+/// 端点是 session 鉴权，见 gateway `cloud.ts`）→ 弹「另存为」→ 命中下载端点（reqwest 跟随
+/// 302 到 SAS 直链，SAS 自带鉴权、跨源时 Cookie 被剥离）→ 流式写入用户选定路径。
+/// 用户取消对话框返回 `Ok(None)`（不算错误，前端据此不弹失败提示）。
+#[tauri::command]
+pub(super) async fn download_cloud_file(
+    app: tauri::AppHandle,
+    core: State<'_, Arc<AppCore>>,
+    virtual_path: String,
+    file_name: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 诊断日志：detached/异步命令出错时前端只看到 reject，终端这行能定位卡在哪一步。
+    eprintln!("[download_cloud_file] start virtual_path={virtual_path:?} file_name={file_name:?}");
+
+    // Files app 运行在已登录的 home 窗口；复用其 httpOnly session cookie。
+    let home = app.get_webview_window(HOME_WINDOW).ok_or_else(|| {
+        eprintln!("[download_cloud_file] home window gone");
+        "home window gone".to_string()
+    })?;
+    let cookie_header = session_cookie_header(&home, core.inner())?.ok_or_else(|| {
+        eprintln!("[download_cloud_file] session cookie 未找到（home 窗口未登录？）");
+        "未登录：找不到 session cookie".to_string()
+    })?;
+    eprintln!("[download_cloud_file] session cookie ok, 弹「另存为」");
+
+    // 弹「另存为」（默认名取云端 metadata.title）。blocking_* 须离开异步执行器，走 spawn_blocking。
+    let dialog_app = app.clone();
+    let suggested = sanitize_file_name(&file_name);
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .file()
+            .set_file_name(&suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(target) = picked else {
+        eprintln!("[download_cloud_file] 用户取消对话框");
+        return Ok(None); // 用户取消
+    };
+    let dest = target
+        .into_path()
+        .map_err(|e| format!("bad save path: {e}"))?;
+    eprintln!("[download_cloud_file] 保存目标 = {dest:?}，开始下载");
+
+    core.gateway
+        .download_cloud_blob(&cookie_header, &virtual_path, &dest)
+        .await
+        .map_err(|e| {
+            eprintln!("[download_cloud_file] 下载失败: {e}");
+            e.to_string()
+        })?;
+
+    eprintln!("[download_cloud_file] 已保存到 {dest:?}");
+    Ok(Some(dest.to_string_lossy().into_owned()))
+}
+
+/// 「另存为」默认文件名：取末段路径，剔除跨平台非法字符与尾部点/空格，空则回退 `download`。
+///
+/// 按最严（Windows）收敛，mac/Linux 也安全：Windows 文件名禁用 `< > : " / \ | ? *` 与
+/// 控制字符，不能以点/空格结尾，且不能等于保留设备名（CON/NUL/COM1…）。用户仍可在
+/// 对话框里改名——这里只保证「默认名」在三平台都能直接落盘。
+fn sanitize_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    // Windows 会静默吃掉尾部点/空格，索性自己去干净（含 trim 后暴露出的混合尾串）。
+    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        return "download".to_string();
+    }
+    // 保留设备名（忽略扩展名比较）：命中则加前缀避开。
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+        return format!("_{trimmed}");
+    }
+    trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_file_name;
+
+    #[test]
+    fn strips_path_prefix_and_illegal_chars() {
+        assert_eq!(sanitize_file_name("a/b/report:Q1?.pdf"), "report_Q1_.pdf");
+        assert_eq!(sanitize_file_name("C:\\x\\note*<>.txt"), "note___.txt");
+    }
+
+    #[test]
+    fn drops_trailing_dot_space_and_falls_back_when_empty() {
+        assert_eq!(sanitize_file_name("name.  "), "name");
+        assert_eq!(sanitize_file_name("   "), "download");
+        assert_eq!(sanitize_file_name("///"), "download");
+    }
+
+    #[test]
+    fn dodges_windows_reserved_device_names() {
+        assert_eq!(sanitize_file_name("CON"), "_CON");
+        assert_eq!(sanitize_file_name("nul.txt"), "_nul.txt");
+    }
+}
+
 /// 登出：清 keychain，回 Unauthed。
 #[tauri::command]
 pub(super) async fn logout(core: State<'_, Arc<AppCore>>) -> Result<(), String> {

@@ -24,6 +24,9 @@ pub enum GatewayError {
     /// 网络/传输层错误。
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
+    /// 下载写盘时的本地 IO 错误。
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// 规则 rs-result-type：错误类型作带默认值的泛型参数暴露。
@@ -138,6 +141,42 @@ impl GatewayClient {
         Self::parse_json(resp).await
     }
 
+    /// GET /api/cloud/download —— 用 session cookie 命中下载端点，reqwest 跟随 302 到
+    /// SAS 直链，流式写入 `dest`。桌面「另存为」用：cookie 只用于第一跳（同源 gateway）；
+    /// 跨源 302 到 blob 时 reqwest 自动剥离 Cookie/Authorization，SAS 自带鉴权。
+    /// `session_cookie` 形如 `lingxi_sid=<jwt>`（整条 Cookie header 值）。
+    pub async fn download_cloud_blob(
+        &self,
+        session_cookie: &str,
+        virtual_path: &str,
+        dest: &std::path::Path,
+    ) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let mut resp = self
+            .http
+            .get(self.url("/api/cloud/download"))
+            .query(&[("path", virtual_path)])
+            .header(reqwest::header::COOKIE, session_cookie)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let code = status.as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            if code == 401 {
+                return Err(GatewayError::Unauthorized(body));
+            }
+            return Err(GatewayError::Http { status: code, body });
+        }
+        // 大文件流式落盘，避免整包读进内存。
+        let mut file = tokio::fs::File::create(dest).await?;
+        while let Some(chunk) = resp.chunk().await? {
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        Ok(())
+    }
+
     /// 统一响应处理：2xx → 反序列化；401 → Unauthorized；其它 → Http。
     async fn parse_json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
         let status = resp.status();
@@ -248,5 +287,50 @@ mod tests {
         let list = client.cloud_list("devjwt", "sync/").await.unwrap();
         assert_eq!(list.files.len(), 1);
         assert_eq!(list.files[0].virtual_path, "sync/a.txt");
+    }
+
+    #[tokio::test]
+    async fn download_cloud_blob_writes_body_to_dest() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("GET", "/api/cloud/download")
+            .match_header("cookie", "lingxi_sid=sess.jwt")
+            .match_query(mockito::Matcher::UrlEncoded("path".into(), "sync/a.txt".into()))
+            .with_status(200)
+            .with_body("hello-bytes")
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("a.txt");
+        let client = GatewayClient::new(server.url());
+        client
+            .download_cloud_blob("lingxi_sid=sess.jwt", "sync/a.txt", &dest)
+            .await
+            .unwrap();
+        m.assert_async().await;
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "hello-bytes");
+    }
+
+    #[tokio::test]
+    async fn download_cloud_blob_401_maps_to_unauthorized_and_writes_nothing() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/cloud/download")
+            .match_query(mockito::Matcher::Any)
+            .with_status(401)
+            .with_body(r#"{"error":"not authenticated"}"#)
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("x.bin");
+        let client = GatewayClient::new(server.url());
+        let err = client
+            .download_cloud_blob("lingxi_sid=bad", "sync/a.txt", &dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GatewayError::Unauthorized(_)));
+        assert!(!dest.exists(), "失败时不应创建目标文件");
     }
 }
