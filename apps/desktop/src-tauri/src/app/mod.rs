@@ -49,6 +49,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window(HOME_WINDOW) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell_stub())
         .manage(core)
         .invoke_handler(tauri::generate_handler![
@@ -111,36 +117,36 @@ pub fn run() {
 
             // 桌面「系统浏览器走 OAuth」回流：deep link 命中渠道专属 scheme
             // （`crate::channel::deep_link_scheme()`：stable=`laifu`/canary=`laifu-canary`/
-            // dev=`laifu-dev`，须与 `tauri.conf.*.json` 的 `plugins.deep-link` 声明一致）
-            // `?code=...` → complete_desktop_oauth 换设备 JWT + 让 home 窗口种 session cookie。
+            // dev=`laifu-dev`，须与 `tauri.conf.*.json` 的 `plugins.deep-link` 声明一致）。
+            // 已运行的 app 经 `on_open_url` 收到；由 deep link 冷启动的 app 则必须读取
+            // `get_current()`，否则 URL 可能早于 listener 注册而丢失。
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
+
                 let app_dl = app.handle().clone();
                 let core_dl = core_setup.clone();
+                let latest_oauth_code = Arc::new(std::sync::Mutex::new(None));
+                let callback_code = latest_oauth_code.clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
-                        if url.scheme() != crate::channel::deep_link_scheme() {
-                            continue;
-                        }
-                        let Some(code) = url
-                            .query_pairs()
-                            .find(|(k, _)| k == "code")
-                            .map(|(_, v)| v.into_owned())
-                        else {
-                            continue;
-                        };
-                        let app2 = app_dl.clone();
-                        let core2 = core_dl.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) =
-                                auth_commands::complete_desktop_oauth(&app2, &core2, &code).await
-                            {
-                                eprintln!("[deep-link] complete_desktop_oauth failed: {e}");
-                                let _ = app2.emit("login-failed", e);
-                            }
-                        });
+                        handle_desktop_oauth_url(&app_dl, &core_dl, &callback_code, url);
                     }
                 });
+
+                match app.deep_link().get_current() {
+                    Ok(Some(urls)) => {
+                        for url in urls {
+                            handle_desktop_oauth_url(
+                                app.handle(),
+                                &core_setup,
+                                &latest_oauth_code,
+                                url,
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => eprintln!("[deep-link] failed to read initial URL: {error}"),
+                }
             }
 
             // 启动即展示 web 首页（虚拟桌面等业务 UI）；同步盘壳按需经菜单唤出，见 open_sync_window。
@@ -247,9 +253,49 @@ pub fn run() {
     });
 }
 
-/// 占位：真实插件（autostart/notification/single-instance/updater）在 tauri.conf.json
-/// 声明并在此链式 `.plugin(...)`。为保持本函数在无这些 crate 时可编译，返回一个 no-op。
-/// 打包时替换为实际插件注册。
+fn handle_desktop_oauth_url(
+    app: &tauri::AppHandle,
+    core: &Arc<AppCore>,
+    latest_oauth_code: &Arc<std::sync::Mutex<Option<String>>>,
+    url: tauri::Url,
+) {
+    if url.scheme() != crate::channel::deep_link_scheme() {
+        return;
+    }
+
+    let Some(code) = url
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned())
+    else {
+        return;
+    };
+
+    let mut latest_code = match latest_oauth_code.lock() {
+        Ok(latest_code) => latest_code,
+        Err(error) => {
+            eprintln!("[deep-link] callback de-duplication lock failed: {error}");
+            return;
+        }
+    };
+    if latest_code.as_deref() == Some(code.as_str()) {
+        return;
+    }
+    *latest_code = Some(code.clone());
+    drop(latest_code);
+
+    let app = app.clone();
+    let core = core.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = auth_commands::complete_desktop_oauth(&app, &core, &code).await {
+            eprintln!("[deep-link] complete_desktop_oauth failed: {error}");
+            let _ = app.emit("login-failed", error);
+        }
+    });
+}
+
+/// 占位：autostart / notification / updater 等尚未接入的插件。保留 no-op，避免在
+/// 这些 crate 尚未引入时影响 app feature 编译。
 fn tauri_plugin_shell_stub() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("lingxi-noop").build()
 }

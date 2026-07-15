@@ -186,13 +186,14 @@ async fn run_sync_session(
         })
     };
 
-    // 首次触发：新会话立即跑一轮 bisync（含 --resync 建基线），不必等首个 fs/远端事件。
+    // 首次触发：新会话立即跑一轮 bisync。目录两端都还没有文件时，rclone 的 `--resync`
+    // 会留下空基线，后续增量同步仍会拒绝；此时保持 `--resync` 直到出现首个文件。
     let _ = trig_tx.try_send(());
 
     // ③ 编排主循环：TriggerGate 保证同一时刻只一个 bisync；跑中来的触发标 dirty，跑完补一轮。
     //    与 dir_rx.changed() 竞争：目录一变，收尾退出让监督者以新目录重起。
     let mut gate = TriggerGate::default();
-    let mut first_run = true;
+    let mut needs_initial_resync = true;
     loop {
         tokio::select! {
             _ = dir_rx.changed() => break,
@@ -200,7 +201,7 @@ async fn run_sync_session(
                 let Some(SyncControl::Flush(reply)) = control else {
                     break;
                 };
-                if first_run {
+                if needs_initial_resync {
                     let _ = reply.send(Err("同步正在建立初始基线，请完成后再修改同步目录".into()));
                     continue;
                 }
@@ -211,10 +212,10 @@ async fn run_sync_session(
                     local_dir,
                     config_path,
                     rclone_bin,
-                    first_run,
+                    needs_initial_resync,
                 )
                 .await;
-                first_run = false;
+                advance_initial_resync(&mut needs_initial_resync, &outcome, local_dir);
                 drop(run_guard);
                 let _ = reply.send(record_sync_outcome(core, &outcome).await);
             },
@@ -242,10 +243,10 @@ async fn run_sync_session(
                         local_dir,
                         config_path,
                         rclone_bin,
-                        first_run,
+                        needs_initial_resync,
                     )
                     .await;
-                    first_run = false;
+                    advance_initial_resync(&mut needs_initial_resync, &outcome, local_dir);
                     drop(run_guard);
 
                     let _ = record_sync_outcome(core, &outcome).await;
@@ -261,6 +262,37 @@ async fn run_sync_session(
     poller_task.abort();
 }
 
+/// rclone bisync 不能把两个空目录的 `--resync` 产物当作增量基线。只有首次 resync
+/// 已经同步出至少一个文件后，才允许之后的触发去掉 `--resync`。
+fn advance_initial_resync(
+    needs_initial_resync: &mut bool,
+    outcome: &Result<BisyncOutcome, String>,
+    local_dir: &Path,
+) {
+    if !*needs_initial_resync || !matches!(outcome, Ok(BisyncOutcome::Success)) {
+        return;
+    }
+
+    match directory_contains_file(local_dir) {
+        Ok(has_file) => *needs_initial_resync = !has_file,
+        Err(error) => eprintln!("[sync] 无法确认首次同步基线是否建立，继续使用 --resync: {error}"),
+    }
+}
+
+/// rclone 的 Azure Blob 后端不持久化空目录；仅有空子目录也不能形成有效 bisync 基线。
+fn directory_contains_file(dir: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_file() {
+            return Ok(true);
+        }
+        if file_type.is_dir() && directory_contains_file(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 /// 将一次 bisync 结果同步到 UI 状态；控制面调用者还会收到同一份成功/失败结果。
 async fn record_sync_outcome(
     core: &AppCore,
@@ -416,5 +448,32 @@ mod tests {
             got.is_file(),
             "sidecar 未就位于 {got:?}；先跑 scripts/fetch-rclone.sh"
         );
+    }
+
+    #[test]
+    fn initial_resync_stays_enabled_until_a_file_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!directory_contains_file(temp.path()).unwrap());
+
+        let nested = temp.path().join("empty");
+        std::fs::create_dir(&nested).unwrap();
+        assert!(!directory_contains_file(temp.path()).unwrap());
+
+        std::fs::write(nested.join("first.txt"), "content").unwrap();
+        assert!(directory_contains_file(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn initial_resync_completes_only_after_successful_file_sync() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut needs_resync = true;
+        let success = Ok(BisyncOutcome::Success);
+
+        advance_initial_resync(&mut needs_resync, &success, temp.path());
+        assert!(needs_resync);
+
+        std::fs::write(temp.path().join("first.txt"), "content").unwrap();
+        advance_initial_resync(&mut needs_resync, &success, temp.path());
+        assert!(!needs_resync);
     }
 }

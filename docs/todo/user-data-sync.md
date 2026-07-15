@@ -1,8 +1,8 @@
 # 用户数据同步盘（Tauri 客户端 + gateway，双向）
 
-> Status: **同步引擎 + 前端产品化外壳 + 安全同步目录切换/同卷迁移 + home/sync 三窗口拆分 + 桌面 Google OAuth（系统浏览器 + deep link）+ 系统托盘/后台常驻 + dev/canary/stable 三渠道已完成并本地编译验证通过；macOS stable/canary universal `.dmg` 已本地构建并验证免费 ad-hoc 签名；`desktop-<semver>` tag 触发的四包 GitHub Release 工作流已实现、待首次 GitHub runner 验证；无摩擦的公开分发/单实例/P2 数据语义加固待做**
+> Status: **同步引擎 + 前端产品化外壳 + 安全同步目录切换/同卷迁移 + home/sync 三窗口拆分 + 桌面 Google OAuth（系统浏览器 + deep link）+ 系统托盘/后台常驻 + dev/canary/stable 三渠道 + 单实例已完成并本地编译验证通过；macOS stable/canary universal `.dmg` 已本地构建并验证免费 ad-hoc 签名；`desktop-<semver>` tag 触发的四包 GitHub Release 工作流已实现、待首次 GitHub runner 验证；无摩擦的公开分发/P2 数据语义加固待做**
 > 技术栈：Tauri（Rust + React）+ rclone `bisync` + gateway + Azure Blob User Delegation SAS。
-> 最后更新：2026-07-14（本轮新增：同步目录不再允许任意替换；只允许改用严格空目录，或用同卷原子 `rename` 移动整个目录。目录操作串行化，先经有确认的控制通道强制完成一轮**非 resync** 同步，再等待在途 rclone 结束；初始基线尚未建立时拒绝修改目录。`config.json` 以 `pending_move` 日志覆盖 rename 与配置提交之间的崩溃窗；启动时自动恢复无歧义状态，歧义状态进入 NeedsAttention。设置页新增强风险确认框。新增 Rust 目录/日志/控制通道单测；Rust app feature 85 tests、desktop tsc、Rust clippy 通过。真实 rclone 目录迁移尚待真机验证）。
+> 最后更新：2026-07-15（本轮修复：macOS 打包 app 被 deep link 冷启动时，`get_current()` 读取首次 URL，避免 OAuth 回调早于 listener 注册而丢失；接入 `tauri-plugin-single-instance`，同一 bundle identifier 的重复启动会聚焦既有 home 窗口；rclone bisync 对两端均空目录的 `--resync` 会写出不可用于增量的空基线，现保持 resync 直到同步到首个文件。Canary aarch64 `.app` / `.dmg` 已构建、ad-hoc 签名验证通过；OAuth 真机闭环通过，单实例重复启动与首次空目录同步待手动验收）。
 
 ---
 
@@ -267,7 +267,13 @@ OS Keychain 中的设备 JWT（`com.lingxi.desktop` service）不受影响——
 - **崩溃恢复**：移动前把 `{ from, to }` 写入 `config.json.pending_move`；rename 后再提交 `sync_dir`。启动恢复中，只有“旧在新不在”或“旧不在新在”两种状态会自动收敛；两个路径同存或同失时保留日志并进 `NeedsAttention`，绝不猜测。
 - **UX**：配置后显示「改用空目录」与「移动到新位置」两项，选择后必须在包含旧/新路径和后果的 AlertDialog 中勾选确认才可提交；跨卷移动的限制与中断后不应手动删除目录的提示均显式展示。
 
-验证：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features app` 85/85 通过；`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features app --all-targets -- -D warnings` 通过；`pnpm --filter @lingxi/desktop lint` 通过。仍须真机覆盖：同步进行时操作、空目录下载、同卷移动后的双向同步、跨卷拒绝、以及 rename 后配置提交前中断的启动恢复。
+验证：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features app` 87/87 通过；`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features app --all-targets -- -D warnings` 通过；`pnpm --filter @lingxi/desktop lint` 通过。仍须真机覆盖：同步进行时操作、空目录下载、同卷移动后的双向同步、跨卷拒绝、以及 rename 后配置提交前中断的启动恢复。
+
+### 5.12 rclone 不能把双空目录 `--resync` 当增量基线（2026-07-15）
+
+首次同步目录与远端 `sync/` 都没有文件时，`rclone bisync --resync` 会成功并写出空 listing；下一个不带 `--resync` 的 bisync 随即以 `Empty prior Path1 listing` 拒绝运行，stderr 虽提示 resync，但这不是实际的基线损坏。此前会话在第一次成功后无条件切到增量模式，因此 UI 错报「同步基线丢失」。
+
+修复：`tasks.rs` 将会话状态改为「仍需 initial resync」而非「仅跑过一次」。首次成功后递归检查本地根是否已有至少一个普通文件（Azure Blob 不持久化空目录）；仍为空则后续触发继续带 `--resync` 并保持 Idle，出现首个本地或远端文件并同步成功后才切到增量 bisync。目录切换的 Flush 也会在此阶段继续拒绝，避免把空 listing 误当已收敛基线。单测覆盖空目录、空子目录与首个文件的状态转换。
 
 ---
 
@@ -363,10 +369,10 @@ apps/desktop/
 | 真实登录 webview | ✅ | 见 §9.4 |
 | 原生目录选择 / 安全目录切换 | ✅（编译+单测）/ ⬜（未真机） | 严格空目录改用 + 同卷原子移动 + 崩溃日志，见 §5.11 / §9.5 |
 | home/sync 三窗口拆分 | ✅（编译）/ ⬜（部分真机） | 见 §9.7；启动展示已验证，`sync` 唤出/免二次登录待验证 |
-| 桌面 Google OAuth（系统浏览器 + deep link） | ✅ | 见 §9.8，真机验证通过 |
-| 系统托盘 / 后台常驻 | ✅（编译+单测）/ ⬜（未真机验证） | 见 §9.9；`home`/`sync` 关窗隐藏、托盘显示/退出、Dock 重新激活；单实例仍缺（见下一行「插件接线」） |
-| dev/canary/stable 三渠道 | ✅（编译+打包验证）/ ⬜（未真机走登录闭环） | 见 §11 |
-| 插件接线 | ⬜ | `app/mod.rs` 现为 no-op `tauri_plugin_shell_stub`；替换为 autostart / notification / single-instance / updater |
+| 桌面 Google OAuth（系统浏览器 + deep link） | ✅（编译）/ ⬜（Canary 真机复验） | 冷启动回流同时处理 `on_open_url` 与 `get_current()`，见 §9.8 |
+| 系统托盘 / 后台常驻 | ✅（编译+单测）/ ⬜（未真机验证） | 见 §9.9；`home`/`sync` 关窗隐藏、托盘显示/退出、Dock 重新激活 |
+| dev/canary/stable 三渠道 | ✅（编译+打包验证）/ ⬜（Canary 真机走登录闭环） | 见 §11 |
+| 插件接线 | 🟡 | single-instance 已接；autostart / notification / updater 仍未接 |
 | 打包分发 | 🟡（macOS universal + GitHub workflow 已本地验证）/ ⬜（GitHub runner + Windows 真机 + 无提示公开分发） | `desktop-release.yml` 已在 `desktop-<semver>` tag 上编排四包；stable/canary universal `.dmg` 已本地验证主程序/sidecar 双架构、签名和渠道注册。Windows x64 NSIS job 及最终 GitHub Release 尚未真实执行；无 Developer ID/公证或 Windows 证书，下载用户仍须 Gatekeeper/SmartScreen 手动放行。**只考虑 macOS + Windows，不做 Linux** |
 | 同步状态/错误 UX 深化 | ⬜ | 最近同步时间、文件级进度、冲突列表、NeedsResync 操作 |
 
@@ -492,13 +498,13 @@ Google 禁止在内嵌 WebView 里走 OAuth 授权（报 "This browser or app ma
 
 1. **Start**：`open_oauth_in_browser`（`app/auth_commands.rs`）打开 `<gateway>/api/auth/google/start?client=desktop`。gateway `oauth-router.ts` 先查该浏览器有没有已持有一份**有效 session cookie**（比如用户之前在这个浏览器登过 web 版）——有就直接签一次性交接码、302 到桥接页，完全跳过 Google，不逼用户在已登录的浏览器里重新走一遍授权；没有（缺失/过期/被篡改，只做签名+shape 校验，静默忽略异常）才继续走正常 OAuth，识别 `?client=desktop` 多种一个 `lingxi_oauth_desktop` cookie。
 2. **Callback（第一跳）**：OAuth 成功后，gateway 见到该 cookie，不发 session cookie，改签一次性交接码（`auth/desktop-handoff.ts`，60s TTL、用后即焚），302 到**前端桥接页** `${frontendBaseUrl}/desktop-oauth-complete?code=...`（复用已有的 `frontendBaseUrl` 配置，不需要新 env）。
-3. **桥接页跳 deep link**：`apps/web/src/auth/DesktopOAuthComplete.tsx` 是一个不做鉴权检查的纯前端页面，读到 `code` 后展示一个「返回来福」按钮，**必须靠真人点击**才跳 `laifu://auth-callback?code=...`——不能用 `useEffect` 自动 `location.href = deepLink`：跳自定义 URL scheme 属于"启动外部程序"，Chrome 等主流浏览器要求这个动作必须由一次真实点击直接触发（transient user activation），页面渲染后异步执行的跳转不带这个标记，会被浏览器静默丢弃（不报错、不弹确认框，踩过这个坑）。桌面 app 的 URL scheme 是**客户端常量**，只写死在这一个文件里——gateway 完全不需要知道它，不必加 `DESKTOP_CALLBACK_URL` 之类的运维配置。OS 把这个 deep link 交给正在跑的 app（`tauri-plugin-deep-link`，`tauri.conf.json` `plugins.deep-link.desktop.schemes: ["laifu"]`）。
-4. **换设备 JWT**：`app/mod.rs` 的 `on_open_url` 收到 deep link → `complete_desktop_oauth`（`app/auth_commands.rs`）用 code 调 `POST /api/auth/device-token/exchange`（`device-token.ts`）换设备 JWT → 存 keychain，`sync` 壳状态变 `Authed`。
+3. **桥接页跳 deep link**：`apps/web/src/auth/DesktopOAuthComplete.tsx` 是一个不做鉴权检查的纯前端页面，读到 `code` 后展示一个「返回来福」按钮，**必须靠真人点击**才跳 `laifu://auth-callback?code=...`——不能用 `useEffect` 自动 `location.href = deepLink`：跳自定义 URL scheme 属于"启动外部程序"，Chrome 等主流浏览器要求这个动作必须由一次真实点击直接触发（transient user activation），页面渲染后异步执行的跳转不带这个标记，会被浏览器静默丢弃（不报错、不弹确认框，踩过这个坑）。桌面 app 的 URL scheme 是**客户端常量**，只写死在这一个文件里——gateway 完全不需要知道它，不必加 `DESKTOP_CALLBACK_URL` 之类的运维配置。OS 将 deep link 交给已注册的 `.app`；Rust 同时覆盖该 app 已运行与由链接冷启动两种回流时序。
+4. **换设备 JWT**：`app/mod.rs` 同时处理运行中的 `on_open_url` 与 cold start 的 `get_current()`，再调用 `complete_desktop_oauth`（`app/auth_commands.rs`）用 code 调 `POST /api/auth/device-token/exchange`（`device-token.ts`）换设备 JWT → 存 keychain，`sync` 壳状态变 `Authed`。
 5. **第二跳，回填 `home` 窗口**：`complete_desktop_oauth` 再用刚拿到的 JWT 调 `POST /api/auth/session-code`（`session-handoff.ts`，Bearer 鉴权）换第二个一次性码，`home.navigate()` 导航 `home` 窗口的 WebView 到 `GET /api/auth/session-from-code?code=...`——这是一次真实的 WebView 内导航，`Set-Cookie` 落进 `home` 自己的 cookie 存储，`home` 窗口随即因 cookie 而变已登录。
 
 两个交接码共用同一个 `auth/desktop-handoff.ts` 内存 Map（60s TTL、单次兑换即焚），不跨进程持久化——gateway 重启，飞行中的登录本就该重来。
 
-**真机验证记录（2026-07-13）**：macOS 下 deep link 不能靠运行时注册，需 `cargo tauri build --features app --debug --bundles app` 产出真实 `.app`（双击打开一次即可让 Launch Services 注册 `laifu://`，不必装 `/Applications`）——已验证 `Info.plist` 正确带 `CFBundleURLSchemes: ["laifu"]`，二进制字符串核实运行时默认值仍是 `localhost`，未误连生产。真机点击流程中发现并修复两个问题：① `capabilities/home-remote.json` 权限缺失导致 `invoke` 报 "Plugin not found"（见上）；② 桥接页 `useEffect` 自动跳转被 Chrome 静默拦截（见上），改为强制真人点击。
+**真机验证记录（2026-07-13）**：macOS 下 deep link 不能靠运行时注册，需 `cargo tauri build --features app --debug --bundles app` 产出真实 `.app`（双击打开一次即可让 Launch Services 注册 `laifu://`，不必装 `/Applications`）——已验证 `Info.plist` 正确带 `CFBundleURLSchemes: ["laifu"]`，二进制字符串核实运行时默认值仍是 `localhost`，未误连生产。真机点击流程中发现并修复两个问题：① `capabilities/home-remote.json` 权限缺失导致 `invoke` 报 "Plugin not found"（见上）；② 桥接页 `useEffect` 自动跳转被 Chrome 静默拦截（见上），改为强制真人点击。2026-07-15 补上 cold start `get_current()` 回流及 single-instance；新 Canary 包待真机复验。
 
 
 ### 9.9 系统托盘 + 关窗后台常驻（已实施，2026-07-13）
@@ -514,7 +520,7 @@ Google 禁止在内嵌 WebView 里走 OAuth 授权（报 "This browser or app ma
 
 **已知限制（`[INFERENCE]`，未真机验证）**：
 - **macOS `Cmd+Q` / 系统菜单 Quit 的拦截可能不生效**：Tauri 上游有已知问题（[tauri-apps/tauri#9198](https://github.com/tauri-apps/tauri/issues/9198)，2.5.1 仍复现）——`RunEvent::ExitRequested` 在 macOS 下对 `Cmd+Q`/Dock「退出」这两条路径**不一定触发**（走的是原生 `NSApplication` terminate 路径，绕过了 Tauri 的事件回调），意味着 `api.prevent_exit()` 可能拦不住这两条路径，用户仍可能靠 `Cmd+Q` 直接杀掉整个 app（包括后台同步）。真机验证时需要专门测一遍：① 点窗口关闭按钮（应隐藏，app 存活）；② `Cmd+Q`（存疑，可能直接退出）；③ 系统菜单里默认「Quit」项（同 `Cmd+Q`，走的是 `PredefinedMenuItem::quit`，是 muda 原生行为，Tauri 自定义菜单事件截获不到）；④ 托盘「退出」（应确定退出）。若 ①③④ 符合预期而 `Cmd+Q` 不拦截，属于上游限制，可考虑后续把顶层菜单的默认 Quit 项换成自定义 `MenuItem`（快捷键仍绑 `Cmd+Q`）走 `on_menu_event` 拦截（参见上游 issue 的 workaround，仍无法覆盖 Dock 右键菜单的「退出」）。
-- 单实例（single-instance）仍未接：托盘/后台常驻让重复启动更容易发生（用户以为 app 没在跑，重新双击图标），但 `deep_link` 收到时如果有多个进程实例，行为未定义。见 §10 第 3 项，接 `tauri-plugin-single-instance` 时应一并把"已有实例在跑 → 唤出而非新开"接上，和这里的托盘唤出逻辑复用同一路径。
+- 单实例已接入：`tauri-plugin-single-instance` 按 Tauri `identifier` 建立进程级互斥；同一渠道的重复启动会退出新进程并唤出已有 `home` 窗口。渠道的 identifier 不同，stable/canary/dev 仍可并存。当前只完成编译与打包验证，待真机确认 OAuth 回流及手动重复启动行为。
 - 未真机验证：托盘图标在 macOS 菜单栏的实际渲染（`default_window_icon()` 是否适合做菜单栏图标尺寸/白底透明度，菜单栏图标通常需要专门做的模板图标，`.icon_as_template()` 目前未调用）、`show_menu_on_left_click(false)` 后左键单击的实际交互手感。
 
 ## 11. 桌面三渠道 dev / canary / stable（已实施，2026-07-14）
