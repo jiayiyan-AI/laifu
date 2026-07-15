@@ -1,0 +1,3 @@
+# 前端构建产物（vite build → dist，tauri.conf.json frontendDist 指向此）。
+/dist
+node_modules

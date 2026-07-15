@@ -82,6 +82,7 @@ cd docker/hermes && ACR_NAME=acrlingxi${ENV} IMAGE_TAG=vX ./build-and-push.sh
 - App Service `Always On` 必须开，防 polling 进程被空闲回收。
 - 改 storage account 不能事后加 `isHnsEnabled`，是创建时一次性 flag，必须删 RG + purge KV 重建（dev 才能这么干）。
 - gateway system identity 必须同时拿 `Storage Account Contributor`（建 File Share）**和** `Storage Blob Data Owner`（签 User Delegation Key，云盘必需）。
+- **绝不违反**: 不能进行 git 操作，除非我主动要求
 
 ## 语言
 

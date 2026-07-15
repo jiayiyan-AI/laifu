@@ -69,6 +69,18 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     }
   };
 
+  // list 端点的双鉴权：桌面同步盘持长效设备 JWT（90 天可续），web 持 session cookie。
+  // 有 Bearer → 走 containerAuth（设 req.user_id）；否则回落 session cookie（设 req.session）。
+  // 数据传输走 rclone+SAS，故只有 list（poller 变更发现）需要放行 JWT；download/upload 维持 session。
+  const jwtOrSession: RequestHandler = (req, res, next) => {
+    const header = req.headers['authorization'];
+    if (header && header.startsWith('Bearer ')) {
+      containerAuth(req, res, next);
+    } else {
+      deps.sessionMw(req, res, next);
+    }
+  };
+
   router.get('/api/cloud/sas', containerAuth, requireCloudForContainer, async (req: Request, res: Response) => {
     const userId = req.user_id!;
     try {
@@ -93,8 +105,9 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     }
   });
 
-  router.get('/api/cloud/list', deps.sessionMw, async (req: Request, res: Response) => {
-    const userId = req.session!.user_id;
+  router.get('/api/cloud/list', jwtOrSession, async (req: Request, res: Response) => {
+    // 双鉴权：JWT 路径设 req.user_id，session 路径设 req.session.user_id。
+    const userId = req.user_id ?? req.session!.user_id;
 
     const active = await dao.entitlements.listActive(userId);
     if (!active.includes(FEATURE)) {
@@ -251,6 +264,9 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
           published_at: nowIso,
           tool_version: '0.1.0',
           source: 'web',
+          // rclone azureblob 增量比较用的 mtime key（RFC3339）。补写以消除混合场景
+          // （agent 无 mtime blob + 客户端有 mtime blob）下 bisync 回退 LMT 的比较隐患（§10.4）。
+          mtime: nowIso,
         },
       });
       const body: CloudUploadResponse = {

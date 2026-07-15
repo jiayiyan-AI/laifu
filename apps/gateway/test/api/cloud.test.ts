@@ -129,8 +129,9 @@ describe('GET /api/cloud/list', () => {
     };
   }
 
-  function makeListApp(opts: { listFn?: any; entitled?: boolean; sessionUserId?: string } = {}) {
+  function makeListApp(opts: { listFn?: () => AsyncIterable<unknown>; entitled?: boolean; sessionUserId?: string; sessionMw?: RequestHandler } = {}) {
     const userId = opts.sessionUserId ?? USER_ID;
+    const defaultSessionMw: RequestHandler = (req, _res, next) => { req.session = { user_id: userId }; next(); };
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(opts.entitled === false ? [] : ['cloud']);
     const app = express();
     app.use(express.json());
@@ -144,7 +145,7 @@ describe('GET /api/cloud/list', () => {
           getBlobClient: () => ({ getProperties: vi.fn() }),
         }),
       } as any,
-      sessionMw: ((req: any, _res: any, next: any) => { req.session = { user_id: userId }; next(); }) as any,
+      sessionMw: opts.sessionMw ?? defaultSessionMw,
     }));
     return app;
   }
@@ -237,6 +238,54 @@ describe('GET /api/cloud/list', () => {
     const app = makeListApp({ listFn });
     const res = await request(app).get('/api/cloud/list');
     expect(res.body.files[0].metadata.source).toBe('agent');
+  });
+
+  // 双鉴权: /api/cloud/list 接受 Bearer JWT (桌面同步盘) 或 session cookie (web)。
+  // sessionMw 返回 401 的变体, 保证只有 JWT 分支能成功, 避免 session mock 掩盖 JWT 路径。
+  const denySessionMw: RequestHandler = (_req, res) => { res.status(401).json({ error: 'no session' }); };
+
+  it('valid Bearer JWT → 200 and lists files under JWT user_id', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/j.pdf`, size: 42 },
+    ])());
+    const app = makeListApp({ listFn, sessionMw: denySessionMw });
+    const res = await request(app).get('/api/cloud/list').set('Authorization', bearerHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.files[0].virtual_path).toBe('j.pdf');
+    // 证明用了 JWT 的 user_id 作为 blob prefix, 而非 session。
+    expect(listFn.mock.calls[0][1].prefix).toBe(`${USER_ID}/`);
+  });
+
+  it('no Bearer and no valid session → 401', async () => {
+    const app = makeListApp({ sessionMw: denySessionMw });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.status).toBe(401);
+  });
+
+  it('invalid Bearer JWT (garbage) → 401', async () => {
+    const app = makeListApp({ sessionMw: denySessionMw });
+    const res = await request(app).get('/api/cloud/list').set('Authorization', 'Bearer garbage.token.here');
+    expect(res.status).toBe(401);
+  });
+
+  it('token_version mismatch → 401', async () => {
+    // bearerHeader() 签的是 version 0; 当前 version 为 1 → containerAuth 拒绝。
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(1);
+    const app = makeListApp({ sessionMw: denySessionMw });
+    const res = await request(app).get('/api/cloud/list').set('Authorization', bearerHeader());
+    expect(res.status).toBe(401);
+  });
+
+  it('session path still works without Authorization (regression)', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/s.pdf`, size: 7 },
+    ])());
+    const app = makeListApp({ listFn });
+    const res = await request(app).get('/api/cloud/list');
+    expect(res.status).toBe(200);
+    expect(res.body.files[0].virtual_path).toBe('s.pdf');
+    expect(listFn.mock.calls[0][1].prefix).toBe(`${USER_ID}/`);
   });
 });
 

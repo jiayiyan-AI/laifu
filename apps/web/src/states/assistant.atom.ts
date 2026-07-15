@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 import * as api from '../lib/api.js';
 
 export const DEFAULT_ASSISTANT_NAME = '灵犀';

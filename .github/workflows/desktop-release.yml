@@ -1,0 +1,251 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'desktop-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate desktop build inputs
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - id: release
+        name: Validate desktop manifests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = push ]; then
+            case "$RELEASE_TAG" in
+              desktop-*) ;;
+              *) echo "release tags must be desktop-<semver>" >&2; exit 1 ;;
+            esac
+            VERSION="${RELEASE_TAG#desktop-}"
+            node scripts/desktop-version.mjs check "$VERSION"
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="$(node scripts/desktop-version.mjs current)"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Type-check desktop frontend
+        run: pnpm --filter @lingxi/desktop lint
+
+      - name: Test Rust sync core
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+  build-macos:
+    name: Build macOS ${{ matrix.channel }}
+    needs: preflight
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: stable
+            artifact: macos-stable
+            executable: Laifu
+            identifier: com.lingxi.desktop
+            scheme: laifu
+            args: --features app --target universal-apple-darwin --bundles dmg
+          - channel: canary
+            artifact: macos-canary
+            executable: Laifu Canary
+            identifier: com.lingxi.desktop.canary
+            scheme: laifu-canary
+            args: --features app --target universal-apple-darwin --bundles dmg --config src-tauri/tauri.conf.canary.json
+    env:
+      CI: "true"
+      LAIFU_CHANNEL: ${{ matrix.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch universal rclone sidecar
+        run: node scripts/fetch-rclone.mjs --universal-apple
+
+      - name: Test app integration on stable build
+        if: matrix.channel == 'stable'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features app
+
+      - name: Build installer
+        working-directory: apps/desktop
+        run: pnpm exec tauri build ${{ matrix.args }}
+
+      - name: Verify signed universal app inside DMG
+        env:
+          EXECUTABLE: ${{ matrix.executable }}
+          BUNDLE_IDENTIFIER: ${{ matrix.identifier }}
+          DEEP_LINK_SCHEME: ${{ matrix.scheme }}
+        run: |
+          DMG=$(echo apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          MOUNT=$(mktemp -d)
+          cleanup() {
+            hdiutil detach "$MOUNT" -quiet || true
+            rmdir "$MOUNT" || true
+          }
+          trap cleanup EXIT
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" -quiet
+          APP=$(echo "$MOUNT"/*.app)
+          test -d "$APP"
+          codesign --verify --deep --strict "$APP"
+          test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = "$BUNDLE_IDENTIFIER"
+          test "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$APP/Contents/Info.plist")" = "$DEEP_LINK_SCHEME"
+          lipo -archs "$APP/Contents/MacOS/$EXECUTABLE" | grep -Eq 'arm64.*x86_64|x86_64.*arm64'
+          lipo -archs "$APP/Contents/MacOS/rclone" | grep -Eq 'arm64.*x86_64|x86_64.*arm64'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  build-windows:
+    name: Build Windows ${{ matrix.channel }}
+    needs: preflight
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: stable
+            artifact: windows-stable
+            args: --features app --bundles nsis
+          - channel: canary
+            artifact: windows-canary
+            args: --features app --bundles nsis --config src-tauri/tauri.conf.canary.json
+    env:
+      CI: "true"
+      LAIFU_CHANNEL: ${{ matrix.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch x64 rclone sidecar
+        run: node scripts/fetch-rclone.mjs --target x86_64-pc-windows-msvc
+
+      - name: Build installer
+        working-directory: apps/desktop
+        run: pnpm exec tauri build ${{ matrix.args }}
+
+      - name: Verify NSIS installer exists
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe'
+          if ($installer.Count -ne 1) {
+            throw "Expected one NSIS installer, found $($installer.Count)"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+
+  publish:
+    if: github.event_name == 'push'
+    name: Publish GitHub Release
+    needs: [preflight, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Name the four release assets
+        run: |
+          set -euo pipefail
+          mac_stable=(release-assets/macos-stable/*.dmg)
+          mac_canary=(release-assets/macos-canary/*.dmg)
+          windows_stable=(release-assets/windows-stable/*-setup.exe)
+          windows_canary=(release-assets/windows-canary/*-setup.exe)
+          test "${#mac_stable[@]}" -eq 1
+          test "${#mac_canary[@]}" -eq 1
+          test "${#windows_stable[@]}" -eq 1
+          test "${#windows_canary[@]}" -eq 1
+          mkdir publish-assets
+          cp "${mac_stable[0]}" "publish-assets/laifu-${VERSION}-macos-universal.dmg"
+          cp "${mac_canary[0]}" "publish-assets/laifu-canary-${VERSION}-macos-universal.dmg"
+          cp "${windows_stable[0]}" "publish-assets/laifu-${VERSION}-windows-x64-setup.exe"
+          cp "${windows_canary[0]}" "publish-assets/laifu-canary-${VERSION}-windows-x64-setup.exe"
+
+      - name: Create or update release assets
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" publish-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" publish-assets/* \
+              --title "Laifu ${VERSION}" \
+              --generate-notes
+          fi

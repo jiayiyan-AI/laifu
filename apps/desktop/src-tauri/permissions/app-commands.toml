@@ -1,0 +1,15 @@
+[[permission]]
+identifier = "allow-app-commands"
+description = "允许 sync/login 原生壳调用自身业务命令：登录 webview 编排、登出、鉴权查询、同步窗口唤出、受限的同步目录切换/移动、同步状态查询。Tauri v2 对自定义 command 从不自动放行（core:default 只覆盖内置 core 命令），必须显式声明。"
+commands.allow = [
+  "open_login",
+  "logout",
+  "is_authed",
+  "open_sync_window",
+  "pick_empty_sync_dir",
+  "pick_sync_move_destination",
+  "configure_empty_sync_dir",
+  "relocate_sync_dir",
+  "get_sync_dir",
+  "get_sync_status",
+]

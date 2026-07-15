@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useMemo } from 'react';
 import type { FC, PropsWithChildren } from 'react';
-import { unit as generate } from './unit';
-import type { Change, Listen } from './unit';
+import { unit as generate } from './unit.js';
+import type { Change, Listen } from './unit.js';
 
 const uuid = () => Math.round((Math.random() + 1) * Date.now()).toString(36);
 const UNIQ = Symbol('BUILD');
@@ -18,7 +18,7 @@ interface ValueState<T> extends ReadonlyState<T> {
 interface ActionState<T, A> extends ReadonlyState<T> {
   actions: A;
 }
-export type AnyAtom<T = any> = ValueAtom<T> | ActionAtom<T, any> | ComputedAtom<T>;
+export type AnyAtom<T = unknown> = ValueAtom<T> | ActionAtom<T, unknown> | ComputedAtom<T>;
 export interface Query {
   <T>(atom: ComputedAtom<T>): ReadonlyState<T>;
   <T, A>(atom: ActionAtom<T, A>): ActionState<T, A>;
@@ -38,7 +38,7 @@ class ValueAtom<T> {
   public proxy?: (get: () => T, set: Change<T>) => Change<T>;
   constructor(private init: T) {}
 
-  public [UNIQ](): ValueState<T> {
+  public [UNIQ](_query: Query): ValueState<T> {
     const state = generate(this.init);
     if (this.proxy) {
       state.change = this.proxy(state.get, state.change);
@@ -62,10 +62,12 @@ class ValueAtom<T> {
 
 const _q_2_u_ = new WeakMap<Query, UseAtom>();
 function buildUseFromQuery(query: Query): UseAtom {
-  if (_q_2_u_.has(query)) return _q_2_u_.get(query)!;
+  const cached = _q_2_u_.get(query);
+  if (cached) return cached;
   function use(atom: AnyAtom) {
     switch (atom.type) {
-      case 'c': return query(atom).get();
+      case 'c':
+        return query(atom).get();
       case 'v': {
         const { get, change } = query(atom);
         return [get(), change];
@@ -76,7 +78,10 @@ function buildUseFromQuery(query: Query): UseAtom {
       }
     }
   }
-  return (_q_2_u_.set(query, use), use);
+  // `use` 的运行时派发与 UseAtom 重载一一对应，但 TS 无法从联合实现推回重载签名。
+  const typed = use as unknown as UseAtom;
+  _q_2_u_.set(query, typed);
+  return typed;
 }
 
 class ActionAtom<T, A> {
@@ -84,14 +89,14 @@ class ActionAtom<T, A> {
   public readonly key = uuid();
   constructor(
     private readonly init: T,
-    private readonly creator: Creator<T, A>) {}
+    private readonly creator: Creator<T, A>,
+  ) {}
 
   public [UNIQ](query: Query): ActionState<T, A> {
     const state = generate(this.init);
     const use = buildUseFromQuery(query);
     const actions = this.creator(state.get, state.change, use);
-    Object.assign(state, { actions });
-    return state as any;
+    return Object.assign(state, { actions });
   }
 
   public useData(): T {
@@ -115,11 +120,12 @@ class ComputedAtom<T> {
 
   public [UNIQ](query: Query): ReadonlyState<T> {
     const deps: AnyAtom[] = [];
-    let use = (atom: AnyAtom) => (deps.push(atom), query(atom).get());
-    const state = generate(this.calc(use));
+    // 首跑收集依赖：泛型擦除后 get() 的运行时值即对应 atom 的值。
+    let collect = ((atom: AnyAtom) => (deps.push(atom), query(atom).get())) as UseData;
+    const state = generate(this.calc(collect));
     if (deps.length > 0) {
-      use = (atom: AnyAtom) => query(atom).get();
-      const update = () => state.change(this.calc(use));
+      collect = ((atom: AnyAtom) => query(atom).get()) as UseData;
+      const update = () => state.change(this.calc(collect));
       deps.forEach((a) => query(a).listen(update));
     }
     return state;
@@ -133,17 +139,23 @@ class ComputedAtom<T> {
 export function atom<T>(initial: (use: UseData) => T): ComputedAtom<T>;
 export function atom<T, A>(initial: T, creator: Creator<T, A>): ActionAtom<T, A>;
 export function atom<T>(initial: T): ValueAtom<T>;
-export function atom(a: any, b?: any) {
-  if (typeof a === 'function') return new ComputedAtom(a);
-  if (b) return new ActionAtom(a, b);
+export function atom(a: unknown, b?: unknown) {
+  if (typeof a === 'function') return new ComputedAtom(a as (use: UseData) => unknown);
+  if (b) return new ActionAtom(a, b as Creator<unknown, unknown>);
   return new ValueAtom(a);
 }
 
 function build(): Query {
-  const map: { [k: string]: any } = {};
-  return function query(atom: AnyAtom) {
-    return map[atom.key] || (map[atom.key] = atom[UNIQ](query));
-  }
+  const map = new Map<string, ReadonlyState<unknown>>();
+  // 异构 state 表按 key 缓存；Query 重载在消费点恢复精确类型。
+  const query = ((atom: AnyAtom): ReadonlyState<unknown> => {
+    const hit = map.get(atom.key);
+    if (hit) return hit;
+    const built = atom[UNIQ](query);
+    map.set(atom.key, built);
+    return built;
+  }) as unknown as Query;
+  return query;
 }
 const Context = createContext(build());
 const Root = Context.Provider;
@@ -154,9 +166,11 @@ export function mutate<T extends Function>(init: (use: UseAtom) => T) {
   return {
     use(): T {
       const query = useContext(Context);
-      if (cache.has(query)) return cache.get(query)!;
+      const hit = cache.get(query);
+      if (hit) return hit;
       const result = init(buildUseFromQuery(query));
-      return (cache.set(query, result), result);
-    }
-  }
+      cache.set(query, result);
+      return result;
+    },
+  };
 }

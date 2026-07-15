@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
-import { WithStore } from '../src/atom/index.js';
+import { WithStore } from '@lingxi/atom'
 import { entitlementsAtom } from '../src/states/entitlements.atom.js';
 
 vi.mock('../src/lib/api.js', () => ({

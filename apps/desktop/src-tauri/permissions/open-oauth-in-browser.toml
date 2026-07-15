@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-open-oauth-in-browser"
+description = "允许远程 home 窗口调用 open_oauth_in_browser：系统默认浏览器打开 OAuth 起点（Google 禁止在内嵌 WebView 里走 OAuth）。"
+commands.allow = ["open_oauth_in_browser"]

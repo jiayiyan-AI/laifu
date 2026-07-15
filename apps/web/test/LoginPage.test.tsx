@@ -3,8 +3,14 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { LoginPage } from '../src/auth/LoginPage.js';
-import { WithStore } from '../src/atom/index.js';
+import { WithStore } from '@lingxi/atom'
 import * as api from '../src/lib/api.js';
+import * as tauriCore from '@tauri-apps/api/core';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  isTauri: vi.fn(() => false),
+  invoke: vi.fn(),
+}));
 
 const wrap = (ui: ReactNode) => (
   <MemoryRouter><WithStore>{ui}</WithStore></MemoryRouter>
@@ -61,11 +67,43 @@ describe('LoginPage', () => {
     });
   });
 
-  it('Google 入口仍在(下方),指向 /api/auth/google/start', async () => {
+  it('Google 入口(下方)默认走浏览器同页跳转 /api/auth/google/start', async () => {
     render(wrap(<LoginPage />));
     await waitFor(() => {
-      const link = screen.getByRole('link', { name: /Google/ });
-      expect(link.getAttribute('href')).toBe('/api/auth/google/start');
+      expect(screen.getByRole('button', { name: /Google/ })).toBeInTheDocument();
+    });
+    const originalHref = window.location.href;
+    // jsdom 不实现真实导航；断言赋值本身发生即可证明走的是同页跳转分支。
+    let assignedHref: string | undefined;
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, set href(v: string) { assignedHref = v; } },
+      writable: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Google/ }));
+    expect(assignedHref).toBe('/api/auth/google/start');
+    window.history.replaceState({}, '', originalHref);
+  });
+
+  it('Tauri 环境下点 Google 走系统浏览器（invoke open_oauth_in_browser），不做同页跳转', async () => {
+    vi.mocked(tauriCore.isTauri).mockReturnValue(true);
+    render(wrap(<LoginPage />));
+    await waitFor(() => screen.getByRole('button', { name: /Google/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Google/ }));
+    expect(tauriCore.invoke).toHaveBeenCalledWith('open_oauth_in_browser', { provider: 'google' });
+  });
+
+  it('Tauri 已登录时通过真实导航到 /desktop 通知同步盘原生层', async () => {
+    vi.mocked(tauriCore.isTauri).mockReturnValue(true);
+    vi.spyOn(api, 'me').mockResolvedValue({
+      user_id: 'u1', provider: 'password', external_id: 'a@b.com',
+      email: 'a@b.com', nickname: 'Qiang', avatar_url: null, email_domain: 'laifu.local',
+    });
+    const replaceSpy = vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+
+    render(wrap(<LoginPage />));
+
+    await waitFor(() => {
+      expect(replaceSpy).toHaveBeenCalledWith('/desktop');
     });
   });
 });

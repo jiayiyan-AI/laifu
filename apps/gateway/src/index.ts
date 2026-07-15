@@ -20,6 +20,8 @@ import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildMeRuntimeConfigRouter } from './api/me-runtime-config.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
+import { buildDeviceTokenRouter } from './api/device-token.js';
+import { buildSessionHandoffRouter } from './api/session-handoff.js';
 import { buildCloudRouter } from './api/cloud.js';
 import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
 import { getEmailProvider } from './lib/email/index.js';
@@ -244,6 +246,17 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     }));
 
     app.use(buildAuthRefreshRouter({ secret: config.auth.gatewaySecret }));
+
+    // 桌面同步盘：session cookie → 长效设备 JWT（复用 sessionMw）
+    app.use(buildDeviceTokenRouter({ sessionMw, secret: config.auth.gatewaySecret }));
+    // 桌面「系统浏览器走 OAuth」第二跳：设备 JWT → 一次性码 → home 窗口 WebView 种 session cookie
+    app.use(buildSessionHandoffRouter({
+      deviceTokenSecret: config.auth.gatewaySecret,
+      sessionSecret: config.session.secret,
+      cookieName: config.session.cookieName,
+      ttlHours: config.session.ttlHours,
+      frontendBaseUrl: config.auth.frontendBaseUrl,
+    }));
 
     // P2: cloud data plane (SAS / list / download)
     // Only wire when cloud config is populated (otherwise local-dev without Azure creds would crash).

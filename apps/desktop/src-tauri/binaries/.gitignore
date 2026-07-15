@@ -1,0 +1,4 @@
+# rclone sidecar 二进制不进 git（决策③）。CI/开发前跑 scripts/fetch-rclone.sh 下载。
+rclone-*
+*.exe
+!.gitignore

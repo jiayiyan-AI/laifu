@@ -3,6 +3,8 @@ import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import type { OAuthProvider } from '../../src/auth/providers/types.js';
+import { signSession } from '../../src/auth/session.js';
+import { redeemHandoffCode } from '../../src/auth/desktop-handoff.js';
 
 vi.mock('../../src/db/index.js', async () => {
   const { mockDaoModule } = await import('../helpers/mock-dao.js');
@@ -17,6 +19,7 @@ const COOKIE_NAME = 'lingxi_sid';
 const STATE_COOKIE = 'lingxi_oauth_state';
 const PUBLIC_BASE = 'http://localhost:9000';
 const FRONTEND_BASE = 'http://localhost:3000';
+const DESKTOP_COOKIE = 'lingxi_oauth_desktop';
 
 const makeMockProvider = (): OAuthProvider => ({
   buildAuthUrl: vi.fn((state, redirectUri) =>
@@ -148,6 +151,124 @@ describe('oauth-router', () => {
         .query({ code: 'c', state: 'A' })
         .set('Cookie', `${STATE_COOKIE}=A`);
       expect(res.status).toBe(502);
+    });
+  });
+
+  describe('desktop system-browser OAuth (?client=desktop)', () => {
+    it('start sets desktop cookie (channel value) alongside state cookie', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const res = await request(app).get('/api/auth/mock/start').query({ client: 'desktop', channel: 'canary' });
+      expect(res.status).toBe(302);
+      const setCookies = res.headers['set-cookie'] as unknown as string[];
+      expect(setCookies.some((c) => c.startsWith(`${STATE_COOKIE}=`))).toBe(true);
+      expect(setCookies.some((c) => c.startsWith(`${DESKTOP_COOKIE}=canary`))).toBe(true);
+    });
+
+    it('start with ?client=desktop but no/invalid channel falls back to stable', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const res = await request(app).get('/api/auth/mock/start').query({ client: 'desktop' });
+      const setCookies = res.headers['set-cookie'] as unknown as string[];
+      expect(setCookies.some((c) => c.startsWith(`${DESKTOP_COOKIE}=stable`))).toBe(true);
+    });
+
+    it('start without ?client=desktop does not set desktop cookie', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const res = await request(app).get('/api/auth/mock/start');
+      const setCookies = res.headers['set-cookie'] as unknown as string[];
+      expect(setCookies.some((c) => c.startsWith(`${DESKTOP_COOKIE}=`))).toBe(false);
+    });
+
+    it('callback redirects to frontend bridge page with a handoff code, no session cookie', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const state = 'STATE_XYZ';
+      const res = await request(app)
+        .get('/api/auth/mock/callback')
+        .query({ code: 'the_code', state })
+        .set('Cookie', [`${STATE_COOKIE}=${state}`, `${DESKTOP_COOKIE}=1`]);
+
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toMatch(new RegExp(`^${FRONTEND_BASE}/desktop-oauth-complete\\?code=[a-f0-9]+&channel=stable$`));
+      expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(false);
+      const setCookies = res.headers['set-cookie'] as unknown as string[];
+      expect(setCookies.some((c) => c.startsWith(`${DESKTOP_COOKIE}=;`))).toBe(true);
+    });
+
+    it.each(['dev', 'canary'] as const)('callback preserves the %s desktop channel', async (channel) => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const state = `STATE_${channel}`;
+      const res = await request(app)
+        .get('/api/auth/mock/callback')
+        .query({ code: 'the_code', state })
+        .set('Cookie', [`${STATE_COOKIE}=${state}`, `${DESKTOP_COOKIE}=${channel}`]);
+
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toMatch(
+        new RegExp(`^${FRONTEND_BASE}/desktop-oauth-complete\\?code=[a-f0-9]+&channel=${channel}$`),
+      );
+      expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(false);
+    });
+
+    it('callback ignores a malformed desktop cookie and completes normal web OAuth', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const state = 'STATE_MALFORMED_DESKTOP_COOKIE';
+      const res = await request(app)
+        .get('/api/auth/mock/callback')
+        .query({ code: 'the_code', state })
+        .set('Cookie', [`${STATE_COOKIE}=${state}`, `${DESKTOP_COOKIE}=unexpected`]);
+
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toBe(`${FRONTEND_BASE}/desktop`);
+      expect(res.headers['set-cookie']?.some((c: string) => c.startsWith(`${COOKIE_NAME}=`))).toBe(true);
+    });
+
+    it('reuses an existing valid session cookie: skips Google entirely, mints handoff code directly', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const existingSession = signSession({ user_id: 'u_already_logged_in' }, SECRET, 24);
+
+      const res = await request(app)
+        .get('/api/auth/mock/start')
+        .query({ client: 'desktop', channel: 'canary' })
+        .set('Cookie', `${COOKIE_NAME}=${existingSession}`);
+
+      expect(res.status).toBe(302);
+      expect(provider.buildAuthUrl).not.toHaveBeenCalled();
+      const match = res.headers['location']!.match(/\/desktop-oauth-complete\?code=([a-f0-9]+)&channel=canary$/);
+      expect(match).not.toBeNull();
+      expect(redeemHandoffCode(match![1]!)).toBe('u_already_logged_in');
+    });
+
+    it('falls back to normal OAuth flow when the session cookie is invalid/expired', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+
+      const res = await request(app)
+        .get('/api/auth/mock/start')
+        .query({ client: 'desktop' })
+        .set('Cookie', `${COOKIE_NAME}=not.a.valid.jwt`);
+
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toContain('mock.example/authorize');
+      expect(provider.buildAuthUrl).toHaveBeenCalled();
+    });
+
+    it('normal (non-desktop) start ignores any existing session cookie — always goes to Google', async () => {
+      const provider = makeMockProvider();
+      const app = makeApp({ mock: provider });
+      const existingSession = signSession({ user_id: 'u_already_logged_in' }, SECRET, 24);
+
+      const res = await request(app)
+        .get('/api/auth/mock/start')
+        .set('Cookie', `${COOKIE_NAME}=${existingSession}`);
+
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toContain('mock.example/authorize');
     });
   });
 });

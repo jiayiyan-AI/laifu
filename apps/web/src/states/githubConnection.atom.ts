@@ -1,4 +1,4 @@
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 import { getGithubConnection } from '../lib/api.js';
 import type { GithubConnectionResponse } from '@lingxi/shared';
 

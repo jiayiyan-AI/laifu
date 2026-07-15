@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { dao } from '../db/index.js';
 import {
-  signLaifuUserToken,
+  signLaifuUserTokenWithExpiry,
   verifyLaifuUserToken,
   TokenExpiredError,
   TokenInvalidError,
@@ -10,7 +10,6 @@ import {
 import type { RefreshTokenResponse } from '@lingxi/shared';
 
 const GRACE_DAYS = 7;
-const LIFETIME_SECONDS = 90 * 24 * 3600;
 
 export interface AuthRefreshDeps {
   secret: string;
@@ -86,12 +85,11 @@ export const buildAuthRefreshRouter = (deps: AuthRefreshDeps): RouterType => {
       return;
     }
 
-    const newToken = signLaifuUserToken({
+    const { token: newToken, expiresAt } = signLaifuUserTokenWithExpiry({
       userId,
       tokenVersion: currentVersion,
       secret: deps.secret,
     });
-    const expiresAt = new Date((Math.floor(Date.now() / 1000) + LIFETIME_SECONDS) * 1000).toISOString();
     const body: RefreshTokenResponse = { token: newToken, expires_at: expiresAt };
     res.json(body);
   });

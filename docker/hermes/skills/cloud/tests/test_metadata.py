@@ -87,6 +87,16 @@ class TestBuildMetadata:
         meta = build_metadata(title='T', published_at=ts)
         assert meta['published_at'] == ts
 
+    def test_mtime_equals_published_at(self):
+        # rclone 兼容 mtime（§10.4）：与 published_at 同源，rclone in 格式 = time.RFC3339 可解析。
+        ts = '2026-06-01T10:00:00+00:00'
+        meta = build_metadata(title='T', published_at=ts)
+        assert meta['mtime'] == ts
+
+    def test_mtime_present_by_default(self):
+        meta = build_metadata(title='T')
+        assert meta['mtime'] == meta['published_at']
+
     def test_metadata_too_large_raises_value_error(self):
         # Build a title that, when base64'd, blows past 8 KB
         big_title = 'x' * MAX_METADATA_BYTES

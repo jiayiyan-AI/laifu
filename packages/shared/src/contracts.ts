@@ -333,6 +333,26 @@ export interface RefreshTokenResponse {
 }
 
 /**
+ * 设备令牌端点 (POST /api/auth/device-token)。
+ * 桌面同步盘客户端用 session cookie 换取长效设备 JWT（与容器 JWT 同密钥/同 shape）。
+ * 鉴权靠 session cookie（requireSession）；后续续期直接复用 POST /api/auth/refresh-token。
+ */
+export interface DeviceTokenResponse {
+  token: string;             // 新签设备 JWT (90d exp)
+  expires_at: string;        // ISO-8601, exp 字段的人可读形式
+}
+
+/**
+ * 一次性交接码端点 (POST /api/auth/session-code)。
+ * 桌面 app 拿设备 JWT（Bearer）换一个短命一次性码，用来让内嵌 WebView 的 `home` 窗口
+ * 导航到 `GET /api/auth/session-from-code?code=...` 种上 httpOnly session cookie
+ * （见 auth/desktop-handoff.ts、api/session-handoff.ts）。
+ */
+export interface SessionCodeResponse {
+  code: string;
+}
+
+/**
  * 容器启动时拉运行期配置 (GET /api/me/runtime-config)。
  * 由 docker/hermes/scripts/pull-runtime-config.ts 调用,渲染 ~/.hermes/config.yaml。
  *

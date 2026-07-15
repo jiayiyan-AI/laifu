@@ -1,4 +1,4 @@
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 import * as api from '../lib/api.js';
 
 export interface EntitlementsData {

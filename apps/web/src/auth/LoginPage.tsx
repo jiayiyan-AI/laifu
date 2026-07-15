@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { isTauri, invoke } from '@tauri-apps/api/core';
 import { MIN_PASSWORD_LENGTH } from '@lingxi/shared';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
@@ -35,9 +36,17 @@ export const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  function goToDesktop(): void {
+    if (isTauri()) {
+      // 同步盘登录窗依赖一次真实导航到 /desktop 让 native 层读取 session cookie。
+      window.location.replace('/desktop');
+      return;
+    }
+    nav('/desktop', { replace: true });
+  }
 
   if (state.status === 'authenticated') {
-    nav('/desktop', { replace: true });
+    goToDesktop();
     return null;
   }
 
@@ -57,7 +66,7 @@ export const LoginPage = () => {
         await api.register({ email, password });
       }
       await actions.refresh();
-      nav('/desktop', { replace: true });
+      goToDesktop();
     } catch (e) {
       console.error('[LoginPage] auth failed:', e);
       setError(authErrorMessage(e, mode));
@@ -132,18 +141,29 @@ export const LoginPage = () => {
           <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
         </div>
 
-        <a
-          href="/api/auth/google/start"
+        <button
+          type="button"
+          onClick={() => {
+            // Google 禁止在内嵌 WebView 里走 OAuth 授权（会报 "This browser or app
+            // may not be secure"）。桌面 app 里改走系统默认浏览器，完成后经 deep link
+            // （`laifu://auth-callback`）回到 app（见 src-tauri/app/auth_commands.rs open_oauth_in_browser /
+            // complete_desktop_oauth）；普通浏览器仍走同页跳转。
+            if (isTauri()) {
+              void invoke('open_oauth_in_browser', { provider: 'google' });
+            } else {
+              window.location.href = '/api/auth/google/start';
+            }
+          }}
           className="btn"
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
             width: '100%', padding: 11, fontSize: 14, fontWeight: 600,
             border: '1px solid var(--border)', background: '#fff', color: '#1b1c20',
-            borderRadius: 10, textDecoration: 'none',
+            borderRadius: 10, cursor: 'pointer',
           }}
         >
           <GoogleIcon /> 使用 Google 登录
-        </a>
+        </button>
       </div>
     </div>
   );

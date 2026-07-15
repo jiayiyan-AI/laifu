@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 import { getMyWechatBind, getMyFeishuBind } from '../lib/api.js';
 import type { IMProviderId } from '../apps/im/providers.js';
 

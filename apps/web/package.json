@@ -12,7 +12,9 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@lingxi/atom": "workspace:*",
     "@lingxi/shared": "workspace:*",
+    "@tauri-apps/api": "^2.11.1",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

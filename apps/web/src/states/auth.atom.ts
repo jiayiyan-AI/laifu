@@ -1,4 +1,4 @@
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 import type { AuthMeResponse } from '@lingxi/shared';
 import * as api from '../lib/api.js';
 

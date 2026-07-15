@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "来福 Dev",
+  "mainBinaryName": "Laifu Dev",
+  "identifier": "com.lingxi.desktop.dev",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["laifu-dev"]
+      }
+    }
+  }
+}

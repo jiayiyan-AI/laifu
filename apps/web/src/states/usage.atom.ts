@@ -1,4 +1,4 @@
-import { atom } from '../atom/index.js';
+import { atom } from '@lingxi/atom'
 
 export interface UsageData {
   used_cny_month: number;
