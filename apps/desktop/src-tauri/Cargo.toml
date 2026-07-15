@@ -38,6 +38,7 @@ tauri-plugin-dialog = { version = "2", optional = true }
 # 系统浏览器打开 OAuth 链接（Google 禁止内嵌 WebView 走 OAuth）+ deep link 收 `laifu://auth-callback`。
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true, features = ["deep-link"] }
 # 跨平台系统 home 目录解析（macOS `/Users/x` vs Windows `C:\Users\x`），本地数据统一收拢到 `~/.laifu/`。
 dirs = { version = "6", optional = true }
 
@@ -52,6 +53,7 @@ app = [
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-deep-link",
     "dep:tauri-build",
+    "dep:tauri-plugin-single-instance",
     "dep:dirs",
 ]
 

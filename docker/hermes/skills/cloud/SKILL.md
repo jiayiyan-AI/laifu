@@ -1,6 +1,6 @@
 ---
-name: cloud-file
-description: 管理用户的 laifu 云盘(列出/下载/上传)。当用户说"保存到云盘/发布成果"→ cloud-file put;当用户说"用我上传的文件/云盘里的 X 文件"→ 先 cloud-file ls 看有哪些,再 cloud-file get 下载。
+name: cloud
+description: 管理用户的 laifu 云盘（列出/下载/上传）。用户本机自动同步的文件位于 sync/：用户说“同步盘里的文件”时在 sync/ 查找；要让交付物自动出现在用户电脑时上传到 sync/。其他路径仍可正常读写，仅不自动同步。
 version: 0.1.0
 platforms: [linux]
 metadata:
@@ -10,12 +10,33 @@ metadata:
 
 # cloud-file
 
-一个统一的云盘文件工具,三个子命令:`ls`(列出)、`get`(下载)、`put`(上传/发布)。
+当前 skill 安装后已经自动注册了 `cloud-file` 命令行工具,可在 shell 中直接使用。有三个子命令:`ls`(列出)、`get`(下载)、`put`(上传/发布)。
 
 ## 何时使用
 
 - "把成果/报告/图片保存到云盘""发布到云端" → `cloud-file put`
 - "用我刚上传的文件""云盘里的 data.csv""我传了个文件给你处理" → 先 `cloud-file ls`,再 `cloud-file get`
+
+## `sync/` 自动同步约定（重要）
+
+云盘是 Agent 的完整工作区，`sync/` 只是其中一个有特殊产品语义的子目录，**不是权限边界**：你仍可读取和写入任意合法虚拟路径。
+
+- 用户在桌面同步盘本地新增或修改的文件，会自动上行到 `sync/`。当用户说“我放在同步盘/电脑同步目录里的文件”时，先用 `cloud-file ls sync/` 查找，再以 `sync/...` 路径 `get`。
+- 要让用户在电脑本地同步目录自动看到交付物，必须 `put` 到 `sync/...`。上传成功后才能说“已同步到你的电脑”。
+- 需要交付给用户查看的文件，应该写入 `sync/` 目录中，否则用户将难以查看到。
+- `reports/`、`internal/` 或根目录等其他路径可用于云端保留的数据、工作中间产物和未来业务数据；它们不会自动下载到用户设备，不能声称已同步到本地。
+
+```bash
+# 用户说“我放到同步盘里的 input.xlsx”
+cloud-file ls sync/
+cloud-file get sync/input.xlsx -o /home/hermes/work/input.xlsx
+
+# 让用户在电脑同步目录自动收到交付物
+cloud-file put /home/hermes/output/report.pdf sync/report.pdf --title "分析报告"
+
+# 仅供云端业务使用；允许读写，但不会自动同步到 desktop
+cloud-file put /tmp/intermediate.json internal/job-123/intermediate.json
+```
 
 ## 用法
 
