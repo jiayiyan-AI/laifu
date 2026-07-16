@@ -56,7 +56,7 @@ export const config = {
     // ⚠️ 镜像版本写死在代码里 (不走 env), 因为改 tag 本就必须连带部署 gateway 才能触发 reconcile
     //   (gateway 启动算 policyHashFor 才会拉齐存量用户)。写死 → 进 git 可 review/revert、零跨文件漂移。
     //   bump 镜像: 改这一行 hermes:vN (单调递增, 禁用 :latest) + 部署 gateway。详见 dynamic-update-aca.md §5.2。
-    hermesImageTag: 'hermes:v23',
+    hermesImageTag: 'hermes:v24',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
