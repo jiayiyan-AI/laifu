@@ -31,7 +31,7 @@ thiserror = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # --- app feature：系统集成实现（默认不编译）---
-tauri = { version = "2", optional = true , features = ["tray-icon"] }
+tauri = { version = "2", optional = true, features = ["tray-icon", "macos-private-api"] }
 keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service"] }
 notify = { version = "6", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }

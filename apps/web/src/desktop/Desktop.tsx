@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import type { ReactNode } from 'react';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { Menubar } from './Menubar.js';
@@ -15,6 +16,8 @@ import { entitlementsAtom } from '../states/entitlements.atom.js';
 import { CAPABILITIES } from '../lib/capabilities.js';
 import { useAssistantName, DEFAULT_ASSISTANT_NAME } from '../states/assistant.atom.js';
 import { ToastHost } from './ToastHost.js';
+import { showSettingsWindowFromHome } from '../lib/desktop-bridge.js';
+import { useToast } from '../states/toast.atom.js';
 
 type AppId = DockAppId | 'im';
 
@@ -36,6 +39,7 @@ const titles: Record<AppId, { title: string; icon: ReactNode; w: number; h: numb
 export const Desktop = () => {
   const [{ observed }] = entitlementsAtom.use();
   const assistantName = useAssistantName();
+  const toast = useToast();
   const [ready, setReady] = useState<boolean | null>(null);
   const [openApps, setOpenApps] = useState<AppId[]>([]);
   // 置顶用 zIndex map, 不重排数组: 重排会让 React 移动 DOM 节点, 触发 .fade 入场动画重放 → 焦点闪烁。
@@ -54,6 +58,12 @@ export const Desktop = () => {
   };
   const closeApp = (id: AppId) => setOpenApps((s) => s.filter((x) => x !== id));
   const focusApp = (id: AppId) => bringToFront(id);
+
+  function showSettings(): void {
+    void showSettingsWindowFromHome().catch((error: unknown) => {
+      toast(`无法打开设置：${String(error)}`, 'error');
+    });
+  }
 
   useEffect(() => {
     void (async () => {
@@ -114,7 +124,12 @@ export const Desktop = () => {
           );
         })}
       </div>
-      <Dock onOpen={openApp} openApps={new Set(openApps)} entitlements={observed} />
+      <Dock
+        onOpen={openApp}
+        onShowSettings={isTauri() ? showSettings : undefined}
+        openApps={new Set(openApps)}
+        entitlements={observed}
+      />
     </div>
   );
 };

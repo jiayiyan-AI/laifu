@@ -1,4 +1,4 @@
-//! rclone bisync 编排（文档 §11.6）。
+//! rclone bisync 编排。
 //!
 //! 命令行**构造**与退出码**判定**是纯逻辑（可测）；实际子进程 spawn / stdout 解析
 //! 在 app 层用 `tokio::process` 驱动。分离让命令拼装与结果分类脱离 IO 可单测。
@@ -18,7 +18,7 @@ pub struct BisyncPlan {
     pub local: String,
     /// rclone 配置文件路径（含 sas_url 的 remote 定义）。
     pub config_path: String,
-    /// 首次运行需 `--resync` 建立基线；之后省略（文档 §11.6 步骤 2）。
+    /// 首次运行需 `--resync` 建立基线；之后省略。
     pub first_run: bool,
     /// 仅由 [`run_sync_once`] 在确认 "all files were changed" 属误报后置位，
     /// 用于单次重跑；[`BisyncPlan::new`] 永远产出 `false`。
@@ -50,9 +50,9 @@ impl BisyncPlan {
 
     /// 构造完整 rclone 参数向量（不含 `rclone` 二进制本身）。
     ///
-    /// set-and-forget 组合（官方推荐，文档 §132/343）：
+    /// 推荐组合：
     /// `--resilient --recover --max-lock 2m --conflict-resolve newer --compare size,modtime`。
-    /// 删除安全（§11.7）：`--max-delete 50`（bisync 语义下裸数字即百分比，默认 50%；显式写出以自证意图。注意非 `50%`——`%` 会被 rclone CLI 的 int 解析拒绝并 fatal）。
+    /// 删除安全：`--max-delete 50`（bisync 语义下裸数字即百分比，默认 50%；显式写出以自证意图。注意非 `50%`——`%` 会被 rclone CLI 的 int 解析拒绝并 fatal）。
     ///
     /// `-v` + `--color NEVER` 是 [`classify`] 的**硬依赖**，不是调试便利：
     /// delta 摘要行（`Path2: 1 changes: 0 new, 1 modified, 0 deleted`）在 rclone 里是
@@ -190,7 +190,7 @@ fn parse_delta_summary(stderr: &str, side: &str) -> Option<DeltaSummary> {
     })
 }
 
-/// bisync 退出后的分类（文档 §11.6 步骤 5）。
+/// bisync 退出后的分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BisyncOutcome {
     /// 退出码 0：成功。
@@ -267,7 +267,7 @@ pub async fn run_bisync(
     Ok(classify(code, &stderr))
 }
 
-/// 单次同步编排决策（文档 §11.6 步骤 5 的 403 重试语义）：
+/// 单次同步编排决策：403 后刷新 SAS 并重试。
 ///
 /// 跑一次 bisync，按结果最多重跑一次：
 ///

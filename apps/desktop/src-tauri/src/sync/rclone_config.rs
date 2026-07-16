@@ -1,10 +1,10 @@
-//! 生成 rclone 配置（文档 §11.5 尾 / §11.6）。
+//! 生成 rclone 配置。
 //!
 //! rclone `azureblob` remote 用 `sas_url` 鉴权。每次 SAS 刷新后重写此配置文件的
 //! `sas_url` 行。配置只含 `sas_url`（不含账户密钥），符合"密钥永不出 gateway"。
 //!
 //! sas_url 取 `CloudWriteSas::rclone_sas_url()`（container 级 URL；rclone 会 strip
-//! container 名重建 endpoint，sr=d/sdd/sig 保真——见设计文档 §九源码结论）。
+//! container 名重建 endpoint，且保留 `sr=d`、`sdd=1` 与签名；详见 `docs/desktop-app.md` 的同步协议）。
 
 use crate::contracts::CloudWriteSas;
 

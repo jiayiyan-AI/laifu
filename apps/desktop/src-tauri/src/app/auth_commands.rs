@@ -31,7 +31,7 @@ fn session_cookie_name() -> String {
     std::env::var("LINGXI_SESSION_COOKIE").unwrap_or_else(|_| "lingxi_sid".to_string())
 }
 
-/// 打开登录 webview（文档 §11.4）。
+/// 打开登录 webview。
 ///
 /// （wry WKWebView 后端保留 httpOnly 标记）。已登录首页会直接读 cookie 换设备 JWT；
 /// 否则建登录 webview，待其真实导航命中 `/desktop` 后读取 cookie 并换 token。全流程

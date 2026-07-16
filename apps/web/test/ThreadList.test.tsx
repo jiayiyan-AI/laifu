@@ -34,7 +34,7 @@ describe('ThreadList', () => {
     await user.click(await screen.findByRole('button', { name: /新对话/ }));
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith('thr_new'));
   });
-  it('delete button confirms, calls api.deleteThread, and clears selection', async () => {
+  it('delete button opens a confirmation dialog, then deletes and clears selection', async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     const fetchSpy = vi.spyOn(global, 'fetch')
@@ -51,14 +51,17 @@ describe('ThreadList', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({
         threads: [{ id: 'thr_2', title: 'B', updated_at: '2026-05-30T09:00:00Z', archived: false }],
       })));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     render(<ThreadList selected="thr_1" onSelect={onSelect} />);
+
     const btn = await screen.findByRole('button', { name: /删除对话 A/ });
     await user.click(btn);
 
+    expect(screen.getByRole('dialog', { name: '删除「A」？' })).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: '确认删除' }));
+
     await waitFor(() => {
-      expect(confirmSpy).toHaveBeenCalled();
       // DELETE call shape
       const deleteCall = fetchSpy.mock.calls.find(
         ([url, init]) => typeof url === 'string' && url === '/api/threads/thr_1' && (init as RequestInit | undefined)?.method === 'DELETE',
@@ -69,19 +72,19 @@ describe('ThreadList', () => {
     });
   });
 
-  it('delete button does nothing when user cancels confirm', async () => {
+  it('canceling the confirmation does not delete the thread', async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       threads: [{ id: 'thr_1', title: 'A', updated_at: '2026-05-30T10:00:00Z', archived: false }],
     })));
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
-
     render(<ThreadList selected="thr_1" onSelect={onSelect} />);
+
     const btn = await screen.findByRole('button', { name: /删除对话 A/ });
     await user.click(btn);
-    // 仅初始 list 一次 fetch, 没有 DELETE
-    expect(fetchSpy.mock.calls.every(([, init]) => (init as RequestInit | undefined)?.method !== 'DELETE')).toBe(true);
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
   });
 });

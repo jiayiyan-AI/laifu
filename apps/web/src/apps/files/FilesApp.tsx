@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ChangeEvent, type DragEvent } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import * as api from '../../lib/api.js';
 import type { FolderItem, FileItem } from './types.js';
 import { isPreviewable } from './utils.js';
@@ -7,8 +8,11 @@ import { Sidebar } from './Sidebar.js';
 import { FileList } from './FileList.js';
 import { Preview } from './Preview.js';
 import { UploadController, type UploadHandle } from './UploadController.js';
+import { showSyncFlyoutFromHome } from '../../lib/desktop-bridge.js';
+import { useToast } from '../../states/toast.atom.js';
 
 export const FilesApp = () => {
+  const toast = useToast();
   const [currentPath, setCurrentPath] = useState('');
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -107,6 +111,12 @@ export const FilesApp = () => {
     if (list.length) uploaderRef.current?.uploadFiles(list);
   };
 
+  function showSyncFlyout(): void {
+    void showSyncFlyoutFromHome().catch((error: unknown) => {
+      toast(`无法打开同步状态：${String(error)}`, 'error');
+    });
+  }
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={onFileInputChange} data-testid="file-input" />
@@ -119,6 +129,7 @@ export const FilesApp = () => {
         onUploadClick={onUploadClick}
         onPreview={onPreview}
         onDownload={onDownload}
+        onShowSyncFlyout={isTauri() ? showSyncFlyout : undefined}
       />
       <div
         style={{ flex: 1, display: 'flex', outline: dragOver ? '2px dashed var(--accent,#08f)' : 'none', outlineOffset: -4 }}

@@ -1,4 +1,4 @@
-//! JWT 续期守护逻辑（文档 §11.4）。
+//! JWT 续期守护逻辑。
 //!
 //! 设备 JWT 90 天有效 + 7 天宽限（gateway `auth-refresh.ts`：`LIFETIME_SECONDS=90d`,
 //! `GRACE_DAYS=7`）。只要宽限期内开过一次就能无限续。本模块提供**纯判定**：
@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 
-/// exp 前多少天进入"该续期"窗口。文档 §11.4：exp 前 7 天内每次启动都续。
+/// exp 前多少天进入续期窗口；exp 前 7 天内每次启动都续。
 pub const REFRESH_BEFORE_EXPIRY_DAYS: i64 = 7;
 /// 宽限天数，与 gateway `auth-refresh.ts` `GRACE_DAYS` 对齐。超过则续期端点也会 401。
 pub const GRACE_DAYS: i64 = 7;

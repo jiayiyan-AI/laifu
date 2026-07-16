@@ -56,6 +56,20 @@ pub fn save_one(config_dir: &Path, label: &str, geometry: WindowGeometry) -> std
     std::fs::rename(&tmp_path, &final_path)
 }
 
+/// 删除一个已废弃窗口的几何记录，保留其它窗口数据。
+pub fn remove_one(config_dir: &Path, label: &str) -> std::io::Result<()> {
+    let mut map = load(config_dir);
+    if map.remove(label).is_none() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(config_dir)?;
+    let json = serde_json::to_vec_pretty(&map).map_err(std::io::Error::other)?;
+    let final_path = state_path(config_dir);
+    let tmp_path = final_path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, json)?;
+    std::fs::rename(&tmp_path, &final_path)
+}
+
 /// 判断存档几何是否至少部分落在当前显示器范围内。
 ///
 /// 多显示器场景：存档时窗口在副屏，之后拔掉副屏（或换了台没有那块屏幕的机器）重开——
@@ -107,6 +121,20 @@ mod tests {
         save_one(dir.path(), "sync", geo(720, 520, 5, 5)).unwrap();
         assert_eq!(load_one(dir.path(), "home"), Some(geo(1280, 800, 0, 0)));
         assert_eq!(load_one(dir.path(), "sync"), Some(geo(720, 520, 5, 5)));
+    }
+
+    #[test]
+    fn remove_one_only_deletes_requested_window() {
+        let dir = tempfile::tempdir().unwrap();
+        save_one(dir.path(), "home", geo(1280, 800, 0, 0)).unwrap();
+        save_one(dir.path(), "sync", geo(720, 520, 5, 5)).unwrap();
+        save_one(dir.path(), "settings", geo(720, 520, 10, 10)).unwrap();
+
+        remove_one(dir.path(), "sync").unwrap();
+
+        assert_eq!(load_one(dir.path(), "sync"), None);
+        assert_eq!(load_one(dir.path(), "home"), Some(geo(1280, 800, 0, 0)));
+        assert_eq!(load_one(dir.path(), "settings"), Some(geo(720, 520, 10, 10)));
     }
 
     #[test]

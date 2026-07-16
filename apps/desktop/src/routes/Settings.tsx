@@ -1,6 +1,5 @@
 import { useState, type MouseEvent, type ReactElement } from 'react';
 import { FolderInput, FolderOpen, Loader2, LogOut, TriangleAlert } from 'lucide-react';
-import { useNavigate } from 'react-router';
 import { settingsAtom } from '@/state/settings.atom';
 import { authAtom } from '@/state/auth.atom';
 import {
@@ -36,13 +35,11 @@ function dialogCopy(isMove: boolean, hasSyncDirectory: boolean): DialogCopy {
 export function Settings(): ReactElement {
   const [settings, actions] = settingsAtom.use();
   const authActions = authAtom.useChange();
-  const navigate = useNavigate();
   const [pending, setPending] = useState<PendingDirectoryOperation | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
 
   async function handleLogout(): Promise<void> {
     await authActions.logout();
-    navigate('/login', { replace: true });
   }
 
   async function chooseEmptyDirectory(): Promise<void> {
@@ -85,7 +82,7 @@ export function Settings(): ReactElement {
     <>
       <Card>
         <CardHeader>
-          <CardTitle>设置</CardTitle>
+          <CardTitle>同步盘</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">

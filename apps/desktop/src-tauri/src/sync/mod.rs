@@ -1,4 +1,4 @@
-//! 同步引擎子系统（文档 §11.6）。
+//! 同步引擎子系统。
 //!
 //! - `rclone_config`：生成 rclone `azureblob` remote 配置（含 sas_url）。纯字符串逻辑，可测。
 //! - `engine`：构造 `rclone bisync` 命令行 + 解析退出码。命令构造纯逻辑可测；

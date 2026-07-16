@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-show-sync-flyout-from-home"
+description = "允许远程 home 页面仅在 tray 图标下方切换同步状态面板。"
+commands.allow = ["show_sync_flyout_from_home"]

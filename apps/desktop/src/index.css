@@ -89,3 +89,15 @@
       "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   }
 }
+
+html.flyout-surface,
+html.flyout-surface body {
+  background: transparent;
+}
+
+html.flyout-surface #root {
+  min-height: 100vh;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--background);
+}

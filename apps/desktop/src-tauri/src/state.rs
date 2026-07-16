@@ -1,4 +1,4 @@
-//! 应用状态机（文档 §11.1）。
+//! 应用认证与同步状态机。
 //!
 //! `Unauthed` → 登录拿 session → 换 device JWT → `Authed`。
 //! `Authed` 下常驻 JWT 续期 / SAS 刷新 / sync 编排三个 task（在 app 层起）。
@@ -47,7 +47,7 @@ impl AuthState {
     }
 }
 
-/// 同步运行态（供 UI 展示，文档 §11 SyncStatus 视图）。
+/// 同步运行态，供 UI 展示。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum SyncState {
     /// 空闲，等待触发。
@@ -61,7 +61,7 @@ pub enum SyncState {
     NeedsAttention(String),
 }
 
-/// 触发去抖状态（文档 §11.6 并发保护）：同一时刻只允许一个 bisync，
+/// 同步触发去抖：同一时刻只允许一个 bisync，
 /// 运行中收到新触发 → 标 dirty，跑完补一次。
 #[derive(Debug, Clone, Default)]
 pub struct TriggerGate {

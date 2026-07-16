@@ -19,7 +19,7 @@ use crate::sync::{poller, rclone_config};
 
 use super::core::{config_dir, AppCore, SyncControl};
 
-/// JWT 续期守护（文档 §11.4）：每 24h 检查一次，进入续期窗口则调 refresh-token。
+/// JWT 续期守护：每 24h 检查一次，进入续期窗口则调 refresh-token。
 /// 续期 401（token_version 被 bump/超宽限）→ 清凭据回 Unauthed。
 pub(super) async fn spawn_refresh_guard(core: Arc<AppCore>) {
     loop {
@@ -56,7 +56,7 @@ pub(super) async fn spawn_refresh_guard(core: Arc<AppCore>) {
     }
 }
 
-/// SAS 刷新 + sync 编排常驻 task（文档 §9 同步引擎）。
+/// SAS 刷新与同步编排常驻 task。
 ///
 /// **监督者**：订阅 `sync_dir` watch 通道。等到 Authed 且已配置目录后起一轮同步会话；
 /// 用户在 Settings 换目录时，watch 变更让当前会话优雅收尾（旧 watcher/poller 停），

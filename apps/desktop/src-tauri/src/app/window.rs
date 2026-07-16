@@ -7,19 +7,18 @@ use super::core::config_dir;
 /// 登录窗口 label，供 on_navigation 回调用 `get_webview_window` 取回。
 pub(super) const LOGIN_WINDOW: &str = "login";
 
-/// 首页窗口 label：桌面 app 启动即展示的 web 首页（虚拟桌面等业务 UI，走自己的
-/// httpOnly session cookie 鉴权，与同步盘的 device JWT 完全独立）。
+/// 首页窗口 label：桌面 app 启动即展示的远程 web 首页（虚拟桌面等业务 UI）。
 pub(super) const HOME_WINDOW: &str = "home";
 
-/// 同步盘窗口 label：原生 Login/Sync/Settings 壳（现有 dist 前端）。不再是启动默认视图，
-/// 经系统菜单「同步盘 → 打开同步盘」按需唤出。
-pub(super) const SYNC_WINDOW: &str = "sync";
+/// 设置窗口 label：桌面壳的持久化配置 surface。
+pub(super) const SETTINGS_WINDOW: &str = "settings";
 
-/// 挂"后台常驻"行为：`home`/`sync` 这两个主窗口点红色关闭按钮时不应退出整个 app
-/// （同步编排还要在后台跑），改为拦截 `CloseRequested`——阻止真正销毁窗口，先把当前
-/// `inner_size`/`outer_position` 落盘（`~/.laifu/window_state.json`，下次建同 label
-/// 窗口据此恢复），再 `hide()`。真正退出只能走托盘菜单「退出」（`app.exit(0)`），那里
-/// 走的是进程级 `RunEvent::ExitRequested`，不经过这个逐窗口的 `CloseRequested`。
+/// 状态面板 label：由 tray 或云盘工具栏触发的短生命周期 flyout。
+pub(super) const FLYOUT_WINDOW: &str = "flyout";
+
+/// 挂"后台常驻"行为：`home`/`settings` 两个主窗口点关闭按钮时不应退出整个 app。
+/// 拦截 `CloseRequested`，保存最终几何后隐藏。真正退出只能走托盘菜单「退出」（`app.exit(0)`），
+/// 那里走的是进程级 `RunEvent::ExitRequested`，不经过这个逐窗口的 `CloseRequested`。
 ///
 /// 只在 `CloseRequested` 这一刻查询几何再落盘，不必额外挂 `Resized`/`Moved`——足够覆盖
 /// "关闭前的最终大小/位置"，且窗口隐藏后不会被用户拖拽。

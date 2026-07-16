@@ -9,9 +9,10 @@ interface Props {
   onUploadClick: () => void;
   onPreview: () => void;
   onDownload: () => void;
+  onShowSyncFlyout?: () => void;
 }
 
-export const PathBar = ({ currentPath, selectedCount, canPreview, onNavigate, onRefresh, onUploadClick, onPreview, onDownload }: Props) => {
+export const PathBar = ({ currentPath, selectedCount, canPreview, onNavigate, onRefresh, onUploadClick, onPreview, onDownload, onShowSyncFlyout }: Props) => {
   const segments = currentPath.split('/').filter(Boolean);
   return (
     <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
@@ -43,6 +44,11 @@ export const PathBar = ({ currentPath, selectedCount, canPreview, onNavigate, on
         <button className="btn" onClick={onDownload} style={{ marginRight: 8 }}>下载{selectedCount > 1 ? `(${selectedCount})` : ''}</button>
       )}
       <button className="btn" onClick={onUploadClick} style={{ marginRight: 8 }}>上传</button>
+      {onShowSyncFlyout && (
+        <button className="btn" onClick={onShowSyncFlyout} style={{ marginRight: 8 }}>
+          同步状态
+        </button>
+      )}
       <button
         title="刷新"
         onClick={onRefresh}

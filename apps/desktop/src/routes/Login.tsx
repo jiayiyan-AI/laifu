@@ -10,7 +10,7 @@ export function Login() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (auth.phase === 'authed') navigate('/sync', { replace: true });
+    if (auth.phase === 'authed') navigate('/flyout', { replace: true });
   }, [auth.phase, navigate]);
 
   return (
