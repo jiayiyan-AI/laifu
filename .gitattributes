@@ -1,0 +1,23 @@
+# 行尾一律 LF —— 不要改成 CRLF 或删掉本文件。
+#
+# 为什么必须有: Windows 上 core.autocrlf=true (Git for Windows 默认) 会在 checkout
+# 时把 LF 转成 CRLF。带 shebang 的文件被 COPY 进 Linux 容器后, 首行变成
+# '#!/bin/bash\r', 内核就去找名为 '/bin/bash\r' 的解释器 —— 找不到, 却报
+# "no such file or directory", 极具误导性 (看着像文件缺失, 其实是行尾)。
+#
+# 受害的不只 *.sh:
+#   docker/hermes/entrypoint.sh          → ENTRYPOINT, 容器直接起不来
+#   docker/hermes/lingxi.sh              → /etc/profile.d/, 报 $'\r': command not found
+#   docker/hermes/scripts/gh-wrapper.ts  → shebang + 软链成容器里的 /usr/local/bin/gh
+#   docker/hermes/scripts/git-credential.ts → 同上, git 凭据助手
+# 所以按扩展名逐个枚举是漏的 —— 任何人新加一个带 shebang 的文件都会再踩一次,
+# 这里统一对全部文本文件生效。
+#
+# .gitattributes 跟着仓库走, 覆盖每个开发者本机的 core.autocrlf 设置,
+# 是解决这个问题的正确层级 (不依赖各人手动配 git)。
+* text=auto eol=lf
+
+# 二进制显式声明, 不给 text=auto 的启发式误判的机会。
+*.png binary
+*.ico binary
+*.svg text eol=lf
