@@ -15,7 +15,7 @@
 #
 # 必需 env (gateway provisioning 注入):
 #   GATEWAY_BASE_URL    e.g. https://app-lingxi-dev-gateway.azurewebsites.net
-#                       dev: docker-compose / dev-hermes.sh 传 http://host.docker.internal:9000
+#                       dev: docker-compose / dev-hermes.mjs 传 http://host.docker.internal:9000
 #   LAIFU_USER_TOKEN    90d JWT, 缺失则回退读 ~/.hermes/.laifu_user_token
 
 set -e
@@ -44,7 +44,7 @@ export GATEWAY_BASE_URL
 bun "$SCRIPTS/bootstrap.ts" || echo "[entrypoint] bootstrap errored, continuing to start hermes anyway"
 
 # ============ Step 2.5: token 回灌 env ============
-# dev 经 dev-hermes.sh 启动时不传 LAIFU_USER_TOKEN env, 令牌只落文件
+# dev 经 dev-hermes.mjs 启动时不传 LAIFU_USER_TOKEN env, 令牌只落文件
 # (~/.hermes/.laifu_user_token, 由 provisioning/local + refresh-token 维护);
 # prod 由 azure.ts 以容器 env/secret 注入。而 email/cloud 等技能 CLI 只认
 # LAIFU_USER_TOKEN env (os.environ, 无文件兜底) → dev 下 agent 调用必报

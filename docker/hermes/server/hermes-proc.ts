@@ -22,7 +22,7 @@ import { log } from './logger.ts';
 //   key 名     → plugins/model-providers/<provider>/__init__.py 的 env_vars[0]
 //   base_url 名 → hermes_cli/providers.py HERMES_OVERLAYS[<provider>].base_url_env_var
 // 通用名 (HERMES_PROVIDER/MODEL/BASE_URL + HERMES_API_KEY) 由 gateway buildSpec(prod) /
-// dev-hermes.sh --env-file(dev) 注入; 这层 generic→专属 翻译只在容器这一处, prod/dev 共用。
+// dev-hermes.mjs --env-file(dev) 注入; 这层 generic→专属 翻译只在容器这一处, prod/dev 共用。
 //
 // ⚠ key 用**canonical provider id**, 不做 hermes 的 ALIASES 归一化 (那张表太大会漂)。
 //   故裸 "openai" 这种别名 (hermes 里 →openrouter 聚合器) **不收**: 要用就显式写 canonical id。

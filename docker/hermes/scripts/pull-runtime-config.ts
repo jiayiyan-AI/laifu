@@ -3,7 +3,7 @@
 // 拆成两个 export:
 //   fetchRuntimeConfig()  — 拉 /api/me/runtime-config, 返回 prompts_manifest (驱动 sync-prompts)
 //   renderConfigYaml()    — 读 HERMES_PROVIDER/MODEL/BASE_URL/VISION_MODEL 环境变量 (由 ACA spec env /
-//                           dev-hermes.sh 注入), partial merge 进 ~/.hermes/config.yaml, 写回
+//                           dev-hermes.mjs 注入), partial merge 进 ~/.hermes/config.yaml, 写回
 //                           (保留 hermes seed / 用户手动加的其他字段不动)。
 //
 // provider/model/base_url 不再走 runtime-config HTTP, 也不再写 .runtime_env 中转 —— 统一从

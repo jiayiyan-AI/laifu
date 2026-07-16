@@ -165,7 +165,7 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
           //   HERMES_API_KEY:  ACA secret (KV reference), 容器内做 LLM 鉴权; 全程 secretRef 不落盘。
           //   HERMES_PROVIDER/HERMES_MODEL/HERMES_BASE_URL/HERMES_VISION_MODEL: 通用名。容器 renderConfigYaml
           //     读它们写 config.yaml (VISION_MODEL→auxiliary.vision.model); buildSubprocessEnv 读前三个派生
-          //     hermes 专属名 (alibaba→DASHSCOPE_* 等)。dev 由 dev-hermes.sh --env-file 注同名 → prod/dev
+          //     hermes 专属名 (alibaba→DASHSCOPE_* 等)。dev 由 dev-hermes.mjs --env-file 注同名 → prod/dev
           //     注入对称, generic→专属映射只在容器一处; 改 VL 模型只动 gateway, 不必 rebuild 镜像。
           //   GATEWAY_BASE_URL: 容器 entrypoint 拉 entitlements / 续 token / prompts 的入口。
           //   LAIFU_USER_TOKEN: per-user 现签凭据, 算哈希时为哨兵空值 (排除), apply 时为真 token (reconcile 永不丢)。

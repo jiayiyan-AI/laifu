@@ -39,7 +39,7 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
 
     const ready = STEPS[5]!;
 
-    // 本地 dev 容器是 dev-hermes.sh 预起的, 不像 azure 在 create spec 里烤 token,
+    // 本地 dev 容器是 dev-hermes.mjs 预起的, 不像 azure 在 create spec 里烤 token,
     // 故这里现签 token 写盘 + docker restart 让 entrypoint 重跑 bootstrap (从源头直接调, 不再注入)。
     const tokenVersion = await dao.users.getTokenVersion(userId) ?? 0;
     try {
@@ -60,7 +60,7 @@ export const provisionContainerLocal = async (args: LocalProvisionArgs): Promise
   }
 };
 
-// Dev mode constants — matching scripts/dev-hermes.sh
+// Dev mode constants — matching scripts/dev-hermes.mjs
 const DEV_HOST_VOL = path.join(homedir(), '.hermes-dev');
 const DEV_TOKEN_PATH = path.join(DEV_HOST_VOL, '.hermes', '.laifu_user_token');
 const DEV_CONTAINER_NAME = 'lingxi-hermes-dev';
