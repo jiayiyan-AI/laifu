@@ -1,6 +1,6 @@
 [package]
 name = "lingxi-desktop"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 publish = false
 description = "来福桌面同步盘客户端（gateway 客户端 / SAS 缓存 / rclone bisync 编排 / Tauri 壳）"
