@@ -1,7 +1,7 @@
-//! 本地 fs 监听（文档 §11.6 触发源①）。
+//! 本地 fs 监听。
 //!
-//! `notify` crate 监听同步目录，用户改动即触发一次 bisync。事件去抖 2~5s 合并批量改动
-//! （文档 §335）。`app` feature 专属：`notify` 依赖平台 fs 事件 API。
+//! `notify` crate 监听同步目录，用户改动即触发一次 bisync。事件去抖 2~5s 合并批量改动。
+//! `app` feature 专属：`notify` 依赖平台 fs 事件 API。
 //!
 //! 设计：`watch()` 起后台线程，把去抖后的"目录已变更"信号通过 `mpsc` 送给 sync 编排。
 //! 去抖窗口内的多次事件塌缩为一次触发。
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use notify::{Event, RecursiveMode, Watcher};
 
-/// 去抖窗口。文档 §335 建议 2~5s，取 3s。
+/// 去抖窗口取 3s。
 const DEBOUNCE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]

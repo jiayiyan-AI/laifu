@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "来福首页（home）+ 同步盘壳（sync）+ 登录（login）三窗口的默认权限集：前端 invoke 自定义命令 + listen 'authed' 事件 + 窗口/ webview 基础能力。",
-  "windows": ["home", "sync", "login"],
+  "description": "bundled flyout、settings 与 login surface 的默认权限集：本地命令、事件和窗口/webview 基础能力。远程 home 使用独立的最小权限 capability。",
+  "windows": ["flyout", "settings", "login"],
   "permissions": [
     "core:default",
     "core:event:default",

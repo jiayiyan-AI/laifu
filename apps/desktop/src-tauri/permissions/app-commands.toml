@@ -1,11 +1,12 @@
 [[permission]]
 identifier = "allow-app-commands"
-description = "允许 sync/login 原生壳调用自身业务命令：登录 webview 编排、登出、鉴权查询、同步窗口唤出、受限的同步目录切换/移动、同步状态查询。Tauri v2 对自定义 command 从不自动放行（core:default 只覆盖内置 core 命令），必须显式声明。"
+description = "允许 bundled flyout/settings/login surface 调用自身业务命令：登录 webview 编排、登出、鉴权查询、settings/flyout 显隐、受限同步目录切换/移动与同步状态查询。远程 home 不使用此权限。"
 commands.allow = [
   "open_login",
   "logout",
   "is_authed",
-  "open_sync_window",
+  "show_settings_window",
+  "show_sync_flyout_from_settings",
   "pick_empty_sync_dir",
   "pick_sync_move_destination",
   "configure_empty_sync_dir",

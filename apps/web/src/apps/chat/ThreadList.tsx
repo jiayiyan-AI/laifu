@@ -11,6 +11,7 @@ interface Props {
 export const ThreadList = ({ selected, onSelect }: Props) => {
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingDelete, setPendingDelete] = useState<ThreadListItem | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const reload = async (): Promise<ThreadListItem[]> => {
@@ -32,18 +33,19 @@ export const ThreadList = ({ selected, onSelect }: Props) => {
     onSelect(t.id);
   };
 
-  // 删除单条对话: 浏览器原生 confirm 即可, 这里不做单独 modal —
-  // 文案讲清楚 hermes session 也会被清, 让用户知道是双端硬删。
-  const onDelete = async (e: React.MouseEvent, t: ThreadListItem) => {
-    e.stopPropagation();   // 别触发行级 onSelect
-    const title = t.title?.trim() || '新对话';
-    if (!window.confirm(`删除「${title}」？此操作不可撤销,将同时清理该对话在助理容器内的 session。`)) return;
-    setDeletingId(t.id);
+  const requestDelete = (event: React.MouseEvent, thread: ThreadListItem): void => {
+    event.stopPropagation();
+    setPendingDelete(thread);
+  };
+
+  const deleteThread = async (thread: ThreadListItem): Promise<void> => {
+    setPendingDelete(null);
+    setDeletingId(thread.id);
     try {
-      await api.deleteThread(t.id);
+      await api.deleteThread(thread.id);
       const remaining = await reload();
       // 删的是当前选中那条 → 自动落到列表首条; 没有就清空回到引导态
-      if (selected === t.id) {
+      if (selected === thread.id) {
         onSelect(remaining[0]?.id ?? null);
       }
     } catch (err) {
@@ -54,6 +56,7 @@ export const ThreadList = ({ selected, onSelect }: Props) => {
   };
 
   return (
+    <>
     <div style={{ width: 236, flexShrink: 0, background: 'rgba(245,245,248,0.72)', borderRight: '1px solid rgba(0,0,0,0.07)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '10px 12px 4px' }}>
         <button className="btn btn-primary" style={{ width: '100%' }} onClick={onNew}>
@@ -93,7 +96,7 @@ export const ThreadList = ({ selected, onSelect }: Props) => {
                 type="button"
                 aria-label={`删除对话 ${t.title ?? '新对话'}`}
                 disabled={busy}
-                onClick={(e) => onDelete(e, t)}
+                onClick={(event) => requestDelete(event, t)}
                 className="thread-del"
                 style={{
                   background: 'transparent', border: 'none', padding: 4, borderRadius: 6,
@@ -108,5 +111,32 @@ export const ThreadList = ({ selected, onSelect }: Props) => {
         })}
       </div>
     </div>
+      {pendingDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-thread-title"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000,
+          }}
+        >
+          <div className="card" style={{ width: 360, padding: 28, textAlign: 'center' }}>
+            <div id="delete-thread-title" style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
+              删除「{pendingDelete.title?.trim() || '新对话'}」？
+            </div>
+            <div className="muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              此操作不可撤销，将同时清理该对话在助理容器内的 session。
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18 }}>
+              <button className="btn" autoFocus onClick={() => setPendingDelete(null)}>取消</button>
+              <button className="btn btn-primary" style={{ background: '#dc2626' }} onClick={() => void deleteThread(pendingDelete)}>
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };

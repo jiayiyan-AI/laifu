@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-show-settings-window-from-home"
+description = "允许远程 home 页面显示或聚焦 desktop settings 窗口。"
+commands.allow = ["show_settings_window_from_home"]

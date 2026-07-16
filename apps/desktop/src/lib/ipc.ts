@@ -1,9 +1,10 @@
 // Tauri IPC 封装：调 Rust core 的 #[tauri::command]（见 src-tauri/src/app/ 各 commands 模块）。
 //
-//   open_login() -> Result<(), String>          // 建登录 webview；成功 emit "authed"，失败 emit "login-failed"，取消 emit "login-cancelled"
+//   open_login() -> Result<(), String>          // 建登录 webview；成功 emit "authed"
 //   logout() -> Result<(), String>
 //   is_authed() -> Result<bool, String>
-//   open_sync_window() -> Result<(), String>     // 唤出（或聚焦）原生同步盘窗口，经系统菜单「同步盘 → 打开同步盘」触发
+//   show_settings_window() -> Result<(), String>
+//   show_sync_flyout_from_settings() -> Result<(), String>
 //   pick_empty_sync_dir() -> Result<string | null, String>        // 选择严格空目录候选
 //   pick_sync_move_destination() -> Result<string | null, String> // 选择目录移动的目标上级目录
 //   configure_empty_sync_dir(dir) -> Result<(), String>            // 校验空目录后热切换
@@ -28,9 +29,14 @@ export function isAuthed(): Promise<boolean> {
   return invoke<boolean>('is_authed');
 }
 
-/** 唤出（或聚焦）原生同步盘窗口（系统菜单入口，见 src-tauri app/sync_commands.rs open_sync_window）。 */
-export function openSyncWindow(): Promise<void> {
-  return invoke<void>('open_sync_window');
+/** 打开 desktop settings surface。 */
+export function showSettingsWindow(): Promise<void> {
+  return invoke<void>('show_settings_window');
+}
+
+/** 从 settings 显示 tray 锚定的状态面板；tray 不可用时由 native 降级定位。 */
+export function showSyncFlyoutFromSettings(): Promise<void> {
+  return invoke<void>('show_sync_flyout_from_settings');
 }
 
 /** 选择一个将作为严格空同步目录的候选路径；取消返回 null。 */

@@ -1,39 +1,15 @@
-//! 同步盘窗口 + 同步目录/状态相关 Tauri commands。
+//! 同步目录与状态相关 Tauri commands。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::persist::{self, PendingMove};
 use crate::state::SyncState;
 use crate::sync::location;
 
 use super::core::{config_dir, AppCore};
-use super::window::{apply_saved_geometry, attach_hide_on_close, SYNC_WINDOW};
-
-/// 打开（或聚焦）同步盘窗口：原生 Login/Sync/Settings 壳，经系统菜单唤出。
-/// 首次调用建窗（指向现有 dist 前端，`WebviewUrl::App` 在 dev 下解析到 devUrl）；
-/// 窗已存在则直接聚焦，不重复建。
-#[tauri::command]
-pub(super) async fn open_sync_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(SYNC_WINDOW) {
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
-    let builder = tauri::WebviewWindowBuilder::new(
-        &app,
-        SYNC_WINDOW,
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title(format!("来福同步盘{}", crate::channel::display_suffix()))
-    .inner_size(720.0, 520.0);
-    let win = builder.build().map_err(|e| e.to_string())?;
-    apply_saved_geometry(&win, SYNC_WINDOW);
-    attach_hide_on_close(&win);
-    Ok(())
-}
 
 /// 选择一个将作为严格空同步目录的候选路径。
 #[tauri::command]

@@ -1,13 +1,11 @@
-//! Tauri 装配 + commands + 常驻编排（文档 §11.1 / §11.3-§11.6）。
+//! Tauri 装配、commands 与常驻同步编排。
 //!
 //! `app` feature 专属。默认 feature 下不编译（需 tauri 工具链 + 前端 dist + 系统 webkit）。
 //!
-//! 三窗口：`home`（启动默认展示，web 首页，自带 cookie 鉴权，与本文件的登录/同步逻辑无关）、
-//! `sync`（原生 Login/Sync/Settings 壳，经系统菜单「同步盘 → 打开同步盘」按需唤出）、
-//! `login`（`sync` 壳内触发登录时短暂建的登录 webview，完成后即关）。
-//!
-//! `sync` 壳状态机（§11.1）：`Unauthed` → 登录 webview 拿 session → device-token 换 JWT → `Authed`。
-//! `Authed` 下常驻三 task：JWT 续期 timer、SAS shim、sync 编排（fs watch + 轮询触发）。
+//! 四个 surface：`home`（启动默认展示的远程 web 首页）、`flyout`（tray/Dock 状态面板）、
+//! `settings`（持久化桌面壳配置）与 `login`（短生命周期登录 webview）。
+//! 同步状态机为 `Unauthed` → 登录 webview → device-token → `Authed`；认证后常驻 JWT 续期、
+//! SAS 刷新与同步编排 task。
 //!
 //! 共享状态跨 `.await` 持有 → 用 `tokio::sync::Mutex`（规则 rs-parking-lot：async 协调用 tokio 锁）。
 //!
@@ -15,13 +13,14 @@
 //! - [`core`] `AppCore` 全局状态 + `~/.laifu/` 本地数据目录约定
 //! - [`window`] 窗口 label 常量 + size/position 记忆
 //! - [`auth_commands`] 登录 webview / 桌面 OAuth 回流 / 登出
-//! - [`sync_commands`] 同步盘窗口 + 同步目录/状态
-//! - [`tasks`] JWT 续期守护 + SAS 刷新/sync 编排常驻 task
+//! - [`sync_commands`] 同步目录/状态业务 commands
+//! - [`surfaces`] flyout/settings 构建、定位与显隐
 //! - 本文件（`mod.rs`）：`run()` 入口——插件/菜单/托盘/deep-link 装配
 
 mod auth_commands;
 mod core;
 mod sync_commands;
+mod surfaces;
 mod tasks;
 mod window;
 
@@ -32,6 +31,7 @@ use tauri::{Emitter, Manager};
 use crate::persist;
 
 use core::{config_dir, AppCore};
+use surfaces::{show_settings, toggle_flyout_from_tray, MAIN_TRAY_ID};
 use window::{apply_saved_geometry, attach_hide_on_close, HOME_WINDOW};
 
 /// Tauri app 装配入口，由 `main.rs`（`app` feature）调用。
@@ -61,7 +61,10 @@ pub fn run() {
             auth_commands::open_login,
             auth_commands::logout,
             auth_commands::is_authed,
-            sync_commands::open_sync_window,
+            surfaces::show_settings_window,
+            surfaces::show_settings_window_from_home,
+            surfaces::show_sync_flyout_from_settings,
+            surfaces::show_sync_flyout_from_home,
             auth_commands::open_oauth_in_browser,
             auth_commands::download_cloud_file,
             sync_commands::pick_empty_sync_dir,
@@ -71,33 +74,16 @@ pub fn run() {
             sync_commands::get_sync_dir,
             sync_commands::get_sync_status,
         ])
-        .menu(|handle| {
-            // 保留系统默认菜单（macOS 下含 App 菜单 Quit / Edit 等）+ 追加「同步盘」顶级菜单，
-            // 内含「打开同步盘」项，触发 open_sync_window 唤出原生 Login/Sync/Settings 窗口。
-            let menu = tauri::menu::Menu::default(handle)?;
-            let open_sync_item = tauri::menu::MenuItem::with_id(
-                handle,
-                "open-sync-window",
-                "打开同步盘",
-                true,
-                None::<&str>,
-            )?;
-            let sync_menu =
-                tauri::menu::Submenu::with_items(handle, "同步盘", true, &[&open_sync_item])?;
-            menu.append(&sync_menu)?;
-            Ok(menu)
-        })
+        .menu(build_app_menu)
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == "open-sync-window" {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = sync_commands::open_sync_window(app).await {
-                        eprintln!("[menu] open_sync_window failed: {e}");
-                    }
-                });
+            if event.id().as_ref() == "show-settings" {
+                if let Err(error) = show_settings(app) {
+                    eprintln!("[menu] show settings failed: {error}");
+                }
             }
         })
         .setup(move |app| {
+            let _ = crate::window_state::remove_one(config_dir(), "sync");
             // 在启动同步前先恢复可能卡在 `rename` 与配置提交之间的目录移动。
             // 模糊状态不猜测目录归属，直接进入 NeedsAttention 并禁止自动同步。
             match persist::recover_pending_move(config_dir()) {
@@ -150,8 +136,8 @@ pub fn run() {
                 }
             }
 
-            // 启动即展示 web 首页（虚拟桌面等业务 UI）；同步盘壳按需经菜单唤出，见 open_sync_window。
-            // 记住上次关闭时的 size/position（`~/.laifu/window_state.json`），无存档则用默认值。
+            // 启动即展示远程 home；settings 按需建立并记住关闭时的几何。
+            // flyout 始终按当前入口重新定位，不保存几何。
             let home_title = format!("来福{}", crate::channel::display_suffix());
             let home_builder = tauri::WebviewWindowBuilder::new(
                 app,
@@ -168,16 +154,20 @@ pub fn run() {
             apply_saved_geometry(&home_win, HOME_WINDOW);
             attach_hide_on_close(&home_win);
 
-            // 系统托盘：home/sync 窗口关了也不退出 app（见 attach_hide_on_close），
-            // 托盘是重新唤出窗口 / 真正退出的入口。左键点图标唤出 home；菜单「退出」
-            // 才是唯一真退出路径（置位 quitting 后 app.exit(0)，见下方 run 回调）。
+            // 托盘保留 home 与设置入口；左键只切换 flyout，退出才真正终止进程。
             let show_item =
                 tauri::menu::MenuItem::with_id(app, "tray-show", "显示来福", true, None::<&str>)?;
+            let settings_item =
+                tauri::menu::MenuItem::with_id(app, "tray-settings", "设置…", true, None::<&str>)?;
+            let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit_item =
                 tauri::menu::MenuItem::with_id(app, "tray-quit", "退出", true, None::<&str>)?;
-            let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+            let tray_menu = tauri::menu::Menu::with_items(
+                app,
+                &[&show_item, &settings_item, &separator, &quit_item],
+            )?;
             let quitting_menu = quitting_tray.clone();
-            tauri::tray::TrayIconBuilder::new()
+            tauri::tray::TrayIconBuilder::with_id(MAIN_TRAY_ID)
                 .icon(
                     app.default_window_icon()
                         .cloned()
@@ -193,6 +183,11 @@ pub fn run() {
                             let _ = win.set_focus();
                         }
                     }
+                    "tray-settings" => {
+                        if let Err(error) = show_settings(app) {
+                            eprintln!("[tray] show settings failed: {error}");
+                        }
+                    }
                     "tray-quit" => {
                         quitting_menu.store(true, std::sync::atomic::Ordering::SeqCst);
                         app.exit(0);
@@ -201,16 +196,13 @@ pub fn run() {
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
+                        rect,
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(win) = app.get_webview_window(HOME_WINDOW) {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        toggle_flyout_from_tray(tray.app_handle(), rect);
                     }
                 })
                 .build(app)?;
@@ -229,15 +221,13 @@ pub fn run() {
         .expect("error while building lingxi-desktop");
 
     app.run(move |app_handle, event| match event {
-        // home/sync 窗口只是 hide()，不会真的把窗口数归零；这个分支主要兜底系统级退出
-        // 请求（比如 Cmd+Q，虽然当前 tauri 在 macOS 下走的是原生 terminate 路径，未必
-        // 触发这里，见踩坑记录）—— 未显式走 tray「退出」就一律挡住，保持后台常驻。
+        // home/settings 关闭后只是 hide()；未显式走 tray「退出」的进程退出请求一律挡住。
         tauri::RunEvent::ExitRequested { api, .. } => {
             if !quitting.load(std::sync::atomic::Ordering::SeqCst) {
                 api.prevent_exit();
             }
         }
-        // macOS Dock 图标被点击且当前无可见窗口（home/sync 均处于 hide 状态）：唤出 home。
+        // macOS Dock 图标被点击且所有 surface 都隐藏时，唤出 home。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows,
@@ -252,6 +242,37 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+
+fn build_app_menu(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let menu = tauri::menu::Menu::default(handle)?;
+    let settings_item = tauri::menu::MenuItem::with_id(
+        handle,
+        "show-settings",
+        "设置…",
+        true,
+        Some("CmdOrCtrl+,")
+    )?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let items = menu.items()?;
+        let app_menu = items
+            .first()
+            .and_then(tauri::menu::MenuItemKind::as_submenu)
+            .expect("default macOS menu includes an application submenu");
+        app_menu.insert(&settings_item, 1)?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let settings_menu =
+            tauri::menu::Submenu::with_items(handle, "设置", true, &[&settings_item])?;
+        menu.append(&settings_menu)?;
+    }
+
+    Ok(menu)
 }
 
 fn handle_desktop_oauth_url(

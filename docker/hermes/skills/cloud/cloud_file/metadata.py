@@ -45,7 +45,7 @@ def build_metadata(
         'tool_version': tool_version,
         'source': source,
         # rclone azureblob 增量比较用的 mtime key（RFC3339）。补写以消除混合场景
-        # （agent 无 mtime blob + 客户端有 mtime blob）下 bisync 回退 LMT 的比较隐患（设计文档 §10.4）。
+        # （agent 无 mtime blob + 客户端有 mtime blob）下 bisync 回退 LMT 的比较隐患；见 docs/desktop-app.md。
         # 复用 published_at（同为 RFC3339 写入时刻），rclone in 格式 = time.RFC3339 可解析。
         'mtime': published_at,
     }

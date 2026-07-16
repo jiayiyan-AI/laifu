@@ -20,7 +20,7 @@
 //!   - [`window_state`]   窗口 size/position 持久化（纯 IO，落 `~/.laifu/window_state.json`）
 //!   - [`app`]            Tauri 装配 + commands
 //!
-//! 设计见 `docs/todo/user-data-sync.md` §十一 / §十三。
+//! 设计见 [`docs/desktop-app.md`](../../../../docs/desktop-app.md)。
 
 pub mod auth;
 pub mod channel;

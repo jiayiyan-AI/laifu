@@ -1,4 +1,4 @@
-//! 设备 JWT 的 OS keychain 存储（文档 §11.2）。
+//! 设备 JWT 的 OS keychain 存储。
 //!
 //! 长期凭据（90 天可自续 = 长期）不落明文文件，进 OS keychain（`keyring` crate：
 //! macOS Keychain / Windows Credential Manager / Linux Secret Service）。

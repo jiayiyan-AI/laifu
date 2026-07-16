@@ -49,9 +49,8 @@ impl CloudWriteSas {
     /// `{blob_endpoint}/{container}?{sas_token}`。
     ///
     /// 注意：故意只到 container 级 URL（不含 prefix）——rclone 从 URL path 取
-    /// container 名判为"容器级 SAS"后会 strip 并重建 endpoint（见设计文档 §九源码结论），
-    /// sr=d/sdd 与 sig 在重建中保真。同步对里的 `<user_id>` 子树由 remote 路径
-    /// `<remote>:<container>/<user_id>` 指定。
+    /// container 名后会 strip 并重建 endpoint；`sr=d`、`sdd=1` 与签名须保真。
+    /// 同步对里的 `<user_id>` 子树由 remote 路径 `<remote>:<container>/<user_id>` 指定。
     pub fn rclone_sas_url(&self) -> String {
         format!(
             "{}/{}?{}",

@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "home-remote",
-  "description": "home 窗口加载的是远程 web 首页（不是 bundled 前端资源），Tauri 默认不放行远程 origin 调命令；这里显式允许该 origin 调 open_oauth_in_browser（Google OAuth 走系统浏览器）与 download_cloud_file（云盘文件走原生「另存为」），见 app/auth_commands.rs。",
+  "description": "home 窗口加载远程 web 首页；仅允许 OAuth、云文件下载、显示同步状态面板和显示 settings 窗口。它不能读取或修改同步、认证与 settings 业务状态。",
   "windows": ["home"],
   "remote": {
     "urls": ["http://localhost:3000/*", "https://app-lingxi-dev-gateway.azurewebsites.net/*", "https://laifu.uncagedai.org/*"]
   },
-  "permissions": ["allow-open-oauth-in-browser", "allow-download-cloud-file"]
+  "permissions": ["allow-open-oauth-in-browser", "allow-download-cloud-file", "allow-show-sync-flyout-from-home", "allow-show-settings-window-from-home"]
 }

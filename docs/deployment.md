@@ -1,22 +1,22 @@
 # 部署架构
 
-灵犀整体跑在 Azure 上。按"变化频率"和"管理工具"分四类资产，互不混淆。
+灵犀的服务端资产运行在 Azure；桌面安装包由 GitHub Release 分发。按变化频率和管理工具分五类资产，互不混淆。
 
 > - dev 与 prod 的环境差异、env 命名守则、加新 env 的标准动作，见 [environments.md](./environments.md)。
+> - 桌面端的运行时架构、同步协议、渠道和安全边界，见 [desktop-app.md](./desktop-app.md)。
 > - 首次部署踩过的 7 个坑 + 现成的 prod 部署快捷脚本，见 [deployment-azure-first-run.md](./deployment-azure-first-run.md)。
 
-```
-变化频率：低 ─────────────────────────────────────────────► 高
+```text
+变化频率：低 ───────────────────────────────────────────────────────────► 高
 
-  ①基础设施         ②Hermes 镜像        ③Gateway+Web         ④每用户实例
-  (季度级)           (月级)              (天级)                (用户注册触发)
-       ↓                ↓                  ↓                      ↓
-  infra/bicep/      docker/hermes/   apps/{gateway,web}     apps/gateway/src/
-   main.bicep      build-and-push.sh  scripts/build-deploy   provisioning/azure.ts
-       ↓                ↓                  ↓                      ↓
-  az deployment    az acr build      vite bundle → zip →     Azure SDK
-   group create                       Storage SAS URL         (运行时)
-                                      → App Service
+  ① 基础设施       ② Hermes 镜像       ③ Gateway + Web       ④ Desktop 安装包       ⑤ 每用户实例
+  （季度级）        （月级）             （天级）                （发版时）              （用户注册触发）
+       ↓                 ↓                    ↓                     ↓                       ↓
+  infra/bicep/       docker/hermes/      apps/{gateway,web}     apps/desktop/          apps/gateway/src/
+   main.bicep        build-and-push.sh   scripts/build-deploy    .github/workflows/     provisioning/azure.ts
+       ↓                 ↓                    ↓                     ↓                       ↓
+  az deployment      az acr build        zip → App Service       GitHub Actions         Azure SDK
+  group create                           （Azure）              → GitHub Release
 ```
 
 ---
@@ -161,7 +161,68 @@ curl https://app-lingxi-${ENV}-gateway.azurewebsites.net/healthz
 
 ---
 
-## ④ 每用户实例 (运行时)
+## ④ Desktop 安装包（GitHub Release）
+
+**职责**：构建并向用户分发来福 desktop 的 stable/canary 安装包。它**不部署 Azure 资源**；唯一正式发布入口是 [`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml)。`dev` 只用于本地开发，不生成用户安装包。
+
+### 版本与 tag 不变量
+
+发布版本必须是严格 SemVer，且以下三处完全一致：
+
+- `apps/desktop/package.json`
+- `apps/desktop/src-tauri/Cargo.toml`
+- `apps/desktop/src-tauri/tauri.conf.json`
+
+使用版本脚本统一修改和检查，禁止手改其中一处：
+
+```bash
+# 在准备发布的 commit 上执行
+pnpm desktop:version -- set 0.0.2
+pnpm desktop:version -- check 0.0.2
+```
+
+正式 tag 必须是 `desktop-<version>`，例如 `desktop-0.0.2`。工作流构建 **tag 指向的 commit**，不校验该 commit 是否来自 `main`；发布者必须自行确保它是已审阅、已验证的目标提交。
+
+### 正式发布流程
+
+1. 更新版本并提交三处 manifest 的变更。
+2. 在目标 commit 上验证桌面前端与 Rust：
+
+   ```bash
+   pnpm --filter @lingxi/desktop lint
+   cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features app
+   cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features app --all-targets -- -D warnings
+   ```
+
+3. 创建并推送 tag：
+
+   ```bash
+   git tag desktop-0.0.2
+   git push origin desktop-0.0.2
+   ```
+
+4. GitHub Actions preflight 会再次校验 tag 与三处版本，安装依赖、构建 workspace 依赖、执行 desktop TypeScript check 与 Rust sync core 测试。
+5. 两个矩阵 job 获取匹配的 rclone sidecar 并构建四个安装包；全部成功后，单一 publish job 创建或更新同名 GitHub Release。不要手动并发上传或创建同一 Release。
+6. 从该 Release 下载对应平台安装包，在干净目标机完成安装、OAuth deep-link、首次同步与退出 smoke test。
+
+| Asset | 渠道 / 平台 | 格式与架构 |
+|---|---|---|
+| `laifu-<version>-macos-arm64.dmg` | stable / macOS | Apple Silicon DMG |
+| `laifu-canary-<version>-macos-arm64.dmg` | canary / macOS | Apple Silicon DMG |
+| `laifu-<version>-windows-x64-setup.exe` | stable / Windows | x64 NSIS 安装器 |
+| `laifu-canary-<version>-windows-x64-setup.exe` | canary / Windows | x64 NSIS 安装器 |
+
+macOS job 会挂载 DMG 并校验 ad-hoc 签名、bundle identifier、deep-link scheme 和主程序/rclone 都是 arm64；Windows job 校验恰好产出一个 NSIS installer。stable 的 macOS job 额外执行 `cargo test --features app`。
+
+### 手动构建与签名边界
+
+`workflow_dispatch` 用当前选定 ref 的 manifest version 构建同一四包矩阵，并上传 Actions artifacts；它不会创建或更新 GitHub Release，适合先验证 CI。正式 workflow 只需要 GitHub 自动提供的 `GITHUB_TOKEN`：普通 job 为只读，publish job 提升为 `contents: write`。
+
+当前 macOS 仅使用 ad-hoc signing identity `-`，Windows 未配置代码签名证书；下载用户可能需手动通过 Gatekeeper 或 SmartScreen。没有 Tauri updater，也没有 Developer ID、公证或 Windows 签名；不得将当前产物描述为无提示可信安装包。
+
+---
+
+## ⑤ 每用户实例（运行时）
 
 **职责**：用户注册时创建专属 Hermes Container App, 通过 ACA `volumeMount.subPath` 挂到全局共享的 NFS share 子目录上。
 
@@ -315,6 +376,7 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 | 加/改 KV secret | az CLI | `az keyvault secret set --vault-name kv-lingxi-{env} --name X --value Y` |
 | 推新 hermes 镜像 | ACR Build | `docker/hermes/build-and-push.sh` |
 | 发新 gateway+web 代码 | CI 或手动 | 推 main 或 `./scripts/build-deploy.sh` + `az webapp deploy` |
+| 发布 desktop stable/canary 安装包 | GitHub Release | `pnpm desktop:version -- set/check` → `desktop-<semver>` tag → `.github/workflows/desktop-release.yml` |
 | 清理失败用户残留 | az CLI + psql | 见 `docs/deployment-azure-first-run.md` 末尾或 catchup.md |
 | 看 App Service 日志 | Log Analytics | Azure Portal → `la-lingxi-{env}` → Logs (KQL) |
 | 看用户实例日志 | Log Analytics | 同上, 表名 `ContainerAppConsoleLogs_CL` |
