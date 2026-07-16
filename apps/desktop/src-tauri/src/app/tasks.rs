@@ -308,6 +308,17 @@ async fn record_sync_outcome(
             let message = "SAS 刷新后仍鉴权失败".to_string();
             (SyncState::Error(message.clone()), Err(message))
         }
+        // 走到这里说明 `should_force` 已判定它**不是**误报（规模大或含删除），
+        // 即这道检查真的抓到了异常（如 DST 全盘时间戳漂移）——正是它该响的时候。
+        // 停下让用户确认，不要自作主张覆盖任何一边。
+        Ok(BisyncOutcome::AllFilesChanged { path1, path2 }) => {
+            let message = format!(
+                "本地或云端文件全部发生变化（本地改 {} 删 {}，云端改 {} 删 {}），\
+                 已暂停同步以防误覆盖，请确认后再继续",
+                path2.modified, path2.deleted, path1.modified, path1.deleted
+            );
+            (SyncState::NeedsAttention(message.clone()), Err(message))
+        }
         Ok(BisyncOutcome::Failed(code)) => {
             let message = format!("bisync 失败（退出码 {code}）");
             (SyncState::Error(message.clone()), Err(message))

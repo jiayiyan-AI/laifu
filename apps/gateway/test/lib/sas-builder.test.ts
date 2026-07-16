@@ -60,7 +60,7 @@ describe('buildDirectoryWriteSas', () => {
     expect(params['sv']! >= '2020-02-10').toBe(true);
   });
 
-  it('权限 racwl 全集', () => {
+  it('权限 racwdl 全集', () => {
     const { sasToken } = buildDirectoryWriteSas({
       account: ACCOUNT,
       container: CONTAINER,
@@ -77,6 +77,8 @@ describe('buildDirectoryWriteSas', () => {
     expect(perms.has('c')).toBe(true);
     expect(perms.has('w')).toBe(true);
     expect(perms.has('l')).toBe(true);
+    // d：bisync 传播删除所必需；缺它删除会 403 并被误报成 SAS 过期。
+    expect(perms.has('d')).toBe(true);
   });
 
   it('强制 HTTPS only (spr=https)', () => {

@@ -23,8 +23,11 @@ export interface DirectoryWriteSasOutput {
 const SAS_VERSION = '2020-02-10'; // 最早支持 sdd 的 service version
 // directory SAS 当前签的是 `<container>/<userId>` 单层目录，深度恒为 1。
 const SIGNED_DIRECTORY_DEPTH = 1;
-// directory write SAS 固定权限集合，按 Azure SAS 规范字典序 racwdxltmeop 排列后即 "racwl"。
-const PERMISSIONS = 'racwl';
+// directory write SAS 固定权限集合，按 Azure SAS 规范字典序 racwdxltmeop 排列后即 "racwdl"。
+// `d`（delete）是 bisync 双向同步删除所必需：缺它时删除会 403，而 desktop 的
+// `classify()` 会把 403 一律当 SAS 过期 → 刷新 → 再 403，最终报「SAS 刷新后仍鉴权失败」，
+// 把排查引向令牌而非权限。顺序不可乱改：签名串与 `sp` 共用本常量，须合规范序。
+const PERMISSIONS = 'racwdl';
 
 /**
  * 将任意 Date / ISO 字符串规范成 `YYYY-MM-DDTHH:mm:ssZ`（秒级，UTC）。
@@ -53,7 +56,7 @@ function sign(stringToSign: string, udkValueBase64: string): string {
 }
 
 /**
- * 签发一个 directory-scoped User Delegation SAS，授权 racwl 限定到
+ * 签发一个 directory-scoped User Delegation SAS，授权 racwdl 限定到
  * `<container>/<userId>/` 子树。
  *
  * 客户端拼 URL 时形如：
@@ -110,7 +113,7 @@ export function buildDirectoryWriteSas(input: DirectoryWriteSasInput): Directory
   // SDK ref: node_modules/@azure/storage-blob/.../BlobSASSignatureValues.js lines ~400-432 (non-directory variant)
   // 23 fields joined by '\n' → exactly 22 '\n' chars, no trailing newline.
   const stringToSign = [
-    PERMISSIONS,                  //  1. signedPermissions   "racwl"
+    PERMISSIONS,                  //  1. signedPermissions   "racwdl"
     signedStart,                  //  2. signedStart
     signedExpiry,                 //  3. signedExpiry
     canonicalResource,            //  4. canonicalizedResource

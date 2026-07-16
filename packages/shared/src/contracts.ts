@@ -299,7 +299,7 @@ export interface CloudWriteSasResponse {
 
 /**
  * Cloud drive 操作允许的权限集合（spec §五）。
- * write SAS 通常给 racwl，read SAS 通常只给 r。
+ * write SAS 给 racwdl（`d` 为 bisync 传播删除所必需），read SAS 只给 r。
  */
 export type CloudSasPermission = 'r' | 'a' | 'c' | 'w' | 'l' | 'd';
 
