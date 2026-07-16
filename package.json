@@ -18,7 +18,7 @@
     "dev:desktop:stable": "pnpm --filter @lingxi/desktop dev:stable",
     "desktop:fetch-rclone": "node scripts/fetch-rclone.mjs",
     "desktop:version": "node scripts/desktop-version.mjs",
-    "dev:check": "scripts/dev-check.sh"
+    "dev:check": "node scripts/dev-check.mjs"
   },
   "packageManager": "pnpm@11.5.2",
   "engines": {
