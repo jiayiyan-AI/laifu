@@ -1,8 +1,8 @@
 /**
  * iLink raw msg → typed inbound 解析。
  *
- * P1 支持 text + image;其余类型 (voice=3, file=4, video=5) 不解析,但会在
- * unsupported_hints 里留一句提示, 让 inbound-handler 能 sendText 告知用户一次。
+ * 支持 text、image 与 file；voice=3、video=5 不解析，但会在 unsupported_hints 里留一句提示，
+ * 让 inbound-handler 能 sendText 告知用户一次。
  *
  * 过滤逻辑跟 mitsein providers/weixin/inbound/__init__.py 对齐:
  *   - message_type=2 (bot 自己发的) → null (避免回声循环)
@@ -20,11 +20,10 @@ const ITEM_TYPE_VOICE = 3;
 const ITEM_TYPE_FILE = 4;
 const ITEM_TYPE_VIDEO = 5;
 
-// 不支持类型 → 给用户的一句提示 (按 item.type)
+// 不支持类型 → 给用户的一句提示（按 item.type）
 const UNSUPPORTED_HINT: Record<number, string> = {
   [ITEM_TYPE_VOICE]: '语音消息暂不支持，请用文字描述。',
-  [ITEM_TYPE_FILE]: '文件消息暂不支持，目前仅支持图片。',
-  [ITEM_TYPE_VIDEO]: '视频消息暂不支持，目前仅支持图片。',
+  [ITEM_TYPE_VIDEO]: '视频消息暂不支持，目前仅支持图片和文件。',
 };
 
 export type InboundPart =
@@ -35,13 +34,21 @@ export type InboundPart =
       download_url: string;         // image_item.media.full_url — 完整 CDN 下载 URL (含 encrypted_query_param + taskid)
       content_type_hint?: string;   // iLink 给的图片格式提示, 没有则 fetcher fallback image/jpeg
       size_hint?: number;           // image_item.hd_size, 用于下载前预判超限
+    }
+  | {
+      kind: 'file';
+      aes_key_hex: string;
+      download_url: string;
+      filename: string;
+      content_type_hint?: string;
+      size_hint?: number;
     };
 
 export interface WechatInbound {
   message_id: string;          // iLink 给的稳定 id,用于去重 (重启重放场景)
   from_user_id: string;        // 发送者 wxid (消息对方)
   context_token: string;       // 回复时必须带回去 iLink
-  parts: InboundPart[];        // text + image 的有序集合
+  parts: InboundPart[];        // text、image、file 的有序集合
   unsupported_hints: string[]; // 去重后的 unsupported 类型提示
 }
 
@@ -75,6 +82,20 @@ const parseImagePart = (item: Record<string, unknown>): InboundPart | null => {
   const size_hint = asNumber(imageItem.hd_size) ?? asNumber(imageItem.mid_size);
 
   return { kind: 'image', aes_key_hex, download_url, content_type_hint, size_hint };
+};
+
+const parseFilePart = (item: Record<string, unknown>): InboundPart | null => {
+  const fileItem = isObject(item.file_item) ? item.file_item : null;
+  if (!fileItem) return null;
+  const media = isObject(fileItem.media) ? fileItem.media : null;
+  const aes_key_hex = asString(fileItem.aeskey) || (media ? asString(media.aes_key) : '');
+  const download_url = media ? asString(media.full_url) : '';
+  const filename = asString(fileItem.file_name) || asString(fileItem.filename) || 'attachment';
+  if (!aes_key_hex || !download_url) return null;
+
+  const content_type_hint = (media && (asString(media.content_type) || asString(media.mime_type))) || 'application/octet-stream';
+  const size_hint = asNumber(fileItem.len) ?? asNumber(fileItem.file_size);
+  return { kind: 'file', aes_key_hex, download_url, filename, content_type_hint, size_hint };
 };
 
 export const parseInbound = (raw: unknown): WechatInbound | null => {
@@ -114,8 +135,12 @@ export const parseInbound = (raw: unknown): WechatInbound | null => {
         if (img) parts.push(img);
         break;
       }
+      case ITEM_TYPE_FILE: {
+        const file = parseFilePart(item);
+        if (file) parts.push(file);
+        break;
+      }
       case ITEM_TYPE_VOICE:
-      case ITEM_TYPE_FILE:
       case ITEM_TYPE_VIDEO: {
         const hint = UNSUPPORTED_HINT[item.type as number];
         if (hint) unsupported.add(hint);

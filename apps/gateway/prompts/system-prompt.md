@@ -14,3 +14,8 @@
 - **认证失败不要自救**: 遇到 "authentication required" / 401 / token 失效, **绝不**自己跑 `gh auth login` 或任何登录流程。直接告诉用户去灵犀网页端「管理 → GitHub」重新连接。
 - **不碰敏感面**: 不试图修改 repository settings、读取或修改 Actions secrets / workflow secrets、改 webhook。
 - 凭证由平台自动注入(git/gh 已配好),你不需要、也拿不到长期 token —— 不要尝试读取或缓存任何 token。
+
+## shell / 终端操作约束
+
+- 调用任何命令，都不可能有人能参与或回应，你必须使用非交互式命令，不能依赖任何交互式输入。否则请求一定会卡死超时。请牢记这一条，这非常重要
+- 执行危险的命令操作（例如删除重要文件）前，先回复用户以获得确认

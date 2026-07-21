@@ -1,14 +1,15 @@
 // http.ts — HTTP 路由 handler (Request → Response, Bun.serve 形态)
 //
 // 暴露一个 `handle(req)` 给 index.ts 装到 Bun.serve.fetch 上。
-// 内部按 method + pathname 分发到 5 个子 handler:
+// 内部按 method + pathname 分发到 6 个子 handler:
 //   GET    /health      → 200 {status:"ok"}  (ACA probe 用, 不校 Bearer)
 //   GET    /history     → 200 {messages:[{role,content,ts}]}
 //   POST   /chat        → 同步: 200 + reply / 异步: 202 + 后台跑
-//   POST   /inbox/image → 200 {path, size, content_type}  (streaming 收微信图片, 见 inbox.ts)
+//   POST   /inbox/image → 200 {path, size, content_type}  (streaming 收渠道图片, 见 inbox.ts)
+//   POST   /inbox/file  → 200 {path, size, content_type}  (streaming 收渠道文件, 见 inbox.ts)
 //   DELETE /session     → 200 {ok, deleted, hermes_session_id?} (清掉 hermes state.db 里的 session)
 //
-// 除 /health 外, 4 个业务端点统一过 requireBearer (auth.ts) 校验 LAIFU_USER_TOKEN。
+// 除 /health 外, 5 个业务端点统一过 requireBearer (auth.ts) 校验 LAIFU_USER_TOKEN。
 //
 // /history 和 /session 直接组合 session-map + state-db / hermes-proc,
 // 不在 state-db 里耦合; state-db 保持纯 SQLite。
@@ -27,7 +28,7 @@ import { loadMessagesByUuid } from './state-db.ts';
 import { cleanReply, runHermes, hermesSubprocessBaseEnv } from './hermes-proc.ts';
 import { callHermes, asyncChatAndCallback } from './chat.ts';
 import { requireBearer } from './auth.ts';
-import { handleInboxImage } from './inbox.ts';
+import { handleInboxFile, handleInboxImage } from './inbox.ts';
 import { log } from './logger.ts';
 // 绝对路径 /opt/lingxi-scripts/* —— 镜像里 scripts 被 COPY 到 /opt/lingxi-scripts (不在 /app/scripts),
 // 故 server 跨目录引 scripts 模块必须走绝对路径 (与 chat.ts 引 lib.ts 同) + tsconfig paths 映射回 ./scripts/*。
@@ -50,6 +51,7 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method === 'GET' && url.pathname === '/history') return handleHistory(url);
   if (req.method === 'POST' && url.pathname === '/chat') return handleChat(req);
   if (req.method === 'POST' && url.pathname === '/inbox/image') return handleInboxImage(req);
+  if (req.method === 'POST' && url.pathname === '/inbox/file') return handleInboxFile(req);
   if (req.method === 'DELETE' && url.pathname === '/session') return handleDeleteSession(url);
   return Response.json({ error: 'not found' }, { status: 404 });
 }
@@ -115,7 +117,7 @@ async function handleChat(req: Request): Promise<Response> {
       return Response.json({ error: 'hermes timeout' }, { status: 504 });
     }
     return Response.json({
-      reply: cleanReply(stdout) || stderr.trim() || '',
+      reply: cleanReply(stdout) || cleanReply(stderr) || '',
       session_id: sessionId,
       hermes_session_id: resolved,
       exit_code: exitCode,

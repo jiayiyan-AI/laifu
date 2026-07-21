@@ -25,7 +25,7 @@ describe('buildInboxPrompt', () => {
 
   it('appends a failure notice when fetchErrors present', () => {
     const out = buildInboxPrompt('hi', [], ['boom']);
-    expect(out).toContain('⚠️ 1 张图片下载失败');
+    expect(out).toContain('⚠️ 1 个附件下载失败');
     expect(out).toContain('hi');
   });
 });

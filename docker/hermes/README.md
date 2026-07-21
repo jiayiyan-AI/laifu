@@ -15,12 +15,13 @@
 | `GET /health` | 健康检查 → `{"status":"ok"}` (ACA probe 用, **不校 Bearer**) |
 | `GET /history` | `?session_id=` → `{messages:[...]}` |
 | `POST /chat` | body `{message, session_id?, source?, callback?}` → 同步 `{reply,...}` / 异步 202 |
-| `POST /inbox/image` | streaming 上传微信图片 (`duplex:'half'`), 落独占的 `cache/laifu-inbox/images/` (不与 hermes 自身 cache 混放) → `{path, size, content_type}` |
+| `POST /inbox/image` | streaming 上传渠道图片 (`duplex:'half'`)，落 `cache/laifu-inbox/images/` → `{path, size, content_type}` |
+| `POST /inbox/file` | streaming 上传渠道文件 (`duplex:'half'`)，保留文件名扩展名并落 `cache/laifu-inbox/files/` → `{path, size, content_type}` |
 | `DELETE /session` | `?session_id=` → 清 hermes state.db 里的 session |
 
 `session_id` 默认 `"main"`,`source` 默认 `"web"`。Gateway 传 `web:thr_xxx` 之类按 thread 隔离。
 
-**鉴权**: 除 `/health` 外 4 个业务端点统一要求 `Authorization: Bearer <LAIFU_USER_TOKEN>` (HS256, 以 `GATEWAY_SECRET` 验签, 见 `server/auth.ts`)。`GATEWAY_SECRET` 为空 (dev) 时放行。
+**鉴权**: 除 `/health` 外 5 个业务端点统一要求 `Authorization: Bearer <LAIFU_USER_TOKEN>` (HS256, 以 `GATEWAY_SECRET` 验签, 见 `server/auth.ts`)。`GATEWAY_SECRET` 为空 (dev) 时放行。
 
 ---
 

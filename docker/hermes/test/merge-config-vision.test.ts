@@ -76,3 +76,11 @@ test('保留 model 其他字段 + display clamp 不受影响', () => {
   expect((doc.model as Record<string, unknown>).provider).toBe('alibaba');
   expect((doc.display as Record<string, unknown>).tool_progress).toBe('off');
 });
+
+test('强制空 sudo_password，且保留 terminal 的其他用户配置', () => {
+  const doc = mergeConfig(
+    { terminal: { backend: 'local', cwd: '/workspace', timeout: 120, sudo_password: 'stale-secret' } },
+    { provider: 'alibaba', model: 'qwen3.7-max', base_url: ALIBABA_BASE, vision_model: 'qwen-vl-max' },
+  );
+  expect(doc.terminal).toEqual({ backend: 'local', cwd: '/workspace', timeout: 120, sudo_password: '' });
+});

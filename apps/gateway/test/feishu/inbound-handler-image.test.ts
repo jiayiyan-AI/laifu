@@ -29,13 +29,14 @@ vi.mock('../../src/feishu/feishu-media-fetcher.js', () => {
   }
   return {
     FEISHU_IMAGE_MAX_BYTES: 10 * 1024 * 1024,
+    FEISHU_FILE_MAX_BYTES: 25 * 1024 * 1024,
     FeishuMediaTooLargeError,
-    openFeishuImageStream: vi.fn(),
+    openFeishuMediaStream: vi.fn(),
   };
 });
 
-vi.mock('../../src/lib/inbox-image-uploader.js', () => ({
-  uploadImageStream: vi.fn(),
+vi.mock('../../src/lib/inbox-uploader.js', () => ({
+  uploadInboxStream: vi.fn(),
 }));
 
 vi.mock('../../src/lib/container-warm-cache.js', () => ({
@@ -51,10 +52,10 @@ import {
 } from '../../src/feishu/inbound-handler.js';
 import { __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
 import {
-  openFeishuImageStream,
+  openFeishuMediaStream,
   FeishuMediaTooLargeError,
 } from '../../src/feishu/feishu-media-fetcher.js';
-import { uploadImageStream } from '../../src/lib/inbox-image-uploader.js';
+import { uploadInboxStream } from '../../src/lib/inbox-uploader.js';
 import { ensureContainerWarm } from '../../src/lib/container-warm-cache.js';
 import type { FeishuBinding } from '../../src/db/feishu-binding-dao.js';
 
@@ -132,11 +133,11 @@ describe('makeFeishuInbound — image', () => {
       status: 'ready',
       container_url: 'http://container:8080',
     } as never);
-    vi.mocked(openFeishuImageStream).mockResolvedValue({
+    vi.mocked(openFeishuMediaStream).mockResolvedValue({
       body: fakeStream(),
       content_type: 'image/jpeg',
     });
-    vi.mocked(uploadImageStream).mockResolvedValue({
+    vi.mocked(uploadInboxStream).mockResolvedValue({
       cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_xyz.jpg',
       content_type: 'image/jpeg',
       size: 204_800,
@@ -149,13 +150,13 @@ describe('makeFeishuInbound — image', () => {
     await handle(imageEvt({ imageKey: 'img_v2_abc' }));
 
     expect(ensureContainerWarm).toHaveBeenCalledWith('u_alice', 'http://container:8080');
-    expect(openFeishuImageStream).toHaveBeenCalledTimes(1);
-    const fetchArgs = vi.mocked(openFeishuImageStream).mock.calls[0]!;
+    expect(openFeishuMediaStream).toHaveBeenCalledTimes(1);
+    const fetchArgs = vi.mocked(openFeishuMediaStream).mock.calls[0]!;
     expect(fetchArgs[0]).toBe(client);
     expect(fetchArgs[1]).toBe('img1');       // messageId
     expect(fetchArgs[2]).toBe('img_v2_abc'); // imageKey
-    expect(uploadImageStream).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(uploadImageStream).mock.calls[0]![0].channel).toBe('feishu');
+    expect(uploadInboxStream).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(uploadInboxStream).mock.calls[0]![0].channel).toBe('feishu');
 
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string; source: string };
@@ -168,7 +169,7 @@ describe('makeFeishuInbound — image', () => {
   });
 
   it('下载失败 → 不 dispatch, 回通用失败文案', async () => {
-    vi.mocked(openFeishuImageStream).mockRejectedValue(new Error('boom'));
+    vi.mocked(openFeishuMediaStream).mockRejectedValue(new Error('boom'));
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(imageEvt({ messageId: 'img_fail' }));
@@ -179,7 +180,7 @@ describe('makeFeishuInbound — image', () => {
   });
 
   it('图片过大 → 单独提示, 不 dispatch, 不发通用失败文案', async () => {
-    vi.mocked(openFeishuImageStream).mockRejectedValue(new FeishuMediaTooLargeError(20_000_000, 10_485_760));
+    vi.mocked(openFeishuMediaStream).mockRejectedValue(new FeishuMediaTooLargeError(20_000_000, 10_485_760));
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(imageEvt({ messageId: 'img_big' }));
@@ -196,7 +197,7 @@ describe('makeFeishuInbound — image', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(imageEvt({ messageId: 'img_cold' }));
 
-    expect(openFeishuImageStream).not.toHaveBeenCalled();
+    expect(openFeishuMediaStream).not.toHaveBeenCalled();
     expect(dispatchHermesChat).not.toHaveBeenCalled();
     expect(client.im.message.create).toHaveBeenCalledTimes(1);
   });
@@ -209,8 +210,31 @@ describe('makeFeishuInbound — image', () => {
       message: { message_id: 'img_bad', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'image', content: '{}' },
     });
 
-    expect(openFeishuImageStream).not.toHaveBeenCalled();
+    expect(openFeishuMediaStream).not.toHaveBeenCalled();
     expect(dispatchHermesChat).not.toHaveBeenCalled();
+  });
+  it('owner 发文件: 资源以 type=file 下载并保留文件名后派发', async () => {
+    vi.mocked(openFeishuMediaStream).mockResolvedValue({ body: fakeStream(), content_type: 'application/pdf' });
+    vi.mocked(uploadInboxStream).mockResolvedValue({
+      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_report.pdf',
+      content_type: 'application/pdf',
+      size: 20_480,
+    });
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    await handle({
+      sender: { sender_id: { open_id: OWNER } },
+      message: {
+        message_id: 'file_1', chat_type: 'p2p', message_type: 'file',
+        content: JSON.stringify({ file_key: 'file_v3_report', file_name: 'report.pdf' }),
+      },
+    });
+
+    expect(vi.mocked(openFeishuMediaStream).mock.calls[0]!.slice(1, 4)).toEqual(['file_1', 'file_v3_report', 'file']);
+    expect(vi.mocked(uploadInboxStream).mock.calls[0]![0]).toMatchObject({ kind: 'file', filename: 'report.pdf' });
+    const message = (dispatchHermesChat.mock.calls[0]![0] as { message: string }).message;
+    expect(message).toContain('file_report.pdf');
+    expect(message).toContain('report.pdf');
   });
 });
 
@@ -226,11 +250,11 @@ describe('makeFeishuInbound — post(图文混排)', () => {
       status: 'ready',
       container_url: 'http://container:8080',
     } as never);
-    vi.mocked(openFeishuImageStream).mockImplementation(async () => ({
+    vi.mocked(openFeishuMediaStream).mockImplementation(async () => ({
       body: fakeStream(),
       content_type: 'image/jpeg',
     }));
-    vi.mocked(uploadImageStream).mockResolvedValue({
+    vi.mocked(uploadInboxStream).mockResolvedValue({
       cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_post.jpg',
       content_type: 'image/jpeg',
       size: 102_400,
@@ -242,7 +266,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ text: '看看这张图', imageKeys: ['img_v2_p'] }));
 
-    expect(openFeishuImageStream).toHaveBeenCalledTimes(1);
+    expect(openFeishuMediaStream).toHaveBeenCalledTimes(1);
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string };
     expect(arg.message).toContain('看看这张图');
@@ -254,9 +278,9 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ messageId: 'post_multi', text: '两张图', imageKeys: ['img_a', 'img_b'] }));
 
-    expect(openFeishuImageStream).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(openFeishuImageStream).mock.calls[0]![2]).toBe('img_a');
-    expect(vi.mocked(openFeishuImageStream).mock.calls[1]![2]).toBe('img_b');
+    expect(openFeishuMediaStream).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(openFeishuMediaStream).mock.calls[0]![2]).toBe('img_a');
+    expect(vi.mocked(openFeishuMediaStream).mock.calls[1]![2]).toBe('img_b');
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
   });
 
@@ -265,7 +289,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ messageId: 'post_txt', text: '只有文字', imageKeys: [] }));
 
-    expect(openFeishuImageStream).not.toHaveBeenCalled();
+    expect(openFeishuMediaStream).not.toHaveBeenCalled();
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string };
     expect(arg.message).toBe('只有文字');

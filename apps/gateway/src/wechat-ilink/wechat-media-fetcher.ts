@@ -1,22 +1,22 @@
 /**
  * iLink CDN 流式拉取 + AES-128-ECB 流式解密。
  *
- * **不在 gateway 内存里缓冲完整文件**:返回一条 Web ReadableStream, 调用方 (inbox-uploader)
- * 把它 pipe 到容器 `/inbox/image`。gateway 内存占用 ≈ 几个 16KB chunk, 与文件大小无关。
+ * **不在 gateway 内存里缓冲完整文件**：返回一条 Web ReadableStream，调用方 (inbox-uploader)
+ * 把它 pipe 到容器 `/inbox/{image,file}`。gateway 内存占用 ≈ 几个 16KB chunk，与文件大小无关。
  *
  * pipeline: fetch(CDN).body → sizeCounter(Transform) → createDecipheriv(aes-128-ecb)
- *   - sizeCounter 超 (maxBytes + PKCS7 余量) 主动 error, compose 把整条链路 destroy;
- *   - 解密用 Node 原生 Decipher, autoPadding 默认开, 自动去 PKCS7;
- *   - AES key 走 hex 解 (image_item.aeskey 是 16B 的 hex 文本), 失败再 fallback base64。
+ *   - sizeCounter 超 (maxBytes + PKCS7 余量) 主动 error，compose 把整条链路 destroy；
+ *   - 解密用 Node 原生 Decipher，autoPadding 默认开，自动去 PKCS7；
+ *   - AES key 优先按 hex 解，失败再 fallback base64，兼容 image_item 与 file_item 的编码。
  *
- * 字段名经 2026-06-18 dev 真机抓包核实: key=image_item.aeskey(hex), url=image_item.media.full_url。
- * (旧版误用 media.aes_key=双重编码 + 拼 encrypt_query_param=缺 taskid, 见 weichat-file-impl.md 风险 #1/#2。)
+ * 字段名经真机抓包核实：下载 URL 使用 media.full_url（含 taskid）；不自行拼裸 encrypt_query_param。
  */
 import { createDecipheriv } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 
-/** 单一来源: 单图硬上限。uploader import 用作 X-Max-Bytes header 值, 不进 env。 */
+/** 单一来源：图片 10 MiB，办公文件 25 MiB。uploader 把值透传为 X-Max-Bytes。 */
 export const WECHAT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const WECHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 const CDN_FETCH_TIMEOUT_MS = 30_000;
 // PKCS7 padding 最多补 16 字节, 给 sizeCounter 阈值留余量, 避免临界图被误判超限。
@@ -42,16 +42,16 @@ export class MediaDecryptError extends Error {
   }
 }
 
-export interface ImagePartInput {
-  aes_key_hex: string;     // 16B key 的 hex 文本 (image_item.aeskey)
-  download_url: string;    // 完整 CDN 下载 URL (image_item.media.full_url)
+export interface EncryptedMediaPart {
+  aes_key_hex: string;
+  download_url: string;
   content_type_hint?: string;
   size_hint?: number;
 }
 
-export interface DecryptedImageStream {
-  body: ReadableStream<Uint8Array>;   // 已串好 sizeCounter + AES-128-ECB Decipher
-  content_type: string;               // iLink hint, fallback 'image/jpeg' (§3.6)
+export interface DecryptedMediaStream {
+  body: ReadableStream<Uint8Array>;
+  content_type: string;
   size_hint?: number;
 }
 
@@ -59,14 +59,21 @@ export interface OpenStreamOpts {
   maxBytes: number;
 }
 
-/** hex 优先 (真实 key 是 hex 文本), 失败 fallback base64; 仍非 16 字节抛 MediaDecryptError。 */
+/**
+ * iLink 图片常给 16B hex / base64 原始 key；文件的 media.aes_key 则是 base64(hex 文本)。
+ * 三种表达最终都必须还原为 AES-128 的 16B key。
+ */
 const decodeAesKey = (raw: string): Buffer => {
-  const hex = Buffer.from(raw, 'hex');
-  if (hex.length === AES_KEY_BYTES) return hex;
-  const b64 = Buffer.from(raw, 'base64');
-  if (b64.length === AES_KEY_BYTES) return b64;
+  if (/^[\da-f]{32}$/i.test(raw)) return Buffer.from(raw, 'hex');
+
+  const base64 = Buffer.from(raw, 'base64');
+  if (base64.length === AES_KEY_BYTES) return base64;
+
+  const nestedHex = base64.toString('utf8');
+  if (/^[\da-f]{32}$/i.test(nestedHex)) return Buffer.from(nestedHex, 'hex');
+
   throw new MediaDecryptError(
-    `aes key not ${AES_KEY_BYTES} bytes (hex=${hex.length}, b64=${b64.length})`,
+    `aes key not ${AES_KEY_BYTES} bytes (base64=${base64.length}, nested-hex=${nestedHex.length})`,
   );
 };
 
@@ -74,10 +81,10 @@ const decodeAesKey = (raw: string): Buffer => {
  * 打开一条 CDN → 解密 stream pipeline。调用方负责把 body pipe 到下游并消费。
  * size abort / 下载错 / 解密错 都会在 body 被消费时 reject。
  */
-export async function openDecryptedImageStream(
-  part: ImagePartInput,
+export async function openDecryptedMediaStream(
+  part: EncryptedMediaPart,
   opts: OpenStreamOpts,
-): Promise<DecryptedImageStream> {
+): Promise<DecryptedMediaStream> {
   const { maxBytes } = opts;
 
   // 闸门 1: iLink 给了 size 且预判超限 → 根本不开 fetch

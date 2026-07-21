@@ -7,7 +7,7 @@
  *   - 走和微信完全相同的异步 dispatch + 回调链
  *     (dao.cache.get 拿 containerUrl → storePendingLoop → dispatchHermesChat)
  *
- * 飞书侧支持文本 + 图片 (无图文聚合 / slash 拦截 / context_token)。
+ * 飞书侧支持文本、图片和文件（无图文聚合 / slash 拦截 / context_token）。
  * 工厂模式: makeFeishuInbound() 返一个 (binding, client) => onMessage,
  * WS dispatcher 对每个活跃 binding 调一次拿到 onMessage 回调注给事件循环。
  */
@@ -21,19 +21,20 @@ import { log } from '../lib/logger.js';
 import type { FeishuBinding } from '../db/feishu-binding-dao.js';
 import type { InboxAttachmentRef } from '@lingxi/shared';
 import { ensureContainerWarm } from '../lib/container-warm-cache.js';
-import { uploadImageStream } from '../lib/inbox-image-uploader.js';
+import { uploadInboxStream } from '../lib/inbox-uploader.js';
 import { buildInboxPrompt } from '../lib/inbox-image-prompt.js';
 import { classifyMessage, runIntercept } from '../lib/slash-filter.js';
 import { dropThreadSilently } from '../lib/drop-thread.js';
 import {
-  openFeishuImageStream,
+  openFeishuMediaStream,
   FeishuMediaTooLargeError,
+  FEISHU_FILE_MAX_BYTES,
   FEISHU_IMAGE_MAX_BYTES,
 } from './feishu-media-fetcher.js';
 
 const FALLBACK_TEXT = '处理失败，请稍后再试。';
 const CONTAINER_NOT_READY_TEXT = '助理还在初始化，请稍后再试。';
-const TEXT_ONLY_TEXT = '当前仅支持文本消息。';
+const UNSUPPORTED_MESSAGE_TEXT = '当前仅支持文本、图片和文件消息。';
 
 /**
  * 进程内存储飞书回复上下文，keyed by loop_id。
@@ -99,6 +100,17 @@ const parseImageKey = (content: string): string | null => {
   return null;
 };
 
+/** 飞书 file 消息 content 是 JSON `{"file_key":"...","file_name":"report.pdf"}`。 */
+const parseFile = (content: string): { key: string; filename: string } | null => {
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || !('file_key' in parsed)) return null;
+  const key: unknown = parsed.file_key;
+  const filename: unknown = 'file_name' in parsed ? parsed.file_name : undefined;
+  if (typeof key !== 'string' || key.length === 0) return null;
+  return { key, filename: typeof filename === 'string' && filename.length > 0 ? filename : 'attachment' };
+};
+
 /**
  * 飞书 post(富文本/图文混排) 消息 content 是 JSON:
  *   { title?, content: [[ {tag:'text',text}, {tag:'img',image_key}, ... ], ... ] }
@@ -132,56 +144,63 @@ const parsePostContent = (content: string): { text: string; imageKeys: string[] 
   return { text: lines.join('\n').trim(), imageKeys };
 };
 
-interface FeishuImageFetchInput {
+type FeishuAttachment =
+  | { kind: 'image'; key: string }
+  | { kind: 'file'; key: string; filename: string };
+
+interface FeishuAttachmentFetchInput {
   binding: FeishuBinding;
   client: Lark.Client;
   senderOpenId: string;
   messageId: string;
-  imageKeys: string[];
+  resources: FeishuAttachment[];
   containerUrl: string;
 }
 
-/**
- * 逐张下载飞书图片 → 上传容器 /inbox/image → 产出 cache_path 列表。**自行吞错**(失败写 fetchErrors), 不 throw。
- * 图片过大单独提示用户(不进 fetchErrors, 避免上层再叠加通用失败文案)。
- * **故意串行**: 容器 maxReplicas=1, 同时多个 POST 在单 replica 上 fight CPU + sync fs write。
- */
-const fetchFeishuImages = async (
-  input: FeishuImageFetchInput,
+/** 逐个下载并上传飞书附件；任一附件失败不阻塞同条消息的文字或其他附件。 */
+const fetchFeishuAttachments = async (
+  input: FeishuAttachmentFetchInput,
 ): Promise<{ attachments: InboxAttachmentRef[]; fetchErrors: string[] }> => {
-  const { binding, client, senderOpenId, messageId, imageKeys, containerUrl } = input;
+  const { binding, client, senderOpenId, messageId, resources, containerUrl } = input;
   const attachments: InboxAttachmentRef[] = [];
   const fetchErrors: string[] = [];
 
-  // 先唤醒容器: 下载虽走飞书 API, 但随后要 POST 容器, 冷启动期会被挂住。
   try {
     await ensureContainerWarm(binding.user_id, containerUrl);
   } catch (e) {
-    log.warn({ event: 'feishu.image.wake.failed', user_id: binding.user_id, err: String(e) });
+    log.warn({ event: 'feishu.attachment.wake.failed', user_id: binding.user_id, err: String(e) });
     fetchErrors.push('容器唤醒失败');
     return { attachments, fetchErrors };
   }
 
-  for (const imageKey of imageKeys) {
+  for (const resource of resources) {
+    const maxBytes = resource.kind === 'file' ? FEISHU_FILE_MAX_BYTES : FEISHU_IMAGE_MAX_BYTES;
     try {
-      const stream = await openFeishuImageStream(client, messageId, imageKey, { maxBytes: FEISHU_IMAGE_MAX_BYTES });
-      const up = await uploadImageStream({
+      const stream = await openFeishuMediaStream(client, messageId, resource.key, resource.kind, { maxBytes });
+      const up = await uploadInboxStream({
         containerUrl,
         userId: binding.user_id,
         body: stream.body,
         contentType: stream.content_type,
-        maxBytes: FEISHU_IMAGE_MAX_BYTES,
+        maxBytes,
+        kind: resource.kind,
         channel: 'feishu',
+        filename: resource.kind === 'file' ? resource.filename : undefined,
       });
-      attachments.push({ kind: 'image', cache_path: up.cache_path, content_type: up.content_type, size: up.size });
+      if (resource.kind === 'file') {
+        attachments.push({ kind: 'file', cache_path: up.cache_path, content_type: up.content_type, filename: resource.filename, size: up.size });
+      } else {
+        attachments.push({ kind: 'image', cache_path: up.cache_path, content_type: up.content_type, size: up.size });
+      }
     } catch (e) {
+      const label = resource.kind === 'file' ? '文件' : '图片';
       if (e instanceof FeishuMediaTooLargeError) {
         await safeSend(
           client, senderOpenId,
-          `图片过大 (${(e.actual / 1e6).toFixed(1)} MB，上限 ${(e.limit / 1e6).toFixed(0)} MB)，请压缩或截图后重发。`,
+          `${label}过大 (${(e.actual / 1e6).toFixed(1)} MB，上限 ${(e.limit / 1e6).toFixed(0)} MB)，请压缩后重发。`,
         );
       } else {
-        log.warn({ event: 'feishu.image.fetch.failed', user_id: binding.user_id, err: e instanceof Error ? e.message : String(e) });
+        log.warn({ event: `feishu.${resource.kind}.fetch.failed`, user_id: binding.user_id, err: e instanceof Error ? e.message : String(e) });
         fetchErrors.push(e instanceof Error ? e.message : String(e));
       }
     }
@@ -328,19 +347,25 @@ export const makeFeishuInbound = () => {
     // 去重: 同 message_id 已见过 → return (有界 Set, 防长跑内存泄漏)
     if (!markSeen(messageId)) return;
 
-    // 解析消息 → { text, imageKeys }; text / image / post 都支持, 其余类型提示一次
+    // 解析消息 → { text, resources }；text / image / post / file 都支持。
     let text = '';
-    let imageKeys: string[] = [];
+    let resources: FeishuAttachment[] = [];
     if (messageType === 'text') {
       text = parseFeishuText(content) ?? '';
     } else if (messageType === 'image') {
-      const k = parseImageKey(content);
-      if (k) imageKeys = [k];
+      const key = parseImageKey(content);
+      if (key) resources = [{ kind: 'image', key }];
+    } else if (messageType === 'file') {
+      const file = parseFile(content);
+      if (file) resources = [{ kind: 'file', ...file }];
     } else if (messageType === 'post') {
       const post = parsePostContent(content);
-      if (post) { text = post.text; imageKeys = post.imageKeys; }
+      if (post) {
+        text = post.text;
+        resources = post.imageKeys.map((key) => ({ kind: 'image', key }));
+      }
     } else {
-      await safeSend(client, senderOpenId, TEXT_ONLY_TEXT);
+      await safeSend(client, senderOpenId, UNSUPPORTED_MESSAGE_TEXT);
       return;
     }
 
@@ -362,8 +387,8 @@ export const makeFeishuInbound = () => {
       return;
     }
 
-    // 无文字且无图 → 丢弃 (空消息 / 坏 content)
-    if (!text && imageKeys.length === 0) return;
+    // 无文字且无附件 → 丢弃（空消息 / 坏 content）。
+    if (!text && resources.length === 0) return;
 
     // 1 用户 1 thread: 无 thread 说明绑定尚未完成, 不 dispatch
     const threadId = binding.thread_id;
@@ -374,8 +399,8 @@ export const makeFeishuInbound = () => {
       thread_id: threadId,
       from_open_id: senderOpenId,
       message_id: messageId,
-      has_image: imageKeys.length > 0,
-      image_count: imageKeys.length,
+      has_attachment: resources.length > 0,
+      attachment_count: resources.length,
       text_len: text.length,
     });
 
@@ -387,13 +412,12 @@ export const makeFeishuInbound = () => {
     }
     const containerUrl = mapping.container_url;
 
-    // 有图: 下载 → 上传 → 拼本地路径 prompt; 纯文本: 原样
+    // 有附件: 下载 → 上传 → 拼本地路径 prompt; 纯文本: 原样。
     let promptText: string;
-    if (imageKeys.length > 0) {
-      const { attachments, fetchErrors } = await fetchFeishuImages({ binding, client, senderOpenId, messageId, imageKeys, containerUrl });
+    if (resources.length > 0) {
+      const { attachments, fetchErrors } = await fetchFeishuAttachments({ binding, client, senderOpenId, messageId, resources, containerUrl });
       if (attachments.length === 0 && !text) {
-        // 无文字且图全失败: 太大已单独提示(fetchErrors 空)→ 静默; 其他失败 → 通用文案
-        if (fetchErrors.length > 0) await safeSend(client, senderOpenId, '图片处理失败了，请稍后重发试试~');
+        if (fetchErrors.length > 0) await safeSend(client, senderOpenId, '附件处理失败了，请稍后重发试试~');
         return;
       }
       promptText = buildInboxPrompt(text, attachments, fetchErrors);

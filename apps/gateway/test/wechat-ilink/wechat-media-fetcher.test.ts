@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createCipheriv } from 'node:crypto';
 import {
-  openDecryptedImageStream,
+  openDecryptedMediaStream,
   MediaTooLargeError,
   MediaDownloadError,
   MediaDecryptError,
@@ -40,7 +40,7 @@ describe('openDecryptedImageStream', () => {
     const cipher = encrypt(plain);
 
     const spy = stubFetch(cipher);
-    const res = await openDecryptedImageStream(
+    const res = await openDecryptedMediaStream(
       { aes_key_hex: KEY.toString('hex'), download_url: URL },
       { maxBytes: 10 * 1024 * 1024 },
     );
@@ -53,7 +53,7 @@ describe('openDecryptedImageStream', () => {
   it('uses the content_type hint when provided', async () => {
     const cipher = encrypt(Buffer.from('x'));
     stubFetch(cipher);
-    const res = await openDecryptedImageStream(
+    const res = await openDecryptedMediaStream(
       { aes_key_hex: KEY.toString('hex'), download_url: URL, content_type_hint: 'image/png' },
       { maxBytes: 1024 },
     );
@@ -65,7 +65,7 @@ describe('openDecryptedImageStream', () => {
     const plain = Buffer.alloc(4096, 7);
     const cipher = encrypt(plain);
     stubFetch(cipher);
-    const res = await openDecryptedImageStream(
+    const res = await openDecryptedMediaStream(
       { aes_key_hex: KEY.toString('hex'), download_url: URL },
       { maxBytes: 1024 },   // 4KB cipher > 1KB limit
     );
@@ -76,7 +76,7 @@ describe('openDecryptedImageStream', () => {
     const plain = Buffer.from('b64-keyed payload');
     const cipher = encrypt(plain);
     stubFetch(cipher);
-    const res = await openDecryptedImageStream(
+    const res = await openDecryptedMediaStream(
       { aes_key_hex: KEY.toString('base64'), download_url: URL }, // 非 hex → fallback base64
       { maxBytes: 1024 },
     );
@@ -84,10 +84,23 @@ describe('openDecryptedImageStream', () => {
     expect(out.equals(plain)).toBe(true);
   });
 
+  it('decrypts a file key encoded as base64(hex text)', async () => {
+    const plain = Buffer.from('%PDF-1.7');
+    const cipher = encrypt(plain);
+    stubFetch(cipher);
+    const fileKey = Buffer.from(KEY.toString('hex'), 'utf8').toString('base64');
+    const res = await openDecryptedMediaStream(
+      { aes_key_hex: fileKey, download_url: URL, content_type_hint: 'application/pdf' },
+      { maxBytes: 1024 },
+    );
+    expect((await drain(res.body)).equals(plain)).toBe(true);
+    expect(res.content_type).toBe('application/pdf');
+  });
+
   it('throws MediaDecryptError for an unparseable aes_key', async () => {
     stubFetch(Buffer.alloc(0));
     await expect(
-      openDecryptedImageStream(
+      openDecryptedMediaStream(
         { aes_key_hex: 'short', download_url: URL },
         { maxBytes: 1024 },
       ),
@@ -97,7 +110,7 @@ describe('openDecryptedImageStream', () => {
   it('pre-rejects oversized images via size_hint without opening fetch', async () => {
     const spy = stubFetch(Buffer.alloc(0));
     await expect(
-      openDecryptedImageStream(
+      openDecryptedMediaStream(
         { aes_key_hex: KEY.toString('hex'), download_url: URL, size_hint: 2048 },
         { maxBytes: 1024 },
       ),
@@ -109,7 +122,7 @@ describe('openDecryptedImageStream', () => {
     const spy = vi.fn(async () => new Response('nope', { status: 404 }));
     vi.stubGlobal('fetch', spy as unknown as typeof fetch);
     await expect(
-      openDecryptedImageStream(
+      openDecryptedMediaStream(
         { aes_key_hex: KEY.toString('hex'), download_url: URL },
         { maxBytes: 1024 },
       ),

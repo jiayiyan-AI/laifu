@@ -1,6 +1,6 @@
-// inbox.test.ts — 容器侧 /inbox/image 落盘 + sweep 单测 (bun test)。
+// inbox.test.ts — 容器侧 /inbox/{image,file} 落盘 + sweep 单测（bun test）。
 //
-// 注: config.ts 在 import 时读 process.env.HOME 派生 IMAGE_CACHE_DIR, 所以必须在
+// 注: config.ts 在 import 时读 process.env.HOME 派生缓存目录，所以必须在
 // import server 模块**之前**把 HOME 指到临时目录。
 
 import { test, expect, beforeEach, afterAll } from 'bun:test';
@@ -13,8 +13,8 @@ const HOME = await mkdtemp(path.join(tmpdir(), 'hermes-inbox-'));
 process.env.HOME = HOME;
 process.env.GATEWAY_SECRET = ''; // inbox handler 自身不校 bearer (http.handle 负责)
 
-const { handleInboxImage, sweepOldFiles } = await import('../server/inbox.ts');
-const { IMAGE_CACHE_DIR } = await import('../server/config.ts');
+const { handleInboxFile, handleInboxImage, sweepOldFiles } = await import('../server/inbox.ts');
+const { FILE_CACHE_DIR, IMAGE_CACHE_DIR } = await import('../server/config.ts');
 
 const makeRequest = (body: Uint8Array, headers: Record<string, string>): Request =>
   new Request('http://localhost/inbox/image', { method: 'POST', body, headers });
@@ -28,7 +28,10 @@ const listCache = async (): Promise<string[]> => {
 };
 
 beforeEach(async () => {
-  await rm(IMAGE_CACHE_DIR, { recursive: true, force: true });
+  await Promise.all([
+    rm(IMAGE_CACHE_DIR, { recursive: true, force: true }),
+    rm(FILE_CACHE_DIR, { recursive: true, force: true }),
+  ]);
 });
 
 afterAll(async () => {
@@ -50,6 +53,40 @@ test('normal upload: writes final file, no .partial, returns path/size/content_t
   const files = await listCache();
   expect(files.some((f) => f.includes('.partial'))).toBe(false);
   expect(files.length).toBe(1);
+});
+
+test('file upload: preserves filename extension in a dedicated cache directory', async () => {
+  const payload = new TextEncoder().encode('PDF bytes');
+  const res = await handleInboxFile(
+    makeRequest(payload, {
+      'content-type': 'application/pdf',
+      'x-filename': encodeURIComponent('预算报告.pdf'),
+      'x-max-bytes': String(25 * 1024 * 1024),
+    }),
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { path: string; size: number; content_type: string };
+  expect(body.path).toStartWith(FILE_CACHE_DIR);
+  expect(body.path).toEndWith('_预算报告.pdf');
+  expect(body.size).toBe(payload.length);
+  expect(body.content_type).toBe('application/pdf');
+  expect(existsSync(body.path)).toBe(true);
+});
+
+test('file upload: truncates a long UTF-8 filename within the filesystem byte limit', async () => {
+  const filename = `${'文'.repeat(100)}.pdf`;
+  const res = await handleInboxFile(
+    makeRequest(new TextEncoder().encode('PDF bytes'), {
+      'content-type': 'application/pdf',
+      'x-filename': encodeURIComponent(filename),
+      'x-max-bytes': String(25 * 1024 * 1024),
+    }),
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { path: string };
+  expect(Buffer.byteLength(path.basename(body.path))).toBeLessThanOrEqual(255);
+  expect(body.path).toEndWith('.pdf');
+  expect(existsSync(body.path)).toBe(true);
 });
 
 // Smoke: 让请求真经过 Bun.serve (其余用例直接 handleInboxImage(new Request(...)), 走的是

@@ -60,7 +60,7 @@ type ModelSection = Record<string, unknown>;
  * 其他所有字段 (providers / compression / stt / browser / memory / skills / ...)
  * 保留 hermes seed 或用户手动添加的内容不动。
  */
-export function mergeConfig(existing: YamlDoc | null, cfg: { provider: string; model: string; base_url: string; vision_model: string }): YamlDoc {
+export function mergeConfig(existing: YamlDoc | null, cfg: { provider: string; model: string; base_url: string | null; vision_model: string | null }): YamlDoc {
   const doc: YamlDoc = (existing && typeof existing === 'object') ? { ...existing } : {};
   const existingModel = doc.model;
   const model: ModelSection = (existingModel && typeof existingModel === 'object') ? { ...existingModel } : {};
@@ -78,6 +78,8 @@ export function mergeConfig(existing: YamlDoc | null, cfg: { provider: string; m
     delete model.api_key;
   }
 
+  // v16 曾写入这个字段；保留它会让主模型误走原生图像 content，而 compatible-mode 端点会拒绝该请求。
+  delete model.supports_vision;
   doc.model = model;
 
   // display: clamp 我们关心的两条, 其余字段 (compact / banner / language / ...) 不动
@@ -86,6 +88,13 @@ export function mergeConfig(existing: YamlDoc | null, cfg: { provider: string; m
   display.tool_progress = 'off';
   display.inline_diffs = false;
   doc.display = display;
+
+  // ACA 没有 TTY；Hermes 未设置 sudo_password 时会等待 45 秒的交互输入。主容器又启用了
+  // no_new_privs，不能把 sudo 当作安装依赖的能力路径，故显式空值只让 Hermes 立即按无密码路径处理。
+  const existingTerminal = doc.terminal;
+  const terminal: Record<string, unknown> = (existingTerminal && typeof existingTerminal === 'object') ? { ...existingTerminal } : {};
+  terminal.sudo_password = '';
+  doc.terminal = terminal;
 
   // auxiliary.vision: "主模型不吃原生图"时配专用 VL 模型走文字描述路。VL model 名由 gateway
   // 经 env HERMES_VISION_MODEL 注入 (config.azure.hermesVisionModel) → 改它只需重部署 gateway,
