@@ -263,7 +263,7 @@ export async function detectNewSessionId(
 //     ⚠ tirith security scanner enabled but not available ...
 //   session_id: YYYYMMDD_HHMMSS_<hash>
 //   <真正的回复>
-// 策略: ⚠️/⚠/[server] 开头丢; 末尾 " to" 的吞下一行 (wrap 续接); session_id 元信息丢。
+// 策略：丢弃 ⚠️/⚠/[server] 警告、会话恢复状态与 session_id 元信息；末尾 " to" 的警告吞下一行（wrap 续接）。
 export function cleanReply(stdout: string): string {
   const lines = stdout.split('\n');
   const keep: string[] = [];
@@ -277,7 +277,8 @@ export function cleanReply(stdout: string): string {
     if (
       stripped.startsWith('⚠️') ||
       stripped.startsWith('⚠') ||
-      stripped.startsWith('[server]')
+      stripped.startsWith('[server]') ||
+      stripped.startsWith('↻ Resumed session')
     ) {
       if (line.replace(/\s+$/, '').endsWith(' to')) skipNext = true;
       continue;

@@ -120,7 +120,12 @@ export async function asyncChatAndCallback(
     reply = 'hermes timeout';
     exitCode = 1;
   } else {
-    reply = cleanReply(stdout) || stderr.trim() || '';
+    reply = cleanReply(stdout) || cleanReply(stderr);
+    if (!reply) {
+      log.error({ event: 'hermes.reply.empty', exit_code: exitCode, stdout_chars: stdout.length, stderr_chars: stderr.length });
+      reply = '处理失败，请稍后再试。';
+      exitCode = 1;
+    }
   }
 
   await postCallback({

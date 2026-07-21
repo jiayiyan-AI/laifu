@@ -17,11 +17,12 @@ import type { InboundPart } from './inbound.js';
 import type { InboxAttachmentRef } from '@lingxi/shared';
 import { ensureContainerWarm } from '../lib/container-warm-cache.js';
 import {
-  openDecryptedImageStream,
+  openDecryptedMediaStream,
   MediaTooLargeError,
+  WECHAT_FILE_MAX_BYTES,
   WECHAT_IMAGE_MAX_BYTES,
 } from './wechat-media-fetcher.js';
-import { uploadImageStream } from '../lib/inbox-image-uploader.js';
+import { uploadInboxStream } from '../lib/inbox-uploader.js';
 import { buildInboxPrompt } from '../lib/inbox-image-prompt.js';
 import { enqueueThreadTask } from '../lib/thread-serializer.js';
 import {
@@ -33,7 +34,7 @@ import { WechatBinding } from '../db/wechat-binding-dao.js';
 import { IlinkClient } from './client.js';
 import { runWithTrace } from '../lib/trace-context.js';
 
-type ImagePart = Extract<InboundPart, { kind: 'image' }>;
+type AttachmentPart = Exclude<InboundPart, { kind: 'text' }>;
 
 const FALLBACK_TEXT = '处理失败，请稍后再试。';
 const CONTAINER_NOT_READY_TEXT = '助理还在初始化，请稍后再试。';
@@ -78,50 +79,57 @@ const isQuotaExhausted = async (userId: string): Promise<boolean> => {
   }
 };
 /**
- * 构造一条消息的「图片下载+上传容器」任务(eager-fetch)。在 onMessage 内即建、串进聚合层的
- * uploadChain 立刻跑 —— 因 iLink download_url 带 TTL,绝不能拖到 flush 后(可能等一个数分钟的
- * loop)才取。产出 cache_path(容器本地稳定)。**自行吞错**(失败写 fetchErrors),不 throw。
+ * 构造一条消息的「附件下载+上传容器」任务（eager-fetch）。在 onMessage 内即建、串进聚合层的
+ * uploadChain 立刻跑 —— 因 iLink download_url 带 TTL，绝不能拖到 flush 后才取。产出稳定的
+ * cache_path，且自行吞错（失败写 fetchErrors），不 throw。
  */
 const buildUploadThunk = (
   binding: { id: string; user_id: string },
   client: WechatClient,
   msg: ParsedMsg,
-  imageParts: ImagePart[],
+  attachmentParts: AttachmentPart[],
   containerUrl: string,
 ) => async (): Promise<{ attachments: InboxAttachmentRef[]; fetchErrors: string[] }> => {
   const attachments: InboxAttachmentRef[] = [];
   const fetchErrors: string[] = [];
 
-  // wake 容器(避免冷启动期 CDN 连接被挂导致 RST), 再逐张 streaming 下载+上传。
   try {
     await ensureContainerWarm(binding.user_id, containerUrl);
   } catch (e) {
-    log.warn({ event: 'wechat.image.wake.failed', user_id: binding.user_id, err: String(e) });
+    log.warn({ event: 'wechat.attachment.wake.failed', user_id: binding.user_id, err: String(e) });
     fetchErrors.push('容器唤醒失败');
     return { attachments, fetchErrors };
   }
 
-  // **故意串行**: 容器 maxReplicas=1, 同时多个 POST 在单 replica 上 fight CPU + sync fs write。
-  for (const img of imageParts) {
+  // 故意串行：容器 maxReplicas=1，同时多个 POST 会争用 CPU + sync fs write。
+  for (const attachment of attachmentParts) {
+    const maxBytes = attachment.kind === 'file' ? WECHAT_FILE_MAX_BYTES : WECHAT_IMAGE_MAX_BYTES;
     try {
-      const stream = await openDecryptedImageStream(img, { maxBytes: WECHAT_IMAGE_MAX_BYTES });
-      const up = await uploadImageStream({
+      const stream = await openDecryptedMediaStream(attachment, { maxBytes });
+      const up = await uploadInboxStream({
         containerUrl,
         userId: binding.user_id,
         body: stream.body,
         contentType: stream.content_type,
-        maxBytes: WECHAT_IMAGE_MAX_BYTES,
+        maxBytes,
+        kind: attachment.kind,
         channel: 'wechat',
+        filename: attachment.kind === 'file' ? attachment.filename : undefined,
       });
-      attachments.push({ kind: 'image', cache_path: up.cache_path, content_type: up.content_type, size: up.size });
+      if (attachment.kind === 'file') {
+        attachments.push({ kind: 'file', cache_path: up.cache_path, content_type: up.content_type, filename: attachment.filename, size: up.size });
+      } else {
+        attachments.push({ kind: 'image', cache_path: up.cache_path, content_type: up.content_type, size: up.size });
+      }
     } catch (e) {
+      const label = attachment.kind === 'file' ? '文件' : '图片';
       if (e instanceof MediaTooLargeError) {
         await safeSendText(
           client, msg,
-          `图片过大 (${(e.actual / 1e6).toFixed(1)} MB，上限 ${(e.limit / 1e6).toFixed(0)} MB)，请压缩或截图后重发。`,
+          `${label}过大 (${(e.actual / 1e6).toFixed(1)} MB，上限 ${(e.limit / 1e6).toFixed(0)} MB)，请压缩后重发。`,
         );
       } else {
-        log.warn({ event: 'wechat.image.fetch.failed', user_id: binding.user_id, err: e instanceof Error ? e.message : String(e) });
+        log.warn({ event: `wechat.${attachment.kind}.fetch.failed`, user_id: binding.user_id, err: e instanceof Error ? e.message : String(e) });
         fetchErrors.push(e instanceof Error ? e.message : String(e));
       }
     }
@@ -153,11 +161,10 @@ const dispatchMerged = async (
   const joinedText = burst.texts.join('\n');
   const { attachments, fetchErrors } = burst;
 
-  // 无文字且无成功附件 → 不入库不 dispatch。但若是「图全失败」(含 wake 失败), 给用户反馈,
-  // 不再像旧 inbound-handler.ts:166 那样静默(ctx §234 的「打水漂」问题)。
+  // 无文字且无成功附件 → 不入库不 dispatch。但若附件全失败（含 wake 失败），给用户反馈。
   if (!joinedText && attachments.length === 0) {
     if (fetchErrors.length > 0) {
-      await safeSendText(client, msg, '图片处理失败了，请稍后重发试试~');
+      await safeSendText(client, msg, '附件处理失败了，请稍后重发试试~');
     }
     return null;
   }
@@ -296,22 +303,21 @@ async function onWechatInbound(
   const msg = parseInbound(raw);
   if (!msg) return;
 
-  // parts → text (串联) + image 列表; slash 只看 text。
+  // parts → text（串联）+ 附件列表；slash 只看 text。
   const text = msg.parts
     .filter((p): p is Extract<InboundPart, { kind: 'text' }> => p.kind === 'text')
     .map((p) => p.text)
     .join('');
-  const imageParts = msg.parts.filter((p): p is ImagePart => p.kind === 'image');
+  const attachmentParts = msg.parts.filter((p): p is AttachmentPart => p.kind !== 'text');
 
-  // 入站到达埋点(常驻):量「图文混排被 iLink 拆成多条时,各条 push 实际到达 gateway 的间隔」。
-  // 聚合窗口能否兜住拆分,取决于图那条 push 比文本晚到多少 —— 这条日志把它变成可测。
-  // 用 ts(logger 自带) + message_id 关联;has_image 区分图/文那条。thread_id 可能尚未解析。
+  // 入站到达埋点：量图文/文件消息被 iLink 拆条后的实际到达间隔。
   log.info({
     event: 'wechat.inbound.arrived',
     thread_id: binding.thread_id ?? null,
     from_user_id: msg.from_user_id,
     message_id: msg.message_id,
-    has_image: imageParts.length > 0,
+    has_attachment: attachmentParts.length > 0,
+    attachment_count: attachmentParts.length,
     text_len: text.length,
   });
 
@@ -355,14 +361,14 @@ async function onWechatInbound(
   }
   const containerUrl = mapping.container_url;
 
-  // unsupported 类型(voice/file/video)即时提示一次, 不阻塞 text/image
+  // unsupported 类型（voice/video）即时提示一次，不阻塞 text/attachment。
   if (msg.unsupported_hints.length > 0) {
     await safeSendText(client, msg, msg.unsupported_hints.join('\n'));
   }
 
-  const hasImage = imageParts.length > 0;
-  // 纯 unsupported / 空消息: 提示已发, 无内容可派发, 不进聚合
-  if (!text && !hasImage) return;
+  const hasAttachment = attachmentParts.length > 0;
+  // 纯 unsupported / 空消息：提示已发，无内容可派发，不进聚合。
+  if (!text && !hasAttachment) return;
 
   // 软配额闸(派发前, eager 下载图之前): 超额则提示并止, 不白下图。
   if (await isQuotaExhausted(binding.user_id)) {
@@ -370,11 +376,11 @@ async function onWechatInbound(
     return;
   }
 
-  // 进聚合窗口: 图 eager-fetch 串进 uploadChain; 窗口静默到期 flush → 合并 burst 进车道。
+  // 进聚合窗口：附件 eager-fetch 串进 uploadChain；窗口静默到期 flush → 合并 burst 进车道。
   aggregateInbound(threadId, {
     text,
-    hasImage,
-    upload: hasImage ? buildUploadThunk(binding, client, msg, imageParts, containerUrl) : undefined,
+    hasImage: hasAttachment,
+    upload: hasAttachment ? buildUploadThunk(binding, client, msg, attachmentParts, containerUrl) : undefined,
     onFlush: (burst) => {
       const accepted = enqueueThreadTask(threadId, () =>
         dispatchMerged(binding, { client, msg }, threadId, burst),

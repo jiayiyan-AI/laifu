@@ -15,13 +15,14 @@ vi.mock('../../src/wechat-ilink/wechat-media-fetcher.js', () => {
   }
   return {
     WECHAT_IMAGE_MAX_BYTES: 10 * 1024 * 1024,
+    WECHAT_FILE_MAX_BYTES: 25 * 1024 * 1024,
     MediaTooLargeError,
-    openDecryptedImageStream: vi.fn(),
+    openDecryptedMediaStream: vi.fn(),
   };
 });
 
-vi.mock('../../src/lib/inbox-image-uploader.js', () => ({
-  uploadImageStream: vi.fn(),
+vi.mock('../../src/lib/inbox-uploader.js', () => ({
+  uploadInboxStream: vi.fn(),
 }));
 
 vi.mock('../../src/lib/container-warm-cache.js', () => ({
@@ -36,10 +37,10 @@ import {
 } from '../../src/wechat-ilink/inbound-handler.js';
 import { buildInboxPrompt } from '../../src/lib/inbox-image-prompt.js';
 import {
-  openDecryptedImageStream,
+  openDecryptedMediaStream,
   MediaTooLargeError,
 } from '../../src/wechat-ilink/wechat-media-fetcher.js';
-import { uploadImageStream } from '../../src/lib/inbox-image-uploader.js';
+import { uploadInboxStream } from '../../src/lib/inbox-uploader.js';
 import { ensureContainerWarm } from '../../src/lib/container-warm-cache.js';
 import type { WechatBinding } from '../../src/db/wechat-binding-dao.js';
 import type { IlinkClient } from '../../src/wechat-ilink/client.js';
@@ -115,11 +116,11 @@ describe('handleInbound — image attachments', () => {
       balance_cny: 10, free_quota_cny_month: 5, used_cny_month: 0, period_start: '2026-01-01',
     });
     vi.mocked(ensureContainerWarm).mockResolvedValue(undefined);
-    vi.mocked(openDecryptedImageStream).mockResolvedValue({
+    vi.mocked(openDecryptedMediaStream).mockResolvedValue({
       body: emptyStream(),
       content_type: 'image/jpeg',
     });
-    vi.mocked(uploadImageStream).mockResolvedValue({
+    vi.mocked(uploadInboxStream).mockResolvedValue({
       cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123.jpg',
       content_type: 'image/jpeg',
       size: 204_800,
@@ -144,7 +145,7 @@ describe('handleInbound — image attachments', () => {
     await settle();
 
     expect(ensureContainerWarm).toHaveBeenCalledWith('u_alice', 'http://container:8080');
-    expect(uploadImageStream).toHaveBeenCalledTimes(1);
+    expect(uploadInboxStream).toHaveBeenCalledTimes(1);
 
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content_type).toBe('text');
@@ -159,7 +160,7 @@ describe('handleInbound — image attachments', () => {
   });
 
   it('image too large: sendText 过大, text still dispatched as plain text', async () => {
-    vi.mocked(openDecryptedImageStream).mockRejectedValueOnce(new MediaTooLargeError(12_000_000, 10_485_760));
+    vi.mocked(openDecryptedMediaStream).mockRejectedValueOnce(new MediaTooLargeError(12_000_000, 10_485_760));
     const fetchImpl = dispatch202();
     const client = mockClient();
     const handle = makeHandleInbound()(mockBinding(), client);
@@ -171,7 +172,7 @@ describe('handleInbound — image attachments', () => {
     await settle();
 
     expect(sentTexts(client).some((t) => t.includes('图片过大'))).toBe(true);
-    expect(uploadImageStream).not.toHaveBeenCalled();
+    expect(uploadInboxStream).not.toHaveBeenCalled();
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content_type).toBe('text');
     expect(insertArg.content).toBe('帮我看看');
@@ -179,7 +180,7 @@ describe('handleInbound — image attachments', () => {
   });
 
   it('image-only too large: sendText 过大, no DB insert, no dispatch', async () => {
-    vi.mocked(openDecryptedImageStream).mockRejectedValueOnce(new MediaTooLargeError(12_000_000, 10_485_760));
+    vi.mocked(openDecryptedMediaStream).mockRejectedValueOnce(new MediaTooLargeError(12_000_000, 10_485_760));
     const fetchImpl = dispatch202();
     const client = mockClient();
     const handle = makeHandleInbound()(mockBinding(), client);
@@ -192,19 +193,27 @@ describe('handleInbound — image attachments', () => {
     expect(vi.mocked(fetchImpl).mock.calls.some((c) => String(c[0]).endsWith('/chat'))).toBe(false);
   });
 
-  it('wake failure (image-only): 图全失败给反馈, no CDN open, no dispatch', async () => {
+  it('wake failure (file-only): 附件全失败给反馈, no CDN open, no dispatch', async () => {
     vi.mocked(ensureContainerWarm).mockRejectedValueOnce(new Error('wake non-2xx: 503'));
     const fetchImpl = dispatch202();
     const client = mockClient();
     const handle = makeHandleInbound()(mockBinding(), client);
 
-    await handle(inboundWith([{ type: 2, image_item: imageItemObj }]));
+    await handle(inboundWith([{
+      type: 4,
+      file_item: {
+        file_name: 'report.pdf',
+        media: {
+          aes_key: Buffer.from('87e0b2320ddbb8dee3804ec8b48203e1', 'utf8').toString('base64'),
+          full_url: 'https://cdn.example/c2c/download?taskid=file',
+        },
+      },
+    }]));
     await settle();
 
-    // wake 失败 → fetchError; 纯图无文字 → 不 dispatch, 但给「图片处理失败」反馈(不再静默打水漂)
-    expect(sentTexts(client).some((t) => t.includes('图片处理失败'))).toBe(true);
-    expect(openDecryptedImageStream).not.toHaveBeenCalled();
-    expect(uploadImageStream).not.toHaveBeenCalled();
+    expect(sentTexts(client).some((t) => t.includes('附件处理失败'))).toBe(true);
+    expect(openDecryptedMediaStream).not.toHaveBeenCalled();
+    expect(uploadInboxStream).not.toHaveBeenCalled();
     expect(vi.mocked(fetchImpl).mock.calls.some((c) => String(c[0]).endsWith('/chat'))).toBe(false);
   });
 
@@ -227,7 +236,7 @@ describe('handleInbound — image attachments', () => {
   });
 
   it('multiple images in one message upload serially and all land as attachments', async () => {
-    vi.mocked(uploadImageStream)
+    vi.mocked(uploadInboxStream)
       .mockResolvedValueOnce({ cache_path: '/c/img_1.jpg', content_type: 'image/jpeg', size: 1000 })
       .mockResolvedValueOnce({ cache_path: '/c/img_2.png', content_type: 'image/png', size: 2000 });
     const fetchImpl = dispatch202();
@@ -240,7 +249,7 @@ describe('handleInbound — image attachments', () => {
     ]));
     await settle();
 
-    expect(uploadImageStream).toHaveBeenCalledTimes(2);
+    expect(uploadInboxStream).toHaveBeenCalledTimes(2);
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content_type).toBe('text');
     expect(insertArg.content).toContain('/c/img_1.jpg'); // content = 派发 prompt(纯图也带图片路径标注)
@@ -269,9 +278,40 @@ describe('handleInbound — image attachments', () => {
 
     expect(sentTexts(client).some((t) => t.includes('额度已用完'))).toBe(true);
     expect(ensureContainerWarm).not.toHaveBeenCalled();
-    expect(openDecryptedImageStream).not.toHaveBeenCalled();
-    expect(uploadImageStream).not.toHaveBeenCalled();
+    expect(openDecryptedMediaStream).not.toHaveBeenCalled();
+    expect(uploadInboxStream).not.toHaveBeenCalled();
     expect(vi.mocked(fetchImpl).mock.calls.some((c) => String(c[0]).endsWith('/chat'))).toBe(false);
     expect(dao.messages.insert).not.toHaveBeenCalled();
+  });
+  it('file message: decrypts, uploads to /inbox/file, and dispatches its stable path', async () => {
+    vi.mocked(uploadInboxStream).mockResolvedValue({
+      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_report.pdf',
+      content_type: 'application/pdf',
+      size: 12_345,
+    });
+    const fetchImpl = dispatch202();
+    const client = mockClient();
+    const handle = makeHandleInbound()(mockBinding(), client);
+
+    await handle(inboundWith([{
+      type: 4,
+      file_item: {
+        file_name: 'report.pdf',
+        media: {
+          aes_key: Buffer.from('87e0b2320ddbb8dee3804ec8b48203e1', 'utf8').toString('base64'),
+          full_url: 'https://cdn.example/c2c/download?taskid=file',
+        },
+      },
+    }]));
+    await settle();
+    expect(vi.mocked(openDecryptedMediaStream).mock.calls[0]![0]).toMatchObject({
+      content_type_hint: 'application/octet-stream',
+    });
+
+    expect(vi.mocked(uploadInboxStream).mock.calls[0]![0]).toMatchObject({
+      kind: 'file', filename: 'report.pdf', maxBytes: 25 * 1024 * 1024,
+    });
+    const chatCall = vi.mocked(fetchImpl).mock.calls.find((call) => String(call[0]).endsWith('/chat'));
+    expect(JSON.parse(String((chatCall![1] as { body: string }).body)).message).toContain('file_report.pdf');
   });
 });

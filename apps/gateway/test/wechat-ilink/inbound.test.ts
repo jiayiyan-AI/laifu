@@ -71,6 +71,48 @@ describe('parseInbound', () => {
     expect(r?.unsupported_hints).toEqual([]);
   });
 
+  it('parses a file item without restricting its filename or content type', () => {
+    const r = parseInbound(baseMsg({
+      item_list: [{
+        type: 4,
+        file_item: {
+          file_name: '预算汇总.xlsx',
+          len: '12345',
+          media: {
+            aes_key: Buffer.from('87e0b2320ddbb8dee3804ec8b48203e1', 'utf8').toString('base64'),
+            full_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1',
+            content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          },
+        },
+      }],
+    }));
+    expect(r?.parts).toEqual([{
+      kind: 'file',
+      aes_key_hex: Buffer.from('87e0b2320ddbb8dee3804ec8b48203e1', 'utf8').toString('base64'),
+      download_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1',
+      filename: '预算汇总.xlsx',
+      content_type_hint: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      size_hint: 12345,
+    }]);
+    expect(r?.unsupported_hints).toEqual([]);
+  });
+
+  it('defaults a file without MIME metadata to application/octet-stream', () => {
+    const r = parseInbound(baseMsg({
+      item_list: [{
+        type: 4,
+        file_item: {
+          file_name: 'unknown-format',
+          media: {
+            aes_key: Buffer.from('87e0b2320ddbb8dee3804ec8b48203e1', 'utf8').toString('base64'),
+            full_url: 'https://cdn.example/c2c/download?encrypted_query_param=blob&taskid=t1',
+          },
+        },
+      }],
+    }));
+    expect(r?.parts).toMatchObject([{ kind: 'file', content_type_hint: 'application/octet-stream' }]);
+  });
+
   it('skips an image item missing aeskey or full_url', () => {
     // 缺 full_url → 该 image 跳过, 只剩 text part
     const r = parseInbound(baseMsg({
@@ -110,7 +152,7 @@ describe('parseInbound', () => {
     expect(r?.parts).toEqual([]);
     expect(r?.unsupported_hints).toEqual([
       '语音消息暂不支持，请用文字描述。',
-      '视频消息暂不支持，目前仅支持图片。',
+      '视频消息暂不支持，目前仅支持图片和文件。',
     ]);
   });
 

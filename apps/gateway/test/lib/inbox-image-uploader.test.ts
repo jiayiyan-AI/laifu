@@ -5,7 +5,7 @@ vi.mock('../../src/db/index.js', async () => {
   return mockDaoModule();
 });
 
-import { uploadImageStream } from '../../src/lib/inbox-image-uploader.js';
+import { uploadInboxStream } from '../../src/lib/inbox-uploader.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -28,9 +28,9 @@ const drain = async (s: ReadableStream<Uint8Array>): Promise<Uint8Array> => {
   return Uint8Array.from(chunks);
 };
 
-describe('uploadImageStream', () => {
-  it('POSTs to /inbox/image with bearer + headers + duplex, streams body, returns attachment', async () => {
-    const payload = new TextEncoder().encode('decrypted image bytes');
+describe('uploadInboxStream', () => {
+  it('POSTs a file to /inbox/file with bearer + headers + duplex, streams body, returns attachment', async () => {
+    const payload = new TextEncoder().encode('PDF bytes');
     let seenUrl: string | URL | Request = '';
     let seenInit: RequestInit | undefined;
     let receivedLen = 0;
@@ -41,29 +41,30 @@ describe('uploadImageStream', () => {
       const got = await drain(init?.body as ReadableStream<Uint8Array>);
       receivedLen = got.length;
       return Response.json({
-        path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123def456.jpg',
+        path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_abc123def456_report.pdf',
         size: got.length,
-        content_type: 'image/jpeg',
+        content_type: 'application/pdf',
       });
     }) as unknown as typeof fetch);
 
-    const res = await uploadImageStream({
+    const res = await uploadInboxStream({
       containerUrl: 'http://container.local',
       userId: 'u_alice',
       body: streamOf(payload),
-      contentType: 'image/jpeg',
+      contentType: 'application/pdf',
       maxBytes: MAX_BYTES,
+      kind: 'file',
       channel: 'wechat',
-      filename: 'photo.jpg',
+      filename: '预算报告.pdf',
     });
 
     expect(res).toEqual({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123def456.jpg',
-      content_type: 'image/jpeg',
+      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_abc123def456_report.pdf',
+      content_type: 'application/pdf',
       size: payload.length,
     });
     expect(receivedLen).toBe(payload.length);
-    expect(seenUrl).toBe('http://container.local/inbox/image');
+    expect(seenUrl).toBe('http://container.local/inbox/file');
     expect(seenInit?.method).toBe('POST');
     // duplex 不在标准 RequestInit 类型里, 但 Node fetch 需要它
     expect((seenInit as { duplex?: string }).duplex).toBe('half');
@@ -71,19 +72,47 @@ describe('uploadImageStream', () => {
     const headers = seenInit?.headers as Record<string, string>;
     expect(headers.Authorization).toMatch(/^Bearer .+/);
     expect(headers['X-Max-Bytes']).toBe(String(MAX_BYTES));
-    expect(headers['Content-Type']).toBe('image/jpeg');
-    expect(headers['X-Filename']).toBe('photo.jpg');
+    expect(headers['Content-Type']).toBe('application/pdf');
+    expect(headers['X-Filename']).toBe(encodeURIComponent('预算报告.pdf'));
+  });
+
+  it('keeps image uploads on /inbox/image without a filename', async () => {
+    let seenUrl: string | URL | Request = '';
+    let seenInit: RequestInit | undefined;
+    vi.stubGlobal('fetch', (async (url: string | URL | Request, init?: RequestInit) => {
+      seenUrl = url;
+      seenInit = init;
+      return Response.json({
+        path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123.jpg',
+        size: 3,
+        content_type: 'image/jpeg',
+      });
+    }) as unknown as typeof fetch);
+
+    await uploadInboxStream({
+      containerUrl: 'http://container.local',
+      userId: 'u_alice',
+      body: streamOf(new Uint8Array([1, 2, 3])),
+      contentType: 'image/jpeg',
+      maxBytes: MAX_BYTES,
+      kind: 'image',
+      channel: 'feishu',
+    });
+
+    expect(seenUrl).toBe('http://container.local/inbox/image');
+    expect((seenInit?.headers as Record<string, string>)['X-Filename']).toBe('');
   });
 
   it('container 5xx → throws', async () => {
     vi.stubGlobal('fetch', (async () => new Response('boom', { status: 500 })) as unknown as typeof fetch);
     await expect(
-      uploadImageStream({
+      uploadInboxStream({
         containerUrl: 'http://container.local',
         userId: 'u_alice',
         body: streamOf(new Uint8Array([1, 2, 3])),
         contentType: 'image/jpeg',
         maxBytes: MAX_BYTES,
+        kind: 'image',
         channel: 'feishu',
       }),
     ).rejects.toThrow(/http 500/);
