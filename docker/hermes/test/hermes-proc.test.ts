@@ -56,7 +56,10 @@ test('hermesSubprocessBaseEnv: 抹掉 GATEWAY_SECRET, 保留其余 env', () => {
   delete process.env.HERMES_PROVIDER;
 });
 
-test('cleanReply removes quiet-mode session resume status from stderr', async () => {
+test('cleanReply removes quiet-mode session status from stderr', async () => {
   const { cleanReply } = await import('../server/hermes-proc.ts');
   expect(cleanReply('↻ Resumed session 20260721_005435_f26bfb (1 user message, 2 total messages)\nsession_id: 20260721_005435_f26bfb')).toBe('');
+  expect(cleanReply('\u001B[2m↻ Resumed session 20260721_005435_f26bfb (1 user message, 2 total messages)\u001B[0m\nsession_id: 20260721_005435_f26bfb')).toBe('');
+  expect(cleanReply('Session 20260721_005435_f26bfb found but has no messages. Starting fresh.')).toBe('');
+  expect(cleanReply("Session not found: 20260721_005435_f26bfb\nUse 'hermes sessions list' to see available sessions.")).toBe('');
 });

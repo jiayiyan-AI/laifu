@@ -194,7 +194,7 @@ describe('POST /internal/hermes-callback — feishuReplier', () => {
     __resetPendingLoopsForTests();
   });
 
-  it('source=feishu 时调用 feishuReplier(threadId, reply)', async () => {
+  it('source=feishu 时按 loopId 调用 feishuReplier', async () => {
     const feishuReplier = vi.fn(async () => {});
     const app = express();
     app.use(express.json());
@@ -215,7 +215,7 @@ describe('POST /internal/hermes-callback — feishuReplier', () => {
     // 给 fire-and-forget 一个 tick
     await new Promise((r) => setTimeout(r, 10));
     expect(feishuReplier).toHaveBeenCalledTimes(1);
-    expect(feishuReplier).toHaveBeenCalledWith('thr_feishu', '飞书回复内容');
+    expect(feishuReplier).toHaveBeenCalledWith('lp_feishu', '飞书回复内容');
   });
 });
 

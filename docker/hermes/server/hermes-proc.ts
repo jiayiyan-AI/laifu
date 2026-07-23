@@ -264,6 +264,9 @@ export async function detectNewSessionId(
 //   session_id: YYYYMMDD_HHMMSS_<hash>
 //   <真正的回复>
 // 策略：丢弃 ⚠️/⚠/[server] 警告、会话恢复状态与 session_id 元信息；末尾 " to" 的警告吞下一行（wrap 续接）。
+const ANSI_ESCAPE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
+const SESSION_STATUS = /^(?:↻ Resumed session|Session not found:|Session .+ found but has no messages\. Starting fresh\.|Use 'hermes sessions list')/;
+
 export function cleanReply(stdout: string): string {
   const lines = stdout.split('\n');
   const keep: string[] = [];
@@ -273,12 +276,12 @@ export function cleanReply(stdout: string): string {
       skipNext = false;
       continue;
     }
-    const stripped = line.replace(/^\s+/, '');
+    const stripped = line.replace(ANSI_ESCAPE, '').replace(/^\s+/, '');
     if (
       stripped.startsWith('⚠️') ||
       stripped.startsWith('⚠') ||
       stripped.startsWith('[server]') ||
-      stripped.startsWith('↻ Resumed session')
+      SESSION_STATUS.test(stripped)
     ) {
       if (line.replace(/\s+$/, '').endsWith(' to')) skipNext = true;
       continue;

@@ -27,7 +27,8 @@ import {
   feishuReplyContexts,
   __resetSeenForTests,
 } from '../../src/feishu/inbound-handler.js';
-import { __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
+import { emitLoopEvent, __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
+import { __resetThreadSerializerForTests, __whenDispatchedForTests } from '../../src/lib/thread-serializer.js';
 import { dropThreadSilently } from '../../src/lib/drop-thread.js';
 import type { FeishuBinding } from '../../src/db/feishu-binding-dao.js';
 
@@ -80,6 +81,7 @@ describe('makeFeishuInbound', () => {
     feishuReplyContexts.clear();
     __resetSeenForTests();
     __resetPendingLoopsForTests();
+    __resetThreadSerializerForTests();
     dispatchHermesChat.mockResolvedValue({ ok: true, status: 202 } as any);
     vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u_alice',
@@ -100,6 +102,7 @@ describe('makeFeishuInbound', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(evt({ openId: OWNER, text: 'hello' }));
+    await __whenDispatchedForTests();
 
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as any;
@@ -115,10 +118,28 @@ describe('makeFeishuInbound', () => {
     expect(ctx.client).toBe(client);
   });
 
+  it('同一 thread 的后到消息必须等前一 loop 终态后才 dispatch', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+
+    await handle(evt({ messageId: 'm1', text: '先做长任务' }));
+    await __whenDispatchedForTests();
+    await handle(evt({ messageId: 'm2', text: '再买咖啡' }));
+
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
+    const firstLoopId = (dispatchHermesChat.mock.calls[0]![0] as { loopId: string }).loopId;
+    emitLoopEvent(firstLoopId, { type: 'done', reply: '完成', completion: 'success' });
+
+    await __whenDispatchedForTests();
+    expect(dispatchHermesChat).toHaveBeenCalledTimes(2);
+    expect((dispatchHermesChat.mock.calls[1]![0] as { message: string }).message).toBe('再买咖啡');
+  });
+
   it('同 message_id 二次 → dispatch 只调一次', async () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(evt({ messageId: 'dup1', text: 'a' }));
+    await __whenDispatchedForTests();
     await handle(evt({ messageId: 'dup1', text: 'a' }));
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
   });
@@ -151,6 +172,7 @@ describe('makeFeishuInbound', () => {
     const handle = makeFeishuInbound()(mockBinding(), client);
     // 第一条正常 dispatch
     await handle(evt({ messageId: 'before_clear', text: 'first' }));
+    await __whenDispatchedForTests();
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     // 重复同一 message_id → 仍被去重
     await handle(evt({ messageId: 'before_clear', text: 'first again' }));
@@ -182,6 +204,7 @@ describe('makeFeishuInbound', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(evt({ messageId: 'sh3', text: '/new 顺便问下天气' }));
+    await __whenDispatchedForTests();
     expect(dao.threads.create).toHaveBeenCalledTimes(1);
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string };
@@ -210,6 +233,7 @@ describe('makeFeishuInbound', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding({ thread_id: 'thr_old' }), client);
     await handle(evt({ messageId: 'dr2', text: '/drop 重新开始' }));
+    await __whenDispatchedForTests();
     expect(dropThreadSilently).toHaveBeenCalledTimes(1);
     expect(dao.threads.create).toHaveBeenCalledTimes(1);
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);

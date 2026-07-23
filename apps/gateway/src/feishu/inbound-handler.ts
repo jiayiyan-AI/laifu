@@ -25,6 +25,7 @@ import { uploadInboxStream } from '../lib/inbox-uploader.js';
 import { buildInboxPrompt } from '../lib/inbox-image-prompt.js';
 import { classifyMessage, runIntercept } from '../lib/slash-filter.js';
 import { dropThreadSilently } from '../lib/drop-thread.js';
+import { enqueueThreadTask } from '../lib/thread-serializer.js';
 import {
   openFeishuMediaStream,
   FeishuMediaTooLargeError,
@@ -35,6 +36,7 @@ import {
 const FALLBACK_TEXT = '处理失败，请稍后再试。';
 const CONTAINER_NOT_READY_TEXT = '助理还在初始化，请稍后再试。';
 const UNSUPPORTED_MESSAGE_TEXT = '当前仅支持文本、图片和文件消息。';
+const BUSY_QUEUE_TEXT = '正在处理前面的消息，稍等一下再发哦~';
 
 /**
  * 进程内存储飞书回复上下文，keyed by loop_id。
@@ -218,8 +220,8 @@ interface FeishuDispatchInput {
   promptText: string;  // 派发给 hermes
 }
 
-/** 写库 → 建 loop → 存 pending(挂超时) → dispatchHermesChat。失败回兜底文案。主路径与 /new args 共用。 */
-const dispatchFeishu = async (input: FeishuDispatchInput): Promise<void> => {
+/** 写库 → 建 loop → 存 pending(挂超时) → dispatchHermesChat。返回 loopId 供串行车道占用到终态。 */
+const dispatchFeishu = async (input: FeishuDispatchInput): Promise<string | null> => {
   const { binding, client, senderOpenId, threadId, containerUrl, dbContent, promptText } = input;
 
   const userMsgId = genId.message;
@@ -237,7 +239,7 @@ const dispatchFeishu = async (input: FeishuDispatchInput): Promise<void> => {
   } catch (e) {
     console.error('[feishuInbound] DB insert failed:', e);
     await safeSend(client, senderOpenId, FALLBACK_TEXT);
-    return;
+    return null;
   }
 
   feishuReplyContexts.set(loopId, { toOpenId: senderOpenId, client });
@@ -273,7 +275,10 @@ const dispatchFeishu = async (input: FeishuDispatchInput): Promise<void> => {
     await dao.agentLoops.complete(loopId, 'fail');
     emitLoopEvent(loopId, { type: 'fail', error: dispatch.error ?? `dispatch failed (${dispatch.status})` });
     await safeSend(client, senderOpenId, FALLBACK_TEXT);
+    return null;
   }
+
+  return loopId;
 };
 
 /**
@@ -317,14 +322,15 @@ const handleFeishuNew = async (
     await safeSend(client, senderOpenId, CONTAINER_NOT_READY_TEXT);
     return;
   }
+  const containerUrl = mapping.container_url;
   await safeSend(client, senderOpenId, `✓ ${opened}，正在处理你的消息…`);
-  await dispatchFeishu({
+  enqueueThreadTask(newThreadId, () => dispatchFeishu({
     binding, client, senderOpenId,
     threadId: newThreadId,
-    containerUrl: mapping.container_url,
+    containerUrl,
     dbContent: args,
     promptText: args,
-  });
+  }));
 };
 
 export const makeFeishuInbound = () => {
@@ -426,8 +432,10 @@ export const makeFeishuInbound = () => {
     }
     const dbContent = promptText;
 
-    // 写库 + 建 loop + 派发 (复用 dispatchFeishu, 与 /new args 同一路径)
-    await dispatchFeishu({ binding, client, senderOpenId, threadId, containerUrl, dbContent, promptText });
+    const accepted = enqueueThreadTask(threadId, () => dispatchFeishu({
+      binding, client, senderOpenId, threadId, containerUrl, dbContent, promptText,
+    }));
+    if (!accepted) await safeSend(client, senderOpenId, BUSY_QUEUE_TEXT);
   };
 };
 
