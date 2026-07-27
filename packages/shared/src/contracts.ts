@@ -371,30 +371,53 @@ export interface SessionCodeResponse {
  * 鉴权: Authorization: Bearer <LAIFU_USER_TOKEN> (复用 container-token middleware)。
  */
 /**
- * 动态 prompt 文件清单。容器侧拿到后跟 ~/dynamic_prompts/manifest.json 比对,
- * 只下载变化的文件。详见 docs/managed-prompts.md §五 manifest 协商机制。
+ * Gateway 下发的动态文件清单。容器将它与 ~/dynamic/manifest.json 比对，
+ * 只下载变化的文件到 ~/dynamic/<name>。
  *
- * version: 协议版本号。容器侧脚本看到不识别的 version → 跳过同步,
- *          保留本地老文件 (避免不兼容的解析方式破坏 home volume)。
- *          目前 1; 字段语义不兼容变更时 bump。
- * files:   name → sha256[:16]
+ * 这是 filename → sha256[:16] 的直接映射。
  *
- * 已知文件名:
- *   - system-prompt.md  下载到 ~/dynamic_prompts/, 由 server/hermes-proc.ts 每次 chat
- *                       注入 HERMES_EPHEMERAL_SYSTEM_PROMPT (系统级 prompt 唯一载体)
+ * 当前文件：
+ *   - system-prompt.md：每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT。
+ *   - pi-model-profiles.json：Pi provider 与模型配置。
  *
- * 注: SOUL.md 不再由本机制管理 —— ~/.hermes/SOUL.md 完全交还用户, hermes 首启自 seed
- *     默认 persona, 此后用户自由编辑, 我们不镜像/不覆盖。
+ * SOUL.md 不在此机制中，~/.hermes/SOUL.md 始终由用户管理。
  */
-export interface PromptsManifest {
-  version: number;
-  files: Record<string, string>;
+export type RuntimeFilesManifest = Record<string, string>;
+
+export type PiModelProfileApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
+
+export interface PiModelProfile {
+  model: string;
+  name: string;
+  reasoning: boolean;
+  input: Array<'text' | 'image'>;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  compat?: {
+    supportsDeveloperRole?: boolean;
+    supportsReasoningEffort?: boolean;
+    supportsStore?: boolean;
+    thinkingFormat?: 'qwen';
+  };
 }
 
-// GET /api/me/runtime-config 的响应。provider/model/base_url 已迁到 ACA spec env
-// (azure.ts buildSpec, 容器直接读环境变量), 此端点只剩 prompts manifest 协商。
+export interface PiProviderProfile {
+  provider: string;
+  name: string;
+  defaultBaseUrl: string;
+  api: PiModelProfileApi;
+  authHeader: boolean;
+  models: PiModelProfile[];
+}
+
+export interface PiModelProfiles {
+  revision: string;
+  providers: PiProviderProfile[];
+}
+
 export interface RuntimeConfig {
-  prompts_manifest: PromptsManifest;
+  files_manifest: RuntimeFilesManifest;
 }
 
 /**

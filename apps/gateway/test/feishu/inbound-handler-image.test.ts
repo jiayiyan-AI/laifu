@@ -140,7 +140,7 @@ describe('makeFeishuInbound — image', () => {
       content_type: 'image/jpeg',
     });
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_xyz.jpg',
+      cache_path: '/home/hermes/inbox/images/img_xyz.jpg',
       content_type: 'image/jpeg',
       size: 204_800,
     });
@@ -164,7 +164,7 @@ describe('makeFeishuInbound — image', () => {
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string; source: string };
     expect(arg.source).toBe('feishu');
-    expect(arg.message).toContain('/home/hermes/.hermes/cache/laifu-inbox/images/img_xyz.jpg');
+    expect(arg.message).toContain('/home/hermes/inbox/images/img_xyz.jpg');
 
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content).toContain('img_xyz.jpg');
@@ -219,7 +219,7 @@ describe('makeFeishuInbound — image', () => {
   it('owner 发文件: 资源以 type=file 下载并保留文件名后派发', async () => {
     vi.mocked(openFeishuMediaStream).mockResolvedValue({ body: fakeStream(), content_type: 'application/pdf' });
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_report.pdf',
+      cache_path: '/home/hermes/inbox/files/file_report.pdf',
       content_type: 'application/pdf',
       size: 20_480,
     });
@@ -260,7 +260,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
       content_type: 'image/jpeg',
     }));
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_post.jpg',
+      cache_path: '/home/hermes/inbox/images/img_post.jpg',
       content_type: 'image/jpeg',
       size: 102_400,
     });

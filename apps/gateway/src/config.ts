@@ -53,10 +53,12 @@ export const config = {
     // SMB 上 SQLite 锁失败 (known-issues#6), 必须走 NFS。
     storageAccountNfs: process.env['AZURE_STORAGE_ACCOUNT_NFS'] ?? '',
     acrLoginServer: process.env['AZURE_ACR_LOGIN_SERVER'] ?? '',
-    // ⚠️ 镜像版本写死在代码里 (不走 env), 因为改 tag 本就必须连带部署 gateway 才能触发 reconcile
-    //   (gateway 启动算 policyHashFor 才会拉齐存量用户)。写死 → 进 git 可 review/revert、零跨文件漂移。
-    //   bump 镜像: 改这一行 hermes:vN (单调递增, 禁用 :latest) + 部署 gateway。详见 dynamic-update-aca.md §5.2。
-    hermesImageTag: 'hermes:v25',
+    // 镜像版本按部署环境写死在代码里 (不走 env)。改 tag 必须连带部署对应 gateway，
+    // 触发该环境存量 ACA 的 reconcile；因此版本进 git 可 review/revert，且没有跨文件漂移。
+    // 禁用 :latest；每个 ACR 的 vN 序列独立递增。详见 dynamic-update-aca.md §5.2。
+    environment: (process.env['LAIFU_ENV'] ?? 'dev').trim(),
+    hermesImageTagDev: 'hermes:v26',
+    hermesImageTagProd: 'hermes:v24',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)
@@ -73,6 +75,11 @@ export const config = {
     //   改 VL 模型只需改这里 + 重部署 gateway, 不必 rebuild hermes 镜像 (旧硬编码映射已从容器删)。
     //   置空 = 不配 auxiliary.vision (主模型本身吃图的 provider 走 native)。
     hermesVisionModel: process.env['HERMES_VISION_MODEL'] ?? 'qwen-vl-max',
+    // Pi 的 dashscope profile 固定封装 API 协议与版本化模型能力；其他值必须是 Pi SDK 内置 provider id。
+    agentRuntime: (process.env['LINGXI_AGENT_RUNTIME'] ?? 'hermes').trim() as 'hermes' | 'pi',
+    piProvider: process.env['PI_PROVIDER'] ?? 'dashscope',
+    piModel: process.env['PI_MODEL'] ?? process.env['HERMES_MODEL'] ?? 'qwen3-coder-plus',
+    piBaseUrl: process.env['PI_BASE_URL'] ?? process.env['HERMES_BASE_URL'] ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     // User-assigned identity bicep 提前建好, ACA 绑它来读 KV hermes-api-key。
     //   resourceId: /subscriptions/.../userAssignedIdentities/id-hermes-<env>
     //               同时用于 ACA template.identity 绑定 + secrets[].identity 引用
@@ -169,6 +176,7 @@ export const validateConfig = () => {
     required('AZURE_STORAGE_ACCOUNT');
     required('AZURE_STORAGE_ACCOUNT_NFS');
     required('AZURE_ACR_LOGIN_SERVER');
+    required('LAIFU_ENV');
     if (config.cloud.udkLifetimeSeconds > 7 * 24 * 3600) {
       throw new Error(
         `AZURE_STORAGE_UDK_LIFETIME_SECONDS=${config.cloud.udkLifetimeSeconds} exceeds Azure 7-day UDK max (604800)`,

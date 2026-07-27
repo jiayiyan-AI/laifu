@@ -46,7 +46,7 @@ curl https://app-lingxi-dev-gateway.azurewebsites.net/healthz   # {"ok":true}
 
 ### 环境
 
-- `parameters.dev.json` / `parameters.prod.json` — 当前都用 B1 SKU（southeastasia, qwen-plus）。区别只在 `env` 字段和派生的资源命名。规模化后再单独调 prod 的 SKU。
+- `parameters.dev.json` / `parameters.prod.json` — 都使用 B1、`southeastasia`、DashScope 和 `qwen3.7-max`；dev 选择 `pi` runtime，prod 保持 `hermes`。两份文件都显式指定 `piProvider`、`piModel` 和 `piBaseUrl`，避免 Bicep 默认值在环境间漂移。
 
 ### 不在 Bicep 里的东西
 

@@ -22,39 +22,12 @@
 
 ### #2 ACA Ingress 4 分钟超时
 
-- **现象**：单个 HTTP 请求超过 240s 会被 ACA Ingress 强切, 返回 504。
-- **本质**：Consumption-only 环境的 ingress idle timeout **固定 240s 且不可配** (envoy 写死)。"idle" 指的是这条 TCP 连接 4 分钟内没有任何字节流动 — **不是绝对耗时**, 这是后续绕开方案的关键。
-- **当前架构**：Gateway → Container 用同步 `POST /chat` 调用 (`apps/gateway/src/lib/aca-call.ts`), 受这个上限制约。
-- **实测**：2026-06-05 wechat 链路一次 240015ms (≈240s 整) → `http_504`, 来源是平台返回不是 hermes。同一链路下一条 chat 38s 成功。指标现埋在 `event=aca.chat.dispatch`(端到端按 thread_id 关联 callback, 见 `docs/log.md` §9.3), KQL 见 `docs/log.md`。
+- **平台约束**：Consumption-only 环境的 ingress idle timeout 固定为 240s 且不可配；单个空闲 HTTP 连接超过此时限会被切断。
+- **当前架构**：Gateway 的 `dispatchHermesChat()` 带必填 `callback.loop_id` 调用容器 `/chat`，只等待 `202`。容器在后台运行 agent，并通过 heartbeat 与 result 回调 Gateway；因此 ingress 连接只覆盖派发确认，不再限制 agent 的总运行时长。
+- **运行中保活**：容器每 120s 回调 heartbeat；Gateway 收到后刷新 loop deadline，并回敲容器 `/health`，避免长任务期间被 scale-to-zero。
+- **历史现象**：2026-06-05 的微信链路曾在同步等待约 240015ms 后收到平台 `504`；该同步协议已移除。
 
-#### 绕开方案 (按性价比排序)
-
-##### 方案 1：gateway↔ACA 这段改流式 / 心跳保活 (推荐, 0 成本)
-
-利用 "idle timeout 只看字节流动" 的特性, 保证 `gateway → ACA /chat` 这段连接每 < 240s 内必有字节流动, ingress 就不会砍。
-
-改动只在 **`docker/hermes/server/` + `apps/gateway/src/lib/aca-call.ts`**, 对外接口 (`POST /api/chat` / 微信 inbound) 形状不变, 前端 / 微信侧零改动。
-
-落地清单：
-
-- server/http.ts `/chat` 改 SSE 输出:`Content-Type: text/event-stream`, 立即 flush headers
-- 另起 heartbeat 线程, 每 30s 写一帧 `: heartbeat\n\n` (SSE 注释帧, 不算 data)
-- hermes 跑完后写 `data: {"done":true,"reply":"..."}\n\n`
-- 待验证：Hermes CLI `-Q -q` 模式 stdout 是不是增量打印 token。如果是, 顺手把每段 token 作为 `data: {"delta":"..."}` 推出去, 给将来做前端流式打字效果留接口
-- gateway `aca-call.ts` 不再 `await resp.json()`, 改读 `resp.body.getReader()` + SSE 解析, 收到 `done` 帧才 resolve, 对外仍返回 `{ ok, reply }` 不变
-- gateway `fetch` AbortSignal timeout 设大 (如 30 分钟)
-- 微信入站 `apps/gateway/src/wechat-ilink/poll-loop.ts` 的 timeout 同步调高
-- hermes 自身 `HERMES_TIMEOUT` (server/config.ts 默认 14400s) 如已被人手动调小, 重新调高, 否则它就是新的天花板
-
-效果：240s → 实际可达数十分钟到小时级。
-
-##### 方案 2：切异步 Job 队列 (架构变更, 见 `architecture.md` 方案 B)
-
-gateway 收 chat 立刻 ack, hermes 后台跑, 完了回调 gateway, gateway 通过 SSE / 微信 sendText 推给用户。彻底无超时, 但改动面大 (DB 队列表 / worker / 回调端点 / 前端等待 UI)。真长任务才值得做。
-
-##### 方案 3：升级 ACA Premium Ingress
-
-`requestIdleTimeout` 可调到 30 分钟。但 CAE 必须切 workload profile 模式, 至少 2 节点 (D4 起) 24/7 常驻 → **+$280-350/月**。当前 dev 盘子 ~$50/月, **跳过**。
+不要为此改回 SSE 保活或 Premium Ingress；它们解决的是已移除的同步等待路径。
 
 #### 不要做的
 

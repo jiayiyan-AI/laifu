@@ -1,6 +1,6 @@
-# Managed system prompts — 实施现状
+# Managed dynamic files — 实施现状
 
-> 状态: **SOUL.md 托管已移除 — ~/.hermes/SOUL.md 完全交还用户; 本机制现仅管 system-prompt.md**。 (2026-07-01 更新; 原 2026-06-05 版见 git 历史)
+> 状态: **SOUL.md 托管已移除**；`~/.hermes/SOUL.md` 完全交还用户。动态文件机制当前下发 `system-prompt.md` 与 `pi-model-profiles.json`。
 >
 > 本文档是当前架构的事实记录。早期 WIP 讨论稿已被本版取代——其中有若干技术细节是**未经源码验证的瞎猜**, 实施过程中被逐一推翻:
 >
@@ -67,62 +67,61 @@ if effective_system:
 [运营]  vim apps/gateway/prompts/<name>.md → git commit → redeploy gateway
             │
             ▼
-[gateway 启动]
-  loadPromptStore(PROMPTS_DIR ?? cwd/prompts) → 内存:
-    files:    name → 内容
-    manifest: { version: 1, files: { name → sha256[:16] } }
+[Gateway 请求 runtime-config]
+  直接读取 PROMPTS_DIR/system-prompt.md → 内容/hash
+  piModelProfiles                         → JSON 内容/hash
             │
             ▼
 [gateway 接口]
-  GET /api/me/runtime-config     → 响应里带 prompts_manifest
-  GET /api/me/prompts/:name      → 返回单文件内容 (text/markdown)
-                                   鉴权复用 LAIFU_USER_TOKEN; name 白名单防穿越
+  GET /api/me/runtime-config             → files_manifest
+  GET /api/me/runtime-config/files/:name → 单个动态文件
+                                          鉴权复用 LAIFU_USER_TOKEN; name 白名单防穿越
             │
             ▼
 [容器 bootstrap.ts] (每次冷启动)
-  fetchRuntimeConfig → 拿到 prompts_manifest
-  sync-prompts:
-    跟 ~/dynamic_prompts/manifest.json diff
-    Promise.allSettled 并行 GET 变化的文件 → ~/dynamic_prompts/<name>
-    远端不再包含的 → 删 ~/dynamic_prompts/<name>
-    更新 ~/dynamic_prompts/manifest.json
+  fetchRuntimeConfig → 拿到 files_manifest
+  syncDynamicFiles:
+    跟 ~/dynamic/manifest.json diff
+    Promise.allSettled 并行下载变化的文件 → 原子写入 ~/dynamic/<name>
+    远端不再包含的 → 删 ~/dynamic/<name>
+    更新 ~/dynamic/manifest.json
             │
             ▼
-[hermes 行为]
-  启动时读 ~/.hermes/SOUL.md → cached prompt (该文件是用户自留区, 我们不写)
-  /chat 时 server/hermes-proc.ts 读 ~/dynamic_prompts/system-prompt.md
+[运行时]
+  Hermes /chat 读 ~/dynamic/system-prompt.md
         → 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT 给子进程
-        → hermes 拼到 cached 后, byte-stable 时 cache 命中
+  Pi 读 ~/dynamic/pi-model-profiles.json
+        → 注册自定义 provider 与模型
 ```
 
 ### 文件清单 (当前)
 
 ```
-apps/gateway/prompts/
-└── system-prompt.md   ← 留在 ~/dynamic_prompts/, 由 server/hermes-proc.ts 注入 env
+~/dynamic/
+├── manifest.json
+├── system-prompt.md
+└── pi-model-profiles.json
 ```
 
-SOUL.md 已移除: `~/.hermes/SOUL.md` 完全交还用户, hermes 首启自 seed 默认 persona, 此后用户自由编辑。
+SOUL.md 不在动态文件机制中：`~/.hermes/SOUL.md` 完全交还用户。
 
-### Manifest 协议
+### Manifest 格式
 
 ```jsonc
-// /api/me/runtime-config 响应里的 prompts_manifest 字段
+// /api/me/runtime-config 响应里的 files_manifest 字段
 {
-  "version": 1,
-  "files": {
-    "system-prompt.md": "9e8b7a6c..."
-  }
+  "system-prompt.md": "9e8b7a6c...",
+  "pi-model-profiles.json": "a4d7c3e1..."
 }
 ```
 
-容器侧 `SUPPORTED_VERSION = 1`; 远端 version 高于此 → 跳过同步, 保留本地老文件 (避免不兼容的解析破坏 volume)。本地 `~/dynamic_prompts/manifest.json` 同结构。
+本地 `~/dynamic/manifest.json` 使用完全相同的 filename → filehash 映射。
 
 ### 删除规则
 
-- 远端 manifest 不含某文件 → 删 `~/dynamic_prompts/<name>`
-- `~/.hermes/SOUL.md` 不在本机制管辖内 (完全交还用户), 删规则不涉及它
-- system-prompt.md: `HERMES_EPHEMERAL_SYSTEM_PROMPT` 默认就是空, server/hermes-proc.ts 自动 unset 等于"回归默认"
+- 远端 manifest 不含某文件 → 删 `~/dynamic/<name>`
+- `manifest.json` 为容器本地元数据，不能由 Gateway 下发或读取
+- system-prompt.md 缺失时，server 显式 unset `HERMES_EPHEMERAL_SYSTEM_PROMPT`，回归默认行为
 
 ---
 
@@ -154,7 +153,7 @@ SOUL.md 已移除: `~/.hermes/SOUL.md` 完全交还用户, hermes 首启自 seed
 gateway 端按 user_id 决定下发哪份 manifest:
 
 ```ts
-function manifestFor(userId: string): PromptsManifest {
+function manifestFor(userId: string): RuntimeFilesManifest {
   const group = getUserPromptGroup(userId);  // 'default' / 'beta' / ...
   return manifest_by_group[group];
 }
@@ -202,11 +201,10 @@ function manifestFor(userId: string): PromptsManifest {
 
 | 文件 | 作用 |
 |---|---|
-| `apps/gateway/src/lib/prompt-store.ts` | 启动时扫盘, manifest + content 内存 store |
-| `apps/gateway/src/api/me-runtime-config.ts` | runtime-config 和 prompts/:name 两个端点 |
+| `apps/gateway/src/api/me-runtime-config.ts` | 直接读取 system prompt，生成统一 manifest 与文件端点 |
 | `apps/gateway/vite.config.ts` | `copyPromptsPlugin`: build 时 cpSync 到 dist |
-| `apps/gateway/prompts/` | 真实 prompt 文件存放处 |
-| `docker/hermes/scripts/sync-prompts.ts` | manifest diff + 并行下载 (仅 system-prompt.md; 不再镜像 SOUL.md) |
-| `docker/hermes/scripts/bootstrap.ts` | 编排入口 |
-| `docker/hermes/server/hermes-proc.ts` `buildSubprocessEnv()` | 每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT |
-| `packages/shared/src/contracts.ts` `RuntimeConfig` / `PromptsManifest` | 协议类型 |
+| `apps/gateway/prompts/` | 系统 prompt 源文件 |
+| `docker/boot/scripts/dynamic-files.ts` | manifest diff、hash 校验与原子落盘 |
+| `docker/boot/scripts/bootstrap.ts` | 编排入口 |
+| `docker/hermes/hermes-proc.ts` `buildSubprocessEnv()` | 每次 chat 注入 HERMES_EPHEMERAL_SYSTEM_PROMPT |
+| `packages/shared/src/contracts.ts` `RuntimeConfig` / `RuntimeFilesManifest` | 协议类型 |

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const ENV_FILE = resolve(ROOT, 'docker/hermes/.env');
+const ENV_FILE = resolve(ROOT, 'docker/.env');
 const IMAGE = 'hermes-probe';
 const CONTAINER_NAME = 'lingxi-hermes-dev';
 const HOME_VOL = join(homedir(), '.hermes-dev');
@@ -60,7 +60,7 @@ async function readEnv() {
   } catch {
     fail(
       `⚠️  ${ENV_FILE} 不存在`,
-      '   先复制模板:  cp docker/hermes/.env.example docker/hermes/.env',
+      '   先复制模板:  cp docker/.env.example docker/.env',
       '   然后填 HERMES_API_KEY (按 HERMES_PROVIDER 选对应 provider 的 key)',
     );
   }
@@ -93,8 +93,8 @@ if (inspected === null) {
 if (inspected !== 0) {
   fail(
     `⚠️  image '${IMAGE}' 不存在,需要先 build:`,
-    `     docker build -t ${IMAGE} docker/hermes/`,
-    '   (首次约 10-15 分钟,之后改 server/*.ts 增量约 20 秒)',
+    `     docker build -t ${IMAGE} docker/`,
+    '   (首次约 10-15 分钟，之后改容器源码可命中依赖层缓存)',
   );
 }
 

@@ -12,7 +12,7 @@
   ① 基础设施       ② Hermes 镜像       ③ Gateway + Web       ④ Desktop 安装包       ⑤ 每用户实例
   （季度级）        （月级）             （天级）                （发版时）              （用户注册触发）
        ↓                 ↓                    ↓                     ↓                       ↓
-  infra/bicep/       docker/hermes/      apps/{gateway,web}     apps/desktop/          apps/gateway/src/
+  infra/bicep/       docker/              apps/{gateway,web}     apps/desktop/          apps/gateway/src/
    main.bicep        build-and-push.sh   scripts/build-deploy    .github/workflows/     provisioning/azure.ts
        ↓                 ↓                    ↓                     ↓                       ↓
   az deployment      az acr build        zip → App Service       GitHub Actions         Azure SDK
@@ -42,7 +42,7 @@ cd infra/bicep
 
 ---
 
-## ② Hermes 镜像 (docker/hermes/)
+## ② Hermes 镜像 (docker/)
 
 **职责**: 构建用户实例运行的 Hermes Agent 容器镜像, 推到 ACR。**存量用户 ACA 的镜像升级由 gateway 的声明式 reconcile 自动完成**, 不再有独立 rollout 脚本 (详见 `dynamic-update-aca.md`)。
 
@@ -50,15 +50,15 @@ cd infra/bicep
 
 ### Tag 规范 (硬约束)
 
-- 镜像 tag 用 **`vN` 单调递增** (v9 → v10 → v11), N 是十进制整数。**禁止跳号、禁止重用旧 vN**。
-- gateway 用**代码常量** `config.azure.hermesImageTag = 'hermes:vN'` 决定所有用户 (新+存量) 跑哪个镜像 —— **不走 env**(改 tag 本就要连带部署 gateway 才能触发 reconcile,写死 → 进 git 可 review/revert、零跨文件漂移)。
-  **禁用 `:latest`** —— gateway 启动 (`validateConfig`) 直接拒绝, 因为哈希含 tag 字符串, `:latest` 不变会让镜像更新被静默跳过。`build-and-push.sh` 仍顺带打 `latest` tag 只为人工排查方便, gateway 不引用它。
-- **打 tag 前必须先查 ACR 当前最大 vN**, 下一个 = 最大 + 1:
+- 每个环境的镜像 tag 用 **`vN` 单调递增** (v9 → v10 → v11)，N 是十进制整数。**禁止在同一 ACR 重用旧 vN**。
+- gateway 用代码常量 `config.azure.hermesImageTagDev` 与 `config.azure.hermesImageTagProd` 决定各自环境所有用户（新+存量）跑哪个镜像。Bicep 注入 `LAIFU_ENV`，provisioning 只选择当前环境对应的 tag；**不走 image-tag env**。改 tag 必须部署对应环境的 gateway，才能触发该环境 ACA reconcile；写死进代码便于 review/revert、不会跨文件漂移。
+  **禁用 `:latest`** —— gateway 启动 (`validateConfig`) 直接拒绝，因为哈希含 tag 字符串，`:latest` 不变会让镜像更新被静默跳过。`build-and-push.sh` 仍顺带打 `latest` tag 只为人工排查方便，gateway 不引用它。
+- 打 tag 前必须先查目标环境 ACR 当前最大 vN，下一个 = 最大 + 1：
   ```bash
   az acr repository show-tags -n acrlingxi${ENV} --repository hermes \
     --orderby time_desc --top 10 -o tsv
   ```
-  漏跳号不算 bug, 但**不允许重复或回退**。
+  漏跳号不算 bug，但**不允许重复或回退**。
 
 ### 部署分四阶段
 
@@ -67,7 +67,7 @@ cd infra/bicep
 
 #### 阶段 B: 云端 build + push
 ```bash
-cd docker/hermes
+cd docker
 ACR_NAME=acrlingxi${ENV} IMAGE_TAG=v11 ./build-and-push.sh
 # 内部: az acr build --image hermes:v11 --image hermes:latest --platform linux/amd64 .
 # 上下文几十 KB, 云端 amd64 构建, 单次 2-4 min。
@@ -91,12 +91,12 @@ Mac arm64 拉 amd64 会走 QEMU 模拟, 慢但够用。**任一项不通过 → 
 > **历史踩坑 (2026-06-16)**: 推过一版 `hermes:latest` (那次还违反 Tag 规范, 没打 vN), Dockerfile 里 `RUN cat > /etc/profile.d/lingxi.sh <<EOF` heredoc 在 ACR Build 上没生效, 产物是 0 字节空文件, login shell PATH 救不回来, AI agent 跑 `pnpm add -g` 一直警告 PATH 缺失。当时**跳过了阶段 C**, 直接信任 push 成功, 三个用户 ACA 都中招。这种**针对本次 diff 设计的检查**正是阶段 C 的意义。
 
 #### 阶段 D: 让存量用户 ACA 切到新镜像
-ACA revision 不可变, push 新镜像后现有用户实例不会自动跟随。**现在不再手动批量 update**:
+ACA revision 不可变，push 新镜像后现有用户实例不会自动跟随。现在不再手动批量 update：
 
-1. 改代码常量 `config.azure.hermesImageTag = 'hermes:v11'`(`apps/gateway/src/config.ts`)。
-2. 部署 gateway (阶段 ③)。gateway 启动算出新的 `POLICY_HASH`, boot sweep 后台把所有存量 ACA 拉齐到 v11 (有界并发, 平滑切 revision); sweep 没扫到的用户在下次活跃时由 lazy reconcile 兜底。
+1. 按目标环境改代码常量：dev 改 `config.azure.hermesImageTagDev`，prod 改 `config.azure.hermesImageTagProd`（`apps/gateway/src/config.ts`）。
+2. 只部署该环境的 gateway（阶段 ③）。gateway 启动算出新的 `POLICY_HASH`，boot sweep 后台把该环境存量 ACA 拉齐到新 tag（有界并发，平滑切 revision）；sweep 没扫到的用户在下次活跃时由 lazy reconcile 兜底。
 
-**回滚**: 把 `config.azure.hermesImageTag` 改回上一版 `hermes:v10` 重新部署 gateway 即可, 同一条 reconcile 路径反向拉齐。
+**回滚**：将对应环境的 tag 改回上一版并重新部署该环境 gateway；同一条 reconcile 路径会反向拉齐。
 
 ### 特点
 - 不在本地 build (Mac arm64 与 Azure amd64 不兼容, QEMU 模拟太慢)
@@ -336,7 +336,7 @@ flowchart TB
 
 | 资源 | 命名 | 角色 | 多用户共享? |
 |---|---|---|---|
-| **Container App** | `hermes-{userId 前 8 位}` | 用户专属 Hermes 容器, 跑 docker/hermes 镜像。先以 root 跑 `init-chown` busybox initContainer 修 subPath 子目录 owner (UID 1000), exit 0 后才起主容器, 把 `hermes-shared` 的 `user-<8hex>/` 子目录挂到 `/home/hermes` | 否, 每用户一个 |
+| **Container App** | `hermes-{userId 前 8 位}` | 用户专属 Hermes 容器, 跑 `docker/` 构建的镜像。先以 root 跑 `init-chown` busybox initContainer 修 subPath 子目录 owner (UID 1000), exit 0 后才起主容器, 把 `hermes-shared` 的 `user-<8hex>/` 子目录挂到 `/home/hermes` | 否, 每用户一个 |
 | **NFS File Share** | `hermes-shared` (100 GiB) | 所有用户的 Hermes home 数据 (session 历史 / config / pip / npm 包) 都放这里, 各自一个 subPath 子目录, 容器内看不到兄弟用户 | **是, 全局唯一** |
 | **CAE Storage Binding** | `hermes-shared-binding` | 把 `hermes-shared` 注册到 CAE, ACA 才能挂载。所有用户 ACA 都引用这一个 binding, 通过 `volumeMount.subPath` 区分 | **是, 全局唯一** |
 
@@ -374,7 +374,7 @@ CAE 一旦配 VNet (我们必须配, 为了把 NFS account 锁在 Service Endpoi
 |---|---|---|
 | 加/改长期资源 (SKU / 新 KV / region) | Bicep | `infra/bicep/main.bicep` + `./deploy.sh {env}` |
 | 加/改 KV secret | az CLI | `az keyvault secret set --vault-name kv-lingxi-{env} --name X --value Y` |
-| 推新 hermes 镜像 | ACR Build | `docker/hermes/build-and-push.sh` |
+| 推新 hermes 镜像 | ACR Build | `docker/build-and-push.sh` |
 | 发新 gateway+web 代码 | CI 或手动 | 推 main 或 `./scripts/build-deploy.sh` + `az webapp deploy` |
 | 发布 desktop stable/canary 安装包 | GitHub Release | `pnpm desktop:version -- set/check` → `desktop-<semver>` tag → `.github/workflows/desktop-release.yml` |
 | 清理失败用户残留 | az CLI + psql | 见 `docs/deployment-azure-first-run.md` 末尾或 catchup.md |

@@ -140,8 +140,8 @@ pnpm --filter @lingxi/gateway exec tsx ../../scripts/seed-kv-secrets.ts prod
 #    详见 packages/db/README.md §部署。
 
 # 4. 推 Hermes 镜像
-cd docker/hermes
-ACR_NAME=acrlingxiprod IMAGE_TAG=latest ./build-and-push.sh
+cd docker
+ACR_NAME=acrlingxiprod IMAGE_TAG=vN ./build-and-push.sh
 
 # 5. 部署 gateway+web
 #    (a) 推 main 触发 CI 自动部署 (需先在 GitHub repo Secrets 配 AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID)

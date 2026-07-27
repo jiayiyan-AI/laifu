@@ -121,7 +121,7 @@ describe('handleInbound — image attachments', () => {
       content_type: 'image/jpeg',
     });
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123.jpg',
+      cache_path: '/home/hermes/inbox/images/img_abc123.jpg',
       content_type: 'image/jpeg',
       size: 204_800,
     });
@@ -155,7 +155,7 @@ describe('handleInbound — image attachments', () => {
     const chatCall = vi.mocked(fetchImpl).mock.calls.find((c) => String(c[0]).endsWith('/chat'));
     expect(chatCall).toBeDefined();
     const body = JSON.parse(String((chatCall![1] as { body: string }).body));
-    expect(body.message).toContain('/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123.jpg');
+    expect(body.message).toContain('/home/hermes/inbox/images/img_abc123.jpg');
     expect(body.message).toContain('看看这张图');
   });
 
@@ -285,7 +285,7 @@ describe('handleInbound — image attachments', () => {
   });
   it('file message: decrypts, uploads to /inbox/file, and dispatches its stable path', async () => {
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_report.pdf',
+      cache_path: '/home/hermes/inbox/files/file_report.pdf',
       content_type: 'application/pdf',
       size: 12_345,
     });

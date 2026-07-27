@@ -99,3 +99,18 @@ describe('buildSpec USER_ID 注入 (日志对齐)', () => {
     expect(env?.value).toBe(USER);
   });
 });
+
+describe('buildSpec global runtime environment', () => {
+  const USER = '11111111-2222-3333-4444-555555555555';
+
+  it('injects both runtime configurations while selecting Hermes by default', () => {
+    const env = buildSpec(USER, 'tok').template?.containers?.[0]?.env ?? [];
+    const value = (name: string) => env.find((entry) => entry.name === name);
+
+    expect(value('LINGXI_AGENT_RUNTIME')?.value).toBe('hermes');
+    expect(value('PI_PROVIDER')?.value).toBeTruthy();
+    expect(value('PI_MODEL')?.value).toBeTruthy();
+    expect(value('PI_BASE_URL')?.value).toBeTruthy();
+    expect(value('PI_API_KEY')?.secretRef).toBe('hermes-api-key');
+  });
+});

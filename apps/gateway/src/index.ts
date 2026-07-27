@@ -19,6 +19,7 @@ import { buildMeUsageRouter } from './api/me-usage.js';
 import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildMeRuntimeConfigRouter } from './api/me-runtime-config.js';
+import { piModelProfiles } from './lib/pi-model-profiles.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildDeviceTokenRouter } from './api/device-token.js';
 import { buildSessionHandoffRouter } from './api/session-handoff.js';
@@ -46,7 +47,6 @@ import { FeishuConnectionManager } from './feishu/connection-manager.js';
 import { makeFeishuInbound, feishuReplyContexts } from './feishu/inbound-handler.js';
 import { sendFeishuMessage } from './feishu/client.js';
 import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
-import { loadPromptStore } from './lib/prompt-store.js';
 import { buildOAuthRouter as buildOAuthIntegrationRouter } from './integrations/oauth/routes.js';
 
 export interface CreateAppOptions {
@@ -93,10 +93,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     // 加载 pricing 表到内存 cache (不阻塞 app 创建, 但在第一次请求前完成)
     void loadPricing(getDb());
 
-    // 动态 prompt 仓库
-    const promptsDir = process.env['PROMPTS_DIR']
-      ?? path.resolve(process.cwd(), 'prompts');
-    const promptStore = loadPromptStore(promptsDir);
 
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
@@ -231,10 +227,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
     }
 
-    app.use(buildMeRuntimeConfigRouter({
-      secret: config.auth.gatewaySecret,
-      prompts: promptStore,
-    }));
+    app.use(buildMeRuntimeConfigRouter());
 
     app.use(buildAuthRefreshRouter({ secret: config.auth.gatewaySecret }));
 

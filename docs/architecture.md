@@ -327,19 +327,11 @@ errcode -2（限流）→ 指数退避重试，最大间隔 30s
 | context_token 必须持久化 | 存 DB，重启不丢 |
 | iLink 目前不支持群聊 | 只支持单聊（DM），产品文案里需说明 |
 
-## 五、调度层方案（当前实际走方案 A，方案 B 作为后续演进路径保留）
+## 五、调度层方案（当前实际走异步 callback）
 
-Gateway 收到用户消息后，如何调用 Hermes 处理并拿到回复？这是整个系统的核心调度问题。
+Gateway 收到用户消息后创建一条 `agent_loop`，将其 ID 作为 `callback.loop_id` 派发给 Hermes；容器只确认接收，完成状态和最终回复通过回调回传。
 
-**当前实现**：**方案 A（每用户独立 Container App + 同步 HTTP `POST /chat`）**。代码在 `apps/gateway/src/api/chat.ts`，每用户 ACA 由 `apps/gateway/src/provisioning/azure.ts` 创建。
-
-**注定要切方案 B 的理由**：ACA Ingress 4 分钟超时是硬上限（见 `docs/known-issues.md#2`），Hermes Agent 调工具/装包/多轮推理很容易超时。目前靠 DashScope qwen-plus 回复快暂时压住，未来切更慢模型或更重任务时必须切方案 B（Job + 异步队列）。
-
-下文两方案并列保留，便于切换时对照。
-
----
-
-### 方案 A：Container App + 同步 HTTP
+**当前实现**：每用户独立 Container App + 异步 `POST /chat`。代码在 `apps/gateway/src/api/chat.ts`、`apps/gateway/src/lib/aca-call.ts` 和 `docker/boot/server/`；每用户 ACA 由 `apps/gateway/src/provisioning/azure.ts` 创建。
 
 ```mermaid
 sequenceDiagram
@@ -347,25 +339,29 @@ sequenceDiagram
     participant CA as Container App<br/>(hermes-user-a)
     participant AF as Azure Files
 
-    GW->>CA: POST /chat {message}
-    Note over CA: 如在 sleep → 自动唤醒
+    GW->>CA: POST /chat {message, callback:{loop_id}}
+    CA-->>GW: 202 {accepted:true}
     CA->>AF: 读取用户记忆/session
-    Note over CA: Hermes 处理消息
+    Note over CA: 后台运行 Agent
+    CA->>GW: heartbeat {loop_id}
     CA->>AF: 写入新记忆
-    CA-->>GW: {reply: "..."}
-    Note over GW: 同步等待，有超时风险
+    CA->>GW: result {loop_id, reply, usage}
+    Note over GW: 提交 loop、通知 Web 或 IM
 ```
 
-**模型**：每用户一个 Container App，设 min-replicas=0 缩容到 0。Gateway 通过 HTTP 直接调用，请求本身会自动唤醒 sleeping 的容器。
+`loop_id` 是一次 agent 执行的回调 rendezvous key，不是 Hermes session ID；`session_id` 仍用于恢复对话上下文。Gateway 只等待 `202`，所以 ACA 的单 HTTP 请求 idle timeout 不再限制 agent 的总运行时长。
 
-#### 架构
+---
+
+### 历史方案：Container App + 同步 HTTP（已废弃，请勿复用）
+
+以下记录保留用于说明早期约束；当前实现不再等待 `/chat` 返回 reply。
 
 ```
 Gateway
   │
   │  POST https://hermes-user-a.<env>.azurecontainerapps.io/chat
   │  Body: { message: "帮我查明天天气" }
-  │  （如果 container 在 sleep，Azure 自动唤醒）
   │
   │  ← 等待响应 →
   │

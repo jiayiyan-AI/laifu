@@ -13,15 +13,14 @@
 | 路由 | 用途 |
 |---|---|
 | `GET /health` | 健康检查 → `{"status":"ok"}` (ACA probe 用, **不校 Bearer**) |
-| `GET /history` | `?session_id=` → `{messages:[...]}` |
-| `POST /chat` | body `{message, session_id?, source?, callback?}` → 同步 `{reply,...}` / 异步 202 |
-| `POST /inbox/image` | streaming 上传渠道图片 (`duplex:'half'`)，落 `cache/laifu-inbox/images/` → `{path, size, content_type}` |
-| `POST /inbox/file` | streaming 上传渠道文件 (`duplex:'half'`)，保留文件名扩展名并落 `cache/laifu-inbox/files/` → `{path, size, content_type}` |
+| `POST /chat` | body `{message, session_id?, source?, callback: {loop_id}}` → 立即 `202`; 结果和心跳回调 Gateway |
+| `POST /inbox/image` | streaming 上传渠道图片 (`duplex:'half'`)，落 `~/inbox/images/` → `{path, size, content_type}` |
+| `POST /inbox/file` | streaming 上传渠道文件 (`duplex:'half'`)，保留文件名扩展名并落 `~/inbox/files/` → `{path, size, content_type}` |
 | `DELETE /session` | `?session_id=` → 清 hermes state.db 里的 session |
 
 `session_id` 默认 `"main"`,`source` 默认 `"web"`。Gateway 传 `web:thr_xxx` 之类按 thread 隔离。
 
-**鉴权**: 除 `/health` 外 5 个业务端点统一要求 `Authorization: Bearer <LAIFU_USER_TOKEN>` (HS256, 以 `GATEWAY_SECRET` 验签, 见 `server/auth.ts`)。`GATEWAY_SECRET` 为空 (dev) 时放行。
+**鉴权**: 除 `/health` 外的端点统一要求 `Authorization: Bearer <LAIFU_USER_TOKEN>` (HS256, 以 `GATEWAY_SECRET` 验签, 见 `server/auth.ts`)。`GATEWAY_SECRET` 为空 (dev) 时放行。
 
 ---
 
@@ -41,11 +40,12 @@ docker run --rm -p 8080:8080 \
   --env-file docker/hermes/.env \
   hermes-local
 
-# 测
-curl http://localhost:8080/health
+# `/chat` 仅供 Gateway 异步派发；本地端到端验证请通过 Gateway 的 `pnpm dev`。
+# 下方仅 smoke check 容器是否接受派发；没有 Gateway 回调端时，最终结果不会返回给终端。
 curl -X POST http://localhost:8080/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"你好","session_id":"web:thr_a","source":"web"}'
+  -d '{"message":"你好","session_id":"web:thr_a","source":"web","callback":{"loop_id":"loop_local"}}'
+# {"accepted":true}
 ```
 
 首次 build 约 10-15 分钟(拉 3.5GB image + Hermes + playwright + chromium + Bun)。之后改 `server/*.ts` 重 build 约 20 秒(layer 缓存命中)。
