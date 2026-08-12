@@ -108,7 +108,7 @@ log.info({ event: 'session.delete', session: sessionName, hermes_session_id: uui
 
 ### 4.4 trace_id:请求级关联(全链路串联)
 
-`trace_id` 贯穿**一次请求**从 gateway 入口 → ACA 容器 → 回调的整条链路,让你用一条查询把分散在两张表里的相关事件串起来做前后/因果分析。它是**纯观测**字段,跟功能性的 `loop_id` 正交(`loop_id` 只在 chat loop 上、用于 callback rendezvous;`trace_id` 覆盖**所有**请求,含 slash 拦截 / session 删除 / history / inbox 这些无 loop 的)。两者都在时,日志同时带。
+`trace_id` 贯穿**一次请求**从 gateway 入口 → ACA 容器 → 回调的整条链路,让你用一条查询把分散在两张表里的相关事件串起来做前后/因果分析。它是**纯观测**字段,跟功能性的 `loop_id` 正交(`loop_id` 只在 chat loop 上、用于 callback rendezvous;`trace_id` 覆盖**所有**请求,含 slash 拦截 / session 删除 / inbox 这些无 loop 的)。两者都在时,日志同时带。
 
 **隐式透传(AsyncLocalStorage)**:两侧 `logger.ts` 的 `emit()` 自动从 `AsyncLocalStorage`(`lib/trace-context.ts` / `server/trace-context.ts`)读 `trace_id` 并入每行 —— **所有现有 + 未来日志自动带,无需手传**。显式 `fields.trace_id` 可覆盖 ambient。
 
@@ -174,8 +174,7 @@ graph LR
 | `hermes.proc.timeout` | error | `timeout_ms` `pid` | `server/hermes-proc.ts` hermes 子进程硬超时被杀 |
 | `session.list.failed` | error | `source` `err` | `hermes sessions list` 失败 |
 | `prompt.read.failed` | error | `file` `err` | 读 dynamic system prompt 失败 |
-| `history.load.failed` | error | `err` | `GET /history` 读 state.db 失败 |
-| `statedb.open.failed` / `statedb.snapshot.open.failed` / `statedb.snapshot.failed` | error | `err` `hermes_session_id?` | `server/state-db.ts` SQLite 读失败(吞错返回 fallback) |
+| `statedb.snapshot.open.failed` / `statedb.snapshot.failed` | error | `err` `hermes_session_id?` | `hermes/state-db.ts` SQLite usage snapshot 读取失败（吞错返回 fallback） |
 | `inbox.image.upload.failed` | error | `err` `bytes` | `server/inbox.ts` 微信图片 streaming 落盘失败 |
 
 ### 5.3 ACA 平台事件(`ContainerAppSystemLogs_CL`,非我们产出)

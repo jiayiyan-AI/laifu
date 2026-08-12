@@ -99,3 +99,18 @@ describe('buildSpec USER_ID 注入 (日志对齐)', () => {
     expect(env?.value).toBe(USER);
   });
 });
+
+describe('buildSpec global runtime environment', () => {
+  const USER = '11111111-2222-3333-4444-555555555555';
+
+  it('selects Hermes without adding Pi configuration to ACA', () => {
+    const env = buildSpec(USER, 'tok').template?.containers?.[0]?.env ?? [];
+    const value = (name: string) => env.find((entry) => entry.name === name);
+
+    expect(value('LINGXI_AGENT_RUNTIME')?.value).toBe('hermes');
+    expect(value('PI_PROVIDER')).toBeUndefined();
+    expect(value('PI_MODEL')).toBeUndefined();
+    expect(value('PI_BASE_URL')).toBeUndefined();
+    expect(value('PI_API_KEY')).toBeUndefined();
+  });
+});

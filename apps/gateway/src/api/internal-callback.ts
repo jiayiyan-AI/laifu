@@ -18,10 +18,10 @@ import { log } from '../lib/logger.js';
 
 export interface CallbackRouterDeps {
   containerAuth: RequestHandler;
-  /** 微信回复能力：给定 threadId 和回复文本，发送到对应微信对话 */
-  wechatReplier?: (threadId: string, text: string) => Promise<void>;
-  /** 飞书回复能力：给定 threadId 和回复文本，发送到对应飞书对话 */
-  feishuReplier?: (threadId: string, text: string) => Promise<void>;
+  /** 微信回复能力：给定 loopId 和回复文本，发送到对应的入站上下文。 */
+  wechatReplier?: (loopId: string, text: string) => Promise<void>;
+  /** 飞书回复能力：给定 loopId 和回复文本，发送到对应的入站上下文。 */
+  feishuReplier?: (loopId: string, text: string) => Promise<void>;
 }
 
 export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
@@ -133,23 +133,24 @@ export const buildCallbackRouter = (deps: CallbackRouterDeps): RouterType => {
     }
 
 
-    // 微信回复
+    // IM 回复必须按 loop_id 精确关联，不能误用同一 thread 上另一轮的上下文。
     if (source === 'wechat' && result.reply && deps.wechatReplier) {
-      deps.wechatReplier(threadId, result.reply).catch((err) => {
+      deps.wechatReplier(body.loop_id, result.reply).catch((err) => {
         log.warn({
           event: 'callback.wechat.reply.failed',
           thread_id: threadId,
+          loop_id: body.loop_id,
           err: err instanceof Error ? err.message : String(err),
         });
       });
     }
 
-    // 飞书回复
     if (source === 'feishu' && result.reply && deps.feishuReplier) {
-      deps.feishuReplier(threadId, result.reply).catch((err) => {
+      deps.feishuReplier(body.loop_id, result.reply).catch((err) => {
         log.warn({
           event: 'callback.feishu.reply.failed',
           thread_id: threadId,
+          loop_id: body.loop_id,
           err: err instanceof Error ? err.message : String(err),
         });
       });

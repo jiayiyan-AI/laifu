@@ -22,6 +22,13 @@ param hermesBaseUrl string = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 @description('主模型不吃原生图时 auxiliary.vision 走的专用 VL 模型名 (alibaba=qwen-vl-max)。容器 renderConfigYaml 写进 config.yaml; 仅当 hermesBaseUrl 在场时才生效。留空 = 不配 auxiliary.vision (主模型本身吃图的 provider / custom 端点不提供 VL 时)。改它只需重部署 gateway, 不必 rebuild 镜像。')
 param hermesVisionModel string = 'qwen-vl-max'
+@allowed(['hermes', 'pi'])
+@description('全局 agent runtime。默认 hermes；设 pi 时 Gateway provisioning 的 ACA 注入 Pi runtime。')
+param agentRuntime string = 'hermes'
+
+
+
+
 
 @description('部署执行者的 AAD Object ID (az ad signed-in-user show --query id -o tsv). 留空则跳过, 部署完得手动给自己授 Key Vault Secrets Officer.')
 param deployerObjectId string = ''
@@ -391,10 +398,13 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     AZURE_STORAGE_CONTAINER: 'laifu-cloud'
     AZURE_STORAGE_BLOB_ENDPOINT: storage.properties.primaryEndpoints.blob
     AZURE_ACR_LOGIN_SERVER: acr.properties.loginServer
+    LAIFU_ENV: env
     HERMES_PROVIDER: hermesProvider
     HERMES_MODEL: hermesModel
     HERMES_BASE_URL: hermesBaseUrl
     HERMES_VISION_MODEL: hermesVisionModel
+    LINGXI_AGENT_RUNTIME: agentRuntime
+
 
     // 用户 ACA 绑这个 user-assigned identity, 让 ACA secrets[].keyVaultUrl 能去 KV 取值。
     // azure.ts createContainerApp 用 resourceId 同时绑 template.identity 和填 secrets[].identity。

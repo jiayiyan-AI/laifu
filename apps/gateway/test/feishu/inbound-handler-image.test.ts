@@ -51,6 +51,7 @@ import {
   __resetSeenForTests,
 } from '../../src/feishu/inbound-handler.js';
 import { __resetPendingLoopsForTests } from '../../src/lib/pending-loops.js';
+import { __resetThreadSerializerForTests, __whenDispatchedForTests } from '../../src/lib/thread-serializer.js';
 import {
   openFeishuMediaStream,
   FeishuMediaTooLargeError,
@@ -127,6 +128,7 @@ describe('makeFeishuInbound — image', () => {
     feishuReplyContexts.clear();
     __resetSeenForTests();
     __resetPendingLoopsForTests();
+    __resetThreadSerializerForTests();
     dispatchHermesChat.mockResolvedValue({ ok: true, status: 202 } as never);
     vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u_alice',
@@ -138,7 +140,7 @@ describe('makeFeishuInbound — image', () => {
       content_type: 'image/jpeg',
     });
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_xyz.jpg',
+      cache_path: '/home/hermes/inbox/images/img_xyz.jpg',
       content_type: 'image/jpeg',
       size: 204_800,
     });
@@ -148,6 +150,7 @@ describe('makeFeishuInbound — image', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(imageEvt({ imageKey: 'img_v2_abc' }));
+    await __whenDispatchedForTests();
 
     expect(ensureContainerWarm).toHaveBeenCalledWith('u_alice', 'http://container:8080');
     expect(openFeishuMediaStream).toHaveBeenCalledTimes(1);
@@ -161,7 +164,7 @@ describe('makeFeishuInbound — image', () => {
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
     const arg = dispatchHermesChat.mock.calls[0]![0] as { message: string; source: string };
     expect(arg.source).toBe('feishu');
-    expect(arg.message).toContain('/home/hermes/.hermes/cache/laifu-inbox/images/img_xyz.jpg');
+    expect(arg.message).toContain('/home/hermes/inbox/images/img_xyz.jpg');
 
     const insertArg = vi.mocked(dao.messages.insert).mock.calls[0]![0];
     expect(insertArg.content).toContain('img_xyz.jpg');
@@ -216,7 +219,7 @@ describe('makeFeishuInbound — image', () => {
   it('owner 发文件: 资源以 type=file 下载并保留文件名后派发', async () => {
     vi.mocked(openFeishuMediaStream).mockResolvedValue({ body: fakeStream(), content_type: 'application/pdf' });
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_report.pdf',
+      cache_path: '/home/hermes/inbox/files/file_report.pdf',
       content_type: 'application/pdf',
       size: 20_480,
     });
@@ -229,6 +232,7 @@ describe('makeFeishuInbound — image', () => {
         content: JSON.stringify({ file_key: 'file_v3_report', file_name: 'report.pdf' }),
       },
     });
+    await __whenDispatchedForTests();
 
     expect(vi.mocked(openFeishuMediaStream).mock.calls[0]!.slice(1, 4)).toEqual(['file_1', 'file_v3_report', 'file']);
     expect(vi.mocked(uploadInboxStream).mock.calls[0]![0]).toMatchObject({ kind: 'file', filename: 'report.pdf' });
@@ -244,6 +248,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     feishuReplyContexts.clear();
     __resetSeenForTests();
     __resetPendingLoopsForTests();
+    __resetThreadSerializerForTests();
     dispatchHermesChat.mockResolvedValue({ ok: true, status: 202 } as never);
     vi.mocked(dao.cache.get).mockReturnValue({
       user_id: 'u_alice',
@@ -255,7 +260,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
       content_type: 'image/jpeg',
     }));
     vi.mocked(uploadInboxStream).mockResolvedValue({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_post.jpg',
+      cache_path: '/home/hermes/inbox/images/img_post.jpg',
       content_type: 'image/jpeg',
       size: 102_400,
     });
@@ -265,6 +270,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ text: '看看这张图', imageKeys: ['img_v2_p'] }));
+    await __whenDispatchedForTests();
 
     expect(openFeishuMediaStream).toHaveBeenCalledTimes(1);
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);
@@ -277,6 +283,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ messageId: 'post_multi', text: '两张图', imageKeys: ['img_a', 'img_b'] }));
+    await __whenDispatchedForTests();
 
     expect(openFeishuMediaStream).toHaveBeenCalledTimes(2);
     expect(vi.mocked(openFeishuMediaStream).mock.calls[0]![2]).toBe('img_a');
@@ -288,6 +295,7 @@ describe('makeFeishuInbound — post(图文混排)', () => {
     const client = mockClient();
     const handle = makeFeishuInbound()(mockBinding(), client);
     await handle(postEvt({ messageId: 'post_txt', text: '只有文字', imageKeys: [] }));
+    await __whenDispatchedForTests();
 
     expect(openFeishuMediaStream).not.toHaveBeenCalled();
     expect(dispatchHermesChat).toHaveBeenCalledTimes(1);

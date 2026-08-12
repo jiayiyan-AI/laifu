@@ -41,7 +41,7 @@ describe('uploadInboxStream', () => {
       const got = await drain(init?.body as ReadableStream<Uint8Array>);
       receivedLen = got.length;
       return Response.json({
-        path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_abc123def456_report.pdf',
+        path: '/home/hermes/inbox/files/file_abc123def456_report.pdf',
         size: got.length,
         content_type: 'application/pdf',
       });
@@ -59,7 +59,7 @@ describe('uploadInboxStream', () => {
     });
 
     expect(res).toEqual({
-      cache_path: '/home/hermes/.hermes/cache/laifu-inbox/files/file_abc123def456_report.pdf',
+      cache_path: '/home/hermes/inbox/files/file_abc123def456_report.pdf',
       content_type: 'application/pdf',
       size: payload.length,
     });
@@ -83,7 +83,7 @@ describe('uploadInboxStream', () => {
       seenUrl = url;
       seenInit = init;
       return Response.json({
-        path: '/home/hermes/.hermes/cache/laifu-inbox/images/img_abc123.jpg',
+        path: '/home/hermes/inbox/images/img_abc123.jpg',
         size: 3,
         content_type: 'image/jpeg',
       });

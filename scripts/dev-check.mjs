@@ -92,7 +92,7 @@ else fail('Docker 没启,请先打开 Docker Desktop');
 if ((await run('docker', ['image', 'inspect', 'hermes-probe'])) === 0) {
   ok('image hermes-probe 已 build');
 } else {
-  warn('image hermes-probe 未 build → docker build -t hermes-probe docker/hermes/');
+  warn('image hermes-probe 未 build → docker build -t hermes-probe docker/');
 }
 
 console.log('');
@@ -123,14 +123,14 @@ console.log('[配置文件]');
 if (await exists('apps/gateway/.env.local')) ok('apps/gateway/.env.local');
 else fail('apps/gateway/.env.local 缺失');
 
-if (await exists('docker/hermes/.env')) {
-  const env = parseEnvFile(await readFile(resolve(ROOT, 'docker/hermes/.env'), 'utf8'));
+if (await exists('docker/.env')) {
+  const env = parseEnvFile(await readFile(resolve(ROOT, 'docker/.env'), 'utf8'));
   const provider = env.get('HERMES_PROVIDER') ?? '';
   const model = env.get('HERMES_MODEL') ?? '';
   const key = env.get('HERMES_API_KEY') ?? '';
   const baseUrl = env.get('HERMES_BASE_URL') ?? '';
   if (!provider || !model) {
-    warn('docker/hermes/.env: HERMES_PROVIDER 或 HERMES_MODEL 未设');
+    warn('docker/.env: HERMES_PROVIDER 或 HERMES_MODEL 未设');
   } else if (!key) {
     warn(`HERMES_PROVIDER=${provider} HERMES_MODEL=${model} 但 HERMES_API_KEY 空`);
   } else if (provider === 'custom' && !baseUrl) {
@@ -139,7 +139,7 @@ if (await exists('docker/hermes/.env')) {
     ok(`hermes: provider=${provider} model=${model}`);
   }
 } else {
-  warn('docker/hermes/.env 缺失 → cp docker/hermes/.env.example docker/hermes/.env 填 key');
+  warn('docker/.env 缺失 → cp docker/.env.example docker/.env 填 key');
 }
 
 console.log('');

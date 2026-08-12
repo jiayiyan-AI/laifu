@@ -57,6 +57,11 @@ const getStorageKey = async (): Promise<string> => {
 const SHARED_SHARE_NAME = 'hermes-shared';
 const SHARED_BINDING_NAME = 'hermes-shared-binding';
 
+const hermesImageTag = (): string =>
+  config.azure.environment === 'prod'
+    ? config.azure.hermesImageTagProd
+    : config.azure.hermesImageTagDev;
+
 /**
  * 确保共享 NFS share 存在 (幂等)。所有用户共用这一个 share, 用 subPath 隔离。
  * - enabledProtocols=NFS: 走 NFS 4.1 (POSIX advisory lock 工作正常, 解 SMB 上 SQLite 锁失败问题, 见 known-issues#6)
@@ -159,23 +164,19 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
       containers: [
         {
           name: 'hermes',
-          image: `${config.azure.acrLoginServer}/${config.azure.hermesImageTag}`,
+          image: `${config.azure.acrLoginServer}/${hermesImageTag()}`,
           resources: { cpu: 1, memory: '2Gi' },
-          // 创建时一次性快照的 env —— provider/model/base_url + LLM key 的单一事实源:
-          //   HERMES_API_KEY:  ACA secret (KV reference), 容器内做 LLM 鉴权; 全程 secretRef 不落盘。
-          //   HERMES_PROVIDER/HERMES_MODEL/HERMES_BASE_URL/HERMES_VISION_MODEL: 通用名。容器 renderConfigYaml
-          //     读它们写 config.yaml (VISION_MODEL→auxiliary.vision.model); buildSubprocessEnv 读前三个派生
-          //     hermes 专属名 (alibaba→DASHSCOPE_* 等)。dev 由 dev-hermes.mjs --env-file 注同名 → prod/dev
-          //     注入对称, generic→专属映射只在容器一处; 改 VL 模型只动 gateway, 不必 rebuild 镜像。
-          //   GATEWAY_BASE_URL: 容器 entrypoint 拉 entitlements / 续 token / prompts 的入口。
-          //   LAIFU_USER_TOKEN: per-user 现签凭据, 算哈希时为哨兵空值 (排除), apply 时为真 token (reconcile 永不丢)。
-          //   GATEWAY_SECRET: gateway-secret (KV reference), 容器侧验签 LAIFU_USER_TOKEN 用 (不下放给 hermes 子进程, 见 hermes-proc.ts)。
+          // 创建时一次性快照注入 Hermes 配置与容器控制面参数。LINGXI_AGENT_RUNTIME 决定实际选择；
+          // Pi 配置在启动时由 Gateway runtime-config 下发，避免 ACA template 承担模型参数与密钥。
+          // GATEWAY_BASE_URL / LAIFU_USER_TOKEN / GATEWAY_SECRET 分别承载 boot 同步、用户鉴权与容器侧 JWT 验签；
+          // token 是易变值，policy hash 用空哨兵排除它。
           env: [
-            { name: 'HERMES_API_KEY', secretRef: 'hermes-api-key' },
+            { name: 'HERMES_API_KEY', secretRef: HERMES_API_KEY },
             { name: 'HERMES_PROVIDER', value: config.azure.hermesProvider },
             { name: 'HERMES_MODEL', value: config.azure.hermesModel },
             { name: 'HERMES_BASE_URL', value: config.azure.hermesBaseUrl },
             { name: 'HERMES_VISION_MODEL', value: config.azure.hermesVisionModel },
+            { name: 'LINGXI_AGENT_RUNTIME', value: config.azure.agentRuntime },
             { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
             { name: 'USER_ID', value: userId },
             { name: 'LAIFU_USER_TOKEN', value: token },

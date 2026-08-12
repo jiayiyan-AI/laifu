@@ -19,6 +19,7 @@ import { buildMeUsageRouter } from './api/me-usage.js';
 import { buildEntitlementsRouter } from './api/entitlements.js';
 import { buildMeEntitlementsRouter } from './api/me-entitlements.js';
 import { buildMeRuntimeConfigRouter } from './api/me-runtime-config.js';
+import { piModelProfiles } from './lib/pi-model-profiles.js';
 import { buildAuthRefreshRouter } from './api/auth-refresh.js';
 import { buildDeviceTokenRouter } from './api/device-token.js';
 import { buildSessionHandoffRouter } from './api/session-handoff.js';
@@ -46,7 +47,6 @@ import { FeishuConnectionManager } from './feishu/connection-manager.js';
 import { makeFeishuInbound, feishuReplyContexts } from './feishu/inbound-handler.js';
 import { sendFeishuMessage } from './feishu/client.js';
 import { HARD_DEADLINE_MS } from './lib/pending-loops.js';
-import { loadPromptStore } from './lib/prompt-store.js';
 import { buildOAuthRouter as buildOAuthIntegrationRouter } from './integrations/oauth/routes.js';
 
 export interface CreateAppOptions {
@@ -93,10 +93,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     // 加载 pricing 表到内存 cache (不阻塞 app 创建, 但在第一次请求前完成)
     void loadPricing(getDb());
 
-    // 动态 prompt 仓库
-    const promptsDir = process.env['PROMPTS_DIR']
-      ?? path.resolve(process.cwd(), 'prompts');
-    const promptStore = loadPromptStore(promptsDir);
 
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
@@ -143,36 +139,27 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       secret: config.auth.gatewaySecret,
       tokenVersionFetcher: (uid: string) => dao.entitlements.getTokenVersion(uid),
     });
-    // 微信回复能力
-    const wechatReplier = async (threadId: string, text: string): Promise<void> => {
-      for (const [loopId, ctx] of wechatReplyContexts) {
-        const loop = await dao.agentLoops.getById(loopId);
-        if (loop && loop.thread_id === threadId) {
-          try {
-            await ctx.client.sendText({
-              to_user_id: ctx.toUserId,
-              text,
-              context_token: ctx.contextToken,
-            });
-          } finally {
-            wechatReplyContexts.delete(loopId);
-          }
-          return;
-        }
+    // IM 回复上下文以 loop_id 为键。回调必须精确命中，绝不能从同一 thread 的其他 loop 借用。
+    const wechatReplier = async (loopId: string, text: string): Promise<void> => {
+      const ctx = wechatReplyContexts.get(loopId);
+      if (!ctx) return;
+      try {
+        await ctx.client.sendText({
+          to_user_id: ctx.toUserId,
+          text,
+          context_token: ctx.contextToken,
+        });
+      } finally {
+        wechatReplyContexts.delete(loopId);
       }
     };
-    // 飞书回复能力
-    const feishuReplier = async (threadId: string, text: string): Promise<void> => {
-      for (const [loopId, ctx] of feishuReplyContexts) {
-        const loop = await dao.agentLoops.getById(loopId);
-        if (loop && loop.thread_id === threadId) {
-          try {
-            await sendFeishuMessage(ctx.client, ctx.toOpenId, text);
-          } finally {
-            feishuReplyContexts.delete(loopId);
-          }
-          return;
-        }
+    const feishuReplier = async (loopId: string, text: string): Promise<void> => {
+      const ctx = feishuReplyContexts.get(loopId);
+      if (!ctx) return;
+      try {
+        await sendFeishuMessage(ctx.client, ctx.toOpenId, text);
+      } finally {
+        feishuReplyContexts.delete(loopId);
       }
     };
     app.use(buildCallbackRouter({ containerAuth, wechatReplier, feishuReplier }));
@@ -240,10 +227,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       console.log(`[gateway] email routes mounted (provider=${config.email.provider}, domain=${config.email.domain})`);
     }
 
-    app.use(buildMeRuntimeConfigRouter({
-      secret: config.auth.gatewaySecret,
-      prompts: promptStore,
-    }));
+    app.use(buildMeRuntimeConfigRouter());
 
     app.use(buildAuthRefreshRouter({ secret: config.auth.gatewaySecret }));
 
