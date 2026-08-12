@@ -9,15 +9,15 @@ afterEach(() => {
   vi.resetModules();
 });
 
-test('injects global Pi runtime and provider credentials when selected', async () => {
+test('selects Pi runtime without adding Pi configuration to ACA', async () => {
   process.env['LINGXI_AGENT_RUNTIME'] = 'pi';
   const { buildSpec } = await import('../../src/provisioning/azure.js');
   const env = buildSpec(USER, 'token').template?.containers?.[0]?.env ?? [];
   const value = (name: string) => env.find((entry) => entry.name === name);
 
   expect(value('LINGXI_AGENT_RUNTIME')?.value).toBe('pi');
-  expect(value('PI_PROVIDER')?.value).toBeTruthy();
-  expect(value('PI_MODEL')?.value).toBeTruthy();
-  expect(value('PI_BASE_URL')?.value).toBeTruthy();
-  expect(value('PI_API_KEY')?.secretRef).toBe('hermes-api-key');
+  expect(value('PI_PROVIDER')).toBeUndefined();
+  expect(value('PI_MODEL')).toBeUndefined();
+  expect(value('PI_BASE_URL')).toBeUndefined();
+  expect(value('PI_API_KEY')).toBeUndefined();
 });

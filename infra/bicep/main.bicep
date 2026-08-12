@@ -26,14 +26,6 @@ param hermesVisionModel string = 'qwen-vl-max'
 @description('全局 agent runtime。默认 hermes；设 pi 时 Gateway provisioning 的 ACA 注入 Pi runtime。')
 param agentRuntime string = 'hermes'
 
-@description('Pi provider id。容器先查 Pi SDK 内置 provider；未命中时再查 Gateway 下发的 custom model profile。')
-param piProvider string = 'dashscope'
-
-@description('Pi 模型 id。Gateway profile registry 可在不重建 Docker 镜像的情况下扩展 custom provider/model。')
-param piModel string = 'qwen3.7-plus'
-
-@description('Pi endpoint 覆盖。非空时覆盖内置模型或 Gateway profile 的默认 base URL。')
-param piBaseUrl string = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 
 
@@ -412,9 +404,6 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     HERMES_BASE_URL: hermesBaseUrl
     HERMES_VISION_MODEL: hermesVisionModel
     LINGXI_AGENT_RUNTIME: agentRuntime
-    PI_PROVIDER: piProvider
-    PI_MODEL: piModel
-    PI_BASE_URL: piBaseUrl
 
 
     // 用户 ACA 绑这个 user-assigned identity, 让 ACA secrets[].keyVaultUrl 能去 KV 取值。

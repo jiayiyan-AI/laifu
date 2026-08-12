@@ -21,7 +21,7 @@ export async function initializeRuntime(runtime: AgentRuntime): Promise<void> {
   }
 
   try {
-    await runtime.prepare();
+    await runtime.prepare(config);
   } catch (error) {
     log.error({ event: 'runtime.prepare.failed', err: error instanceof Error ? error.message : String(error) });
   }

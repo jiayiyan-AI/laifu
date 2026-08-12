@@ -10,9 +10,6 @@
     "hermesModel": { "value": "qwen3.7-max" },
     "hermesBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" },
     "hermesVisionModel": { "value": "qwen-vl-max" },
-    "agentRuntime": { "value": "pi" },
-    "piProvider": { "value": "dashscope" },
-    "piModel": { "value": "qwen3.7-plus" },
-    "piBaseUrl": { "value": "https://dashscope.aliyuncs.com/compatible-mode/v1" }
+    "agentRuntime": { "value": "pi" }
   }
 }

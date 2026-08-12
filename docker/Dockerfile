@@ -175,6 +175,13 @@ ENV PATH="/home/hermes/.local/bin:/home/hermes/.npm-global/bin:/home/hermes/.loc
 # /app 是容器内唯一的业务源码树；profile 脚本在源码复制后以 symlink 接入系统位置。
 
 USER root
+
+# ============ LibreOffice 文档转换 ==========
+# 独立于基础系统依赖层：Office 解析能力变更不会使 Node、GitHub CLI 或 Hermes 安装层失效。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-core-nogui libreoffice-writer-nogui libreoffice-calc-nogui \
+    libreoffice-impress-nogui libreoffice-draw-nogui \
+    && rm -rf /var/lib/apt/lists/*
 # ============ Seed 目录 ============
 # 构建时 home 里只有 .hermes/ 骨架,seed 体积很小(< 10MB)
 RUN cp -a /home/hermes /home/hermes-seed \

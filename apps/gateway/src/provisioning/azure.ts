@@ -166,9 +166,10 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
           name: 'hermes',
           image: `${config.azure.acrLoginServer}/${hermesImageTag()}`,
           resources: { cpu: 1, memory: '2Gi' },
-          // 创建时一次性快照完整注入两种 runtime 的配置。LINGXI_AGENT_RUNTIME 决定实际选择；
-          // Hermes 不读取 PI_*，因此无需按条件拆分 env。GATEWAY_BASE_URL / LAIFU_USER_TOKEN /
-          // GATEWAY_SECRET 分别承载 boot 同步、用户鉴权与容器侧 JWT 验签；token 是易变值，policy hash 用空哨兵排除它。
+          // 创建时一次性快照注入 Hermes 配置与容器控制面参数。LINGXI_AGENT_RUNTIME 决定实际选择；
+          // Pi 配置在启动时由 Gateway runtime-config 下发，避免 ACA template 承担模型参数与密钥。
+          // GATEWAY_BASE_URL / LAIFU_USER_TOKEN / GATEWAY_SECRET 分别承载 boot 同步、用户鉴权与容器侧 JWT 验签；
+          // token 是易变值，policy hash 用空哨兵排除它。
           env: [
             { name: 'HERMES_API_KEY', secretRef: HERMES_API_KEY },
             { name: 'HERMES_PROVIDER', value: config.azure.hermesProvider },
@@ -176,10 +177,6 @@ export const buildSpec = (userId: string, token: string): ContainerApp => {
             { name: 'HERMES_BASE_URL', value: config.azure.hermesBaseUrl },
             { name: 'HERMES_VISION_MODEL', value: config.azure.hermesVisionModel },
             { name: 'LINGXI_AGENT_RUNTIME', value: config.azure.agentRuntime },
-            { name: 'PI_PROVIDER', value: config.azure.piProvider },
-            { name: 'PI_MODEL', value: config.azure.piModel },
-            { name: 'PI_BASE_URL', value: config.azure.piBaseUrl },
-            { name: 'PI_API_KEY', secretRef: HERMES_API_KEY },
             { name: 'GATEWAY_BASE_URL', value: config.auth.publicBaseUrl },
             { name: 'USER_ID', value: userId },
             { name: 'LAIFU_USER_TOKEN', value: token },

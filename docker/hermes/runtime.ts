@@ -6,7 +6,7 @@ import { delHermesId, getHermesId, putHermesId } from './session-map.ts';
 import { snapshotSession, usageDelta } from './state-db.ts';
 import type { Snapshot } from './state-db.ts';
 import { log } from '../boot/server/logger.ts';
-import type { AgentDeleteSessionResult, AgentRunInput, AgentRunResult, AgentRuntime, ContainerChatUsage } from '../runtime/types.ts';
+import type { AgentDeleteSessionResult, AgentRunInput, AgentRunResult, AgentRuntime, ContainerChatUsage, RuntimeConfig } from '../runtime/types.ts';
 
 
 class HermesProcessError extends Error {
@@ -25,7 +25,7 @@ const SESSION_DELETE_TIMEOUT_MS = 15_000;
 export class HermesRuntime implements AgentRuntime {
   readonly activeRuns = new Map<string, AbortController>();
 
-  async prepare(): Promise<void> {
+  async prepare(_config: RuntimeConfig | null): Promise<void> {
     await renderConfigYaml();
   }
 

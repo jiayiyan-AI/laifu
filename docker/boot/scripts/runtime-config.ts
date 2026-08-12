@@ -1,9 +1,5 @@
-import type { DynamicFilesManifest } from './dynamic-files.ts';
+import type { RuntimeConfig } from '../../runtime/types.ts';
 import { httpJson, log, readToken, warn } from './lib.ts';
-
-export interface RuntimeConfig {
-  files_manifest?: DynamicFilesManifest;
-}
 
 export async function fetchRuntimeConfig(): Promise<RuntimeConfig | null> {
   const gateway = process.env.GATEWAY_BASE_URL ?? '';

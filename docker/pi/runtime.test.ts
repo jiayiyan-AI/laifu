@@ -56,10 +56,13 @@ const server = Bun.serve({
   },
 });
 
-process.env.PI_PROVIDER = 'dashscope';
-process.env.PI_MODEL = 'qwen3-coder-plus';
-process.env.PI_API_KEY = 'test-key';
-process.env.PI_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
+const PI_CONFIG = {
+  provider: 'dashscope',
+  model: 'qwen3-coder-plus',
+  timeoutSeconds: 14_400,
+  apiKey: 'test-key',
+  baseUrl: `http://127.0.0.1:${server.port}/v1`,
+};
 const [{ PiRuntime }, { SessionManager, getAgentDir }, { ensurePiWorkspace }, { delPiSession, getPiSession, getPiSessionMapFile, putPiSession }, { savePiModelProfiles }] = await Promise.all([
   import('./runtime.ts'),
   import('@earendil-works/pi-coding-agent'),
@@ -67,6 +70,12 @@ const [{ PiRuntime }, { SessionManager, getAgentDir }, { ensurePiWorkspace }, { 
   import('./session-map.ts'),
   import('./model-profiles.ts'),
 ]);
+
+async function createPiRuntime(piConfig = PI_CONFIG): Promise<InstanceType<typeof PiRuntime>> {
+  const runtime = new PiRuntime();
+  await runtime.prepare({ pi_config: piConfig });
+  return runtime;
+}
 await savePiModelProfiles({
   revision: 'test',
   providers: [
@@ -117,17 +126,13 @@ afterAll(async () => {
   process.chdir(originalCwd);
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  delete process.env.PI_BASE_URL;
-  delete process.env.PI_PROVIDER;
-  delete process.env.PI_MODEL;
-  delete process.env.PI_API_KEY;
   if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
   await rm(workspace, { recursive: true, force: true });
 });
 
 test('runs text chat and physically deletes a file-mapped session', async () => {
-  const runtime = new PiRuntime();
+  const runtime = await createPiRuntime();
   const result = await runtime.run({ message: 'hello', sessionId: 'thread-1', source: 'web' });
 
   expect(result).toMatchObject({
@@ -147,8 +152,7 @@ test('runs text chat and physically deletes a file-mapped session', async () => 
   expect(getPiSessionMapFile()).toBe(path.join(path.dirname(getAgentDir()), 'lingxi-session-map.json'));
   expect(session.name).toBeUndefined();
 
-  const restartedRuntime = new PiRuntime();
-  await restartedRuntime.prepare();
+  const restartedRuntime = await createPiRuntime();
   expect(await restartedRuntime.deleteSession('thread-1')).toMatchObject({ deleted: true });
 
   expect(await SessionManager.list(await ensurePiWorkspace())).toHaveLength(0);
@@ -166,58 +170,40 @@ test('serves Pi session mappings from memory after loading', async () => {
   expect(JSON.parse(await readFile(getPiSessionMapFile(), 'utf8'))).toEqual({});
 });
 
-test('retries model initialization after configuration is corrected', async () => {
-  const runtime = new PiRuntime();
-  const apiKey = process.env.PI_API_KEY;
-  delete process.env.PI_API_KEY;
+test('retries model initialization after Gateway configuration is corrected', async () => {
+  const runtime = await createPiRuntime({ ...PI_CONFIG, apiKey: '' });
 
-  try {
-    await expect(runtime.run({ message: 'first', sessionId: 'thread-5', source: 'web', loopId: 'loop-5a' }))
-      .rejects.toThrow('PI_PROVIDER, PI_MODEL, and PI_API_KEY are required for Pi runtime');
-  } finally {
-    if (apiKey === undefined) delete process.env.PI_API_KEY;
-    else process.env.PI_API_KEY = apiKey;
-  }
+  await expect(runtime.run({ message: 'first', sessionId: 'thread-5', source: 'web', loopId: 'loop-5a' }))
+    .rejects.toThrow('Pi runtime configuration is required from Gateway');
 
+  await runtime.prepare({ pi_config: PI_CONFIG });
   expect(await runtime.run({ message: 'second', sessionId: 'thread-5', source: 'web', loopId: 'loop-5b' }))
     .toMatchObject({ reply: 'Pi says hello.', exitCode: 0, timedOut: false });
 }, 20_000);
 test('runs the Qwen3.7 Max DashScope profile', async () => {
-  const model = process.env.PI_MODEL;
-  process.env.PI_MODEL = 'qwen3.7-max';
+  const runtime = await createPiRuntime({ ...PI_CONFIG, model: 'qwen3.7-max' });
+  const result = await runtime.run({ message: 'hello', sessionId: 'thread-6', source: 'web', loopId: 'loop-6' });
 
-  try {
-    const result = await new PiRuntime().run({ message: 'hello', sessionId: 'thread-6', source: 'web', loopId: 'loop-6' });
-    expect(result).toMatchObject({
-      reply: 'Pi says hello.',
-      exitCode: 0,
-      timedOut: false,
-      usage: { model: 'qwen3.7-max', provider: 'dashscope' },
-    });
-  } finally {
-    if (model === undefined) delete process.env.PI_MODEL;
-    else process.env.PI_MODEL = model;
-  }
+  expect(result).toMatchObject({
+    reply: 'Pi says hello.',
+    exitCode: 0,
+    timedOut: false,
+    usage: { model: 'qwen3.7-max', provider: 'dashscope' },
+  });
 }, 20_000);
 test('runs the Qwen3.7 Plus DashScope profile', async () => {
-  const model = process.env.PI_MODEL;
-  process.env.PI_MODEL = 'qwen3.7-plus';
+  const runtime = await createPiRuntime({ ...PI_CONFIG, model: 'qwen3.7-plus' });
+  const result = await runtime.run({ message: 'hello', sessionId: 'thread-7', source: 'web', loopId: 'loop-7' });
 
-  try {
-    const result = await new PiRuntime().run({ message: 'hello', sessionId: 'thread-7', source: 'web', loopId: 'loop-7' });
-    expect(result).toMatchObject({
-      reply: 'Pi says hello.',
-      exitCode: 0,
-      timedOut: false,
-      usage: { model: 'qwen3.7-plus', provider: 'dashscope' },
-    });
-  } finally {
-    if (model === undefined) delete process.env.PI_MODEL;
-    else process.env.PI_MODEL = model;
-  }
+  expect(result).toMatchObject({
+    reply: 'Pi says hello.',
+    exitCode: 0,
+    timedOut: false,
+    usage: { model: 'qwen3.7-plus', provider: 'dashscope' },
+  });
 }, 20_000);
 test('serializes concurrent chats for the same Pi session', async () => {
-  const runtime = new PiRuntime();
+  const runtime = await createPiRuntime();
   streamDelayMs = 50;
   maxConcurrentStreamRequests = 0;
 
@@ -236,7 +222,7 @@ test('serializes concurrent chats for the same Pi session', async () => {
 }, 20_000);
 
 test('does not return a prior assistant message after an extension command', async () => {
-  const runtime = new PiRuntime();
+  const runtime = await createPiRuntime();
   await runtime.run({ message: 'hello', sessionId: 'thread-4', source: 'web', loopId: 'loop-4a' });
 
   expect(await runtime.run({ message: '/noop', sessionId: 'thread-4', source: 'web', loopId: 'loop-4b' })).toEqual({
@@ -257,7 +243,7 @@ test('does not return a prior assistant message after an extension command', asy
 }, 20_000);
 
 test('does not retain a session history while deleting it', async () => {
-  const runtime = new PiRuntime();
+  const runtime = await createPiRuntime();
   const initial = await runtime.run({ message: 'before delete', sessionId: 'thread-2', source: 'web' });
   const [deleted, replacement] = await Promise.all([
     runtime.deleteSession('thread-2'),

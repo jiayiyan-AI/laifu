@@ -28,6 +28,19 @@ export interface AgentDeleteSessionResult {
   sessionId: string | null;
 }
 
+export interface PiRuntimeConfig {
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  timeoutSeconds: number;
+}
+
+export interface RuntimeConfig {
+  files_manifest?: Record<string, string>;
+  pi_config?: PiRuntimeConfig;
+}
+
 /**
  * 业务 HTTP 层唯一允许依赖的 agent 边界。
  *
@@ -35,7 +48,7 @@ export interface AgentDeleteSessionResult {
  * run/deleteSession/abort 保持 chat 请求路径与 runtime 私有状态隔离。
  */
 export interface AgentRuntime {
-  prepare(): Promise<void>;
+  prepare(config: RuntimeConfig | null): Promise<void>;
   applyEntitlements(desired: string[]): Promise<string[]>;
   run(input: AgentRunInput): Promise<AgentRunResult>;
   deleteSession(sessionId: string): Promise<AgentDeleteSessionResult>;

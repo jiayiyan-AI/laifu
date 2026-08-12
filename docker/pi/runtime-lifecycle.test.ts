@@ -4,16 +4,10 @@ test('Pi resource preparation and entitlement reconciliation do not initialize a
   const child = Bun.spawn([
     'bun',
     '-e',
-    `import { mock } from 'bun:test'; mock.module('./pi/resource-plan.ts', () => ({ resolveRuntimeResources: async () => ({ packageRoots: [], skillPaths: [], observedEntitlements: [] }) })); const { PiRuntime } = await import('./pi/runtime.ts'); const runtime = new PiRuntime(); await runtime.prepare(); await runtime.applyEntitlements([]);`,
+    `import { mock } from 'bun:test'; mock.module('./pi/resource-plan.ts', () => ({ resolveRuntimeResources: async () => ({ packageRoots: [], skillPaths: [], observedEntitlements: [] }), sameResourcePlans: () => true })); const { PiRuntime } = await import('./pi/runtime.ts'); const runtime = new PiRuntime(); await runtime.prepare(null); await runtime.applyEntitlements([]);`,
   ], {
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      PI_PROVIDER: '',
-      PI_MODEL: '',
-      PI_API_KEY: '',
-      PI_BASE_URL: '',
-    },
+    env: process.env,
     stderr: 'pipe',
     stdout: 'pipe',
   });

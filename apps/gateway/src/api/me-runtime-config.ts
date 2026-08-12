@@ -6,7 +6,7 @@ import type { RuntimeConfig, RuntimeFilesManifest } from '@lingxi/shared';
 import { makeContainerTokenMiddleware } from '../auth/container-token.js';
 import { config } from '../config.js';
 import { dao } from '../db/index.js';
-import { piModelProfiles } from '../lib/pi-model-profiles.js';
+import { piAgentConfig, piModelProfiles } from '../lib/pi-model-profiles.js';
 
 const PI_MODEL_PROFILES_FILE = 'pi-model-profiles.json';
 const SYSTEM_PROMPT_FILE = 'system-prompt.md';
@@ -61,7 +61,7 @@ export const buildMeRuntimeConfigRouter = (): RouterType => {
     for (const k in  read()) {
       files_manifest[k] = data[k]!.hash;
     }
-    const body: RuntimeConfig = { files_manifest };
+    const body: RuntimeConfig = { files_manifest, pi_config: piAgentConfig };
     res.json(body);
   });
 

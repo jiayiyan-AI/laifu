@@ -2,22 +2,42 @@ import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DYNAMIC_DIR, PI_MODEL_PROFILES_FILE } from '../boot/scripts/dynamic-files.ts';
-import type { PiRuntimeConfig } from './config.ts';
+import type { PiRuntimeConfig } from '../runtime/types.ts';
 
 export type PiProfileApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
+
+export interface PiModelCostTier {
+  inputTokensAbove: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface PiModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: PiModelCostTier[];
+}
+
+export type PiThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface PiModelProfile {
   model: string;
   name: string;
   reasoning: boolean;
   input: Array<'text' | 'image'>;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: PiModelCost;
   contextWindow: number;
   maxTokens: number;
+  thinkingLevelMap?: Partial<Record<PiThinkingLevel, string | null>>;
   compat?: {
     supportsDeveloperRole?: boolean;
     supportsReasoningEffort?: boolean;
     supportsStore?: boolean;
+    supportsOpenAIGrammarTools?: boolean;
     thinkingFormat?: 'qwen';
   };
 }
@@ -78,6 +98,7 @@ export async function registerPiModelProfile(
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
       compat: model.compat,
+      thinkingLevelMap: model.thinkingLevelMap,
     })),
   });
   return provider.provider;

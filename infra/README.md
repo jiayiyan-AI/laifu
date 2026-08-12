@@ -46,7 +46,7 @@ curl https://app-lingxi-dev-gateway.azurewebsites.net/healthz   # {"ok":true}
 
 ### 环境
 
-- `parameters.dev.json` / `parameters.prod.json` — 都使用 B1、`southeastasia`、DashScope 和 `qwen3.7-max`；dev 选择 `pi` runtime，prod 保持 `hermes`。两份文件都显式指定 `piProvider`、`piModel` 和 `piBaseUrl`，避免 Bicep 默认值在环境间漂移。
+- `parameters.dev.json` / `parameters.prod.json` — 都使用 B1、`southeastasia`、DashScope 和 `qwen3.7-max`；dev 选择 `pi` runtime，prod 保持 `hermes`。Pi 模型配置由 Gateway 的 runtime-config 接口集中下发，不属于 Bicep 参数。
 
 ### 不在 Bicep 里的东西
 

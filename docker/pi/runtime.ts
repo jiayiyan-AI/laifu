@@ -15,8 +15,8 @@ import type {
   AgentRunResult,
   AgentRuntime,
   ContainerChatUsage,
+  RuntimeConfig,
 } from '../runtime/types.ts';
-import { getPiRuntimeConfig, piTimeoutMs } from './config.ts';
 import { registerPiModelProfile } from './model-profiles.ts';
 import { resolveRuntimeResources, type RuntimeResourcePlan, sameResourcePlans } from './resource-plan.ts';
 import {
@@ -25,6 +25,13 @@ import {
   openPiSessionManager,
 } from './session-locator.ts';
 import { ensurePiWorkspace } from './workspace.ts';
+
+function timeoutMs(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`invalid Pi timeoutSeconds: ${seconds}`);
+  }
+  return Math.floor(seconds * 1000);
+}
 
 
 export class PiRuntime implements AgentRuntime {
@@ -36,8 +43,11 @@ export class PiRuntime implements AgentRuntime {
   private providerName: string | null = null;
   private modelName: string | null = null;
   private modelRuntimeInitialization: Promise<ModelRuntime> | null = null;
+  private config: RuntimeConfig | null = null;
 
-  async prepare(): Promise<void> {}
+  async prepare(config: RuntimeConfig | null): Promise<void> {
+    this.config = config;
+  }
 
   async applyEntitlements(desired: string[]): Promise<string[]> {
     const next = await resolveRuntimeResources(desired);
@@ -72,7 +82,7 @@ export class PiRuntime implements AgentRuntime {
         const message = error instanceof Error ? error.message : String(error);
         log.warn({ event: 'session.abort', session: input.sessionId, loop_id: input.loopId, err: message });
       });
-    }, piTimeoutMs());
+    }, timeoutMs(this.config?.pi_config?.timeoutSeconds ?? NaN));
 
     try {
       await session.prompt(input.message);
@@ -156,9 +166,9 @@ export class PiRuntime implements AgentRuntime {
   }
 
   private async createModelRuntime(): Promise<ModelRuntime> {
-    const config = getPiRuntimeConfig();
-    if (!config.provider || !config.model || !config.apiKey) {
-      throw new Error('PI_PROVIDER, PI_MODEL, and PI_API_KEY are required for Pi runtime');
+    const config = this.config?.pi_config;
+    if (!config?.provider || !config.model || !config.apiKey) {
+      throw new Error('Pi runtime configuration is required from Gateway');
     }
 
     const runtime = await ModelRuntime.create({ allowModelNetwork: false });

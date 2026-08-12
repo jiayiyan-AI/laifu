@@ -98,11 +98,11 @@ sequenceDiagram
     and 同步 entitlement
         S->>G: GET /api/me/entitlements
     end
-    S->>R: prepare()、applyEntitlements(desired)
+    S->>R: prepare(runtime-config)、applyEntitlements(desired)
     S->>G: POST /api/me/observed-entitlements
 ```
 
-`RuntimeConfig.files_manifest` 是动态文件下发的唯一机制。容器只按 hash 获取变化的文件，并删除 Gateway manifest 中已不存在的本地文件。旧目录 `~/dynamic_prompts` 会在同步时移除。
+`RuntimeConfig` 一次返回 `files_manifest` 与 `pi_config`。容器仅按 hash 同步动态文件，并删除 Gateway manifest 中已不存在的本地文件；旧目录 `~/dynamic_prompts` 会在同步时移除。`pi_config` 直接携带 Pi 的 provider、model、base URL 与 API key，在启动时传给 `PiRuntime`，不写入磁盘或 Pi settings。
 
 当前使用的动态文件：
 
@@ -111,7 +111,7 @@ sequenceDiagram
 |`system-prompt.md`|Hermes、Pi|受管 system prompt|
 |`pi-model-profiles.json`|Pi|非 Pi 内置模型的 provider/model profile|
 
-`LAIFU_USER_TOKEN` 优先从环境变量读取，缺失时读取 `~/.hermes/.laifu_user_token`；bootstrap 会在 token 剩余不足七天时调用 Gateway 刷新并以 `0600` 写回。Pi API key 不经动态配置接口传输，始终来自容器 secret `PI_API_KEY`。
+`LAIFU_USER_TOKEN` 优先从环境变量读取，缺失时读取 `~/.hermes/.laifu_user_token`；bootstrap 会在 token 剩余不足七天时调用 Gateway 刷新并以 `0600` 写回。Pi 配置由 Gateway 的 `piAgentConfig` 通过 runtime-config 明文下发；当前以修改与部署便利为先，不走 ACA 环境变量或 secret。
 
 ## HTTP、回调与附件
 
@@ -157,11 +157,11 @@ Pi runtime 在第一次 `/chat` 时懒创建并缓存 `ModelRuntime`；`prepare(
 
 ```mermaid
 flowchart TD
-    C["PI_PROVIDER / PI_MODEL / PI_API_KEY"] --> V{"三项齐全？"}
+    C["Gateway runtime-config.pi_config"] --> V{"provider / model / API key 齐全？"}
     V -->|否| F["请求失败：配置缺失"]
     V -->|是| M["ModelRuntime.create\nallowModelNetwork = false"]
     M --> I{"Pi 内置模型\ngetModel(provider, model)？"}
-    I -->|是| B["使用内置模型能力\nPI_BASE_URL 非空时仅覆盖 endpoint"]
+    I -->|是| B["pi_config.baseUrl 非空时覆盖 endpoint"]
     I -->|否| P{"~/dynamic/pi-model-profiles.json\n存在精确 profile？"}
     P -->|是| R["注册该 custom provider\n使用 profile 能力与 endpoint"]
     P -->|否| X["请求失败：模型未配置"]
@@ -178,17 +178,17 @@ flowchart TD
     class F,X fail;
 ```
 
-运行配置：
+Pi 运行配置由 `GET /api/me/runtime-config` 的 `pi_config` 提供：
 
 ```text
-PI_PROVIDER    Pi provider ID
-PI_MODEL       Pi model ID
-PI_API_KEY     运行期密钥（secret）
-PI_BASE_URL    可选 endpoint 覆盖
-PI_TIMEOUT     可选超时秒数，默认 14,400 秒
+provider        Pi provider ID
+model           Pi model ID
+apiKey          运行期密钥
+baseUrl         可选 endpoint 覆盖
+timeoutSeconds  运行超时秒数，默认 14,400
 ```
 
-内置模型优先使用 Pi 自带的 provider/model 能力定义。只有内置模型未命中时，才从动态 profile 文件精确匹配 provider 与 model，并注册该 custom provider；两者都未命中时明确失败，不猜测模型能力。
+内置模型优先使用 Pi 自带的 provider/model 能力定义。只有内置模型未命中时，才从动态 profile 文件精确匹配 provider 与 model，并注册该 custom provider；`pi_config.baseUrl` 非空时覆盖 profile 的默认 endpoint。两者都未命中时明确失败，不猜测模型能力。
 
 ### 会话创建与执行
 
@@ -220,7 +220,7 @@ flowchart TD
 
 - 同一 Gateway session 的 `run`、删除和 resource-plan 失效操作都经过同一个 lifecycle lock；不同 Gateway session 可并行。
 - `activeRuns` 以 Gateway `loop_id` 索引正在执行的 `AgentSession`。`abort(loopId)` 直接调用该 session 的 `abort()`；Pi timeout 到期时也走同一路径。
-- `PI_TIMEOUT` 的值按秒解析，默认 14,400 秒。超时会将当前运行标记为失败，并返回 `pi timeout`。
+- `timeoutSeconds` 按秒解析；超时会将当前运行标记为失败，并返回 `pi timeout`。
 - 调用 `session.prompt()` 前记录消息数组长度；只在本轮新增消息中寻找最后一条 assistant message，避免 extension command 后误把旧回复作为本轮结果。
 - reply 仅拼接 assistant content 中的 `text` part。无 assistant message、error、aborted 或空 text 都返回失败结果；usage 从该 assistant message 的 input/output/cache/reasoning 计数提取。
 
@@ -234,9 +234,9 @@ flowchart TD
 |---|---|---|
 |根对象|`revision`、`providers`|Gateway 下发的 profile 版本与 provider 集合|
 |provider|`provider`、`name`、`defaultBaseUrl`、`api`、`authHeader`、`models`|API 协议与默认 endpoint；`api` 可为 OpenAI Completions、OpenAI Responses 或 Anthropic Messages|
-|model|`model`、`name`、`reasoning`、`input`、`cost`、`contextWindow`、`maxTokens`|Pi 运行时需要的模型能力与 token 限制|
+|model|`model`、`name`、`reasoning`、`input`、`cost`、`contextWindow`、`maxTokens`|Pi 运行时需要的模型能力与 token 限制；`cost.tiers` 可定义按输入 token 阈值切换的整次请求价格。|
 
-可选 `compat` 字段描述 provider 协议兼容性，包括 developer role、reasoning effort、store 与 Qwen thinking format 支持。`PI_BASE_URL` 非空时优先覆盖 profile 的 `defaultBaseUrl`；`PI_API_KEY` 在 provider 完成解析后通过 `setRuntimeApiKey()` 注入，不写入动态文件或 Pi settings。
+可选 `thinkingLevelMap` 将 Pi 的 thinking level 映射为 provider 的 effort 值；`compat` 描述 provider 协议兼容性，包括 developer role、reasoning effort、store、OpenAI grammar tools 与 Qwen thinking format。`pi_config.baseUrl` 非空时优先覆盖 profile 的 `defaultBaseUrl`；`pi_config.apiKey` 在 provider 完成解析后通过 `setRuntimeApiKey()` 注入，不写入动态文件或 Pi settings。
 
 ### 资源与 entitlement
 
