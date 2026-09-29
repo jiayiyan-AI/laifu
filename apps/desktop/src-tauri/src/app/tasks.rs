@@ -201,10 +201,9 @@ async fn run_sync_session(
                 let Some(SyncControl::Flush(reply)) = control else {
                     break;
                 };
-                if needs_initial_resync {
-                    let _ = reply.send(Err("同步正在建立初始基线，请完成后再修改同步目录".into()));
-                    continue;
-                }
+                // 基线未建立时也照常跑一轮（带 `--resync`，尽力把本地改动送上云），
+                // 但其结果不阻塞目录操作，见 `flush_reply`。
+                let baseline_missing = needs_initial_resync;
                 let run_guard = core.sync_run_lock.read().await;
                 *core.sync.lock().await = SyncState::Syncing;
                 let outcome = run_one_sync(
@@ -217,7 +216,8 @@ async fn run_sync_session(
                 .await;
                 advance_initial_resync(&mut needs_initial_resync, &outcome, local_dir);
                 drop(run_guard);
-                let _ = reply.send(record_sync_outcome(core, &outcome).await);
+                let result = record_sync_outcome(core, &outcome).await;
+                let _ = reply.send(flush_reply(baseline_missing, result));
             },
             recv = trig_rx.recv() => {
                 if recv.is_none() {
@@ -260,6 +260,20 @@ async fn run_sync_session(
     }
 
     poller_task.abort();
+}
+
+/// 目录操作前 Flush 的应答。
+///
+/// 基线已建立：同步失败即拒绝，防止未上云的本地改动在切换中被甩下。
+/// 基线未建立（首次 `--resync` 尚未成功，或两端都还没有文件）：没有需要保护的增量状态——
+/// 「改用空目录」把旧目录原样留在磁盘，「移动」整体 rename，云端都不受影响。此时若仍以
+/// 同步失败拒绝，用户就永远换不掉一个同步不了的目录（例如坚果云 File Provider 目录）。
+fn flush_reply(baseline_missing: bool, sync_result: Result<(), String>) -> Result<(), String> {
+    if baseline_missing {
+        Ok(())
+    } else {
+        sync_result
+    }
 }
 
 /// rclone bisync 不能把两个空目录的 `--resync` 产物当作增量基线。只有首次 resync
@@ -472,6 +486,19 @@ mod tests {
 
         std::fs::write(nested.join("first.txt"), "content").unwrap();
         assert!(directory_contains_file(temp.path()).unwrap());
+    }
+
+    /// 基线从未建立时没有需要保护的增量状态：旧目录原样留在磁盘、云端不受影响，
+    /// 同步失败不能反过来锁死「改用空目录 / 移动」这条唯一的自救路径。
+    #[test]
+    fn flush_without_baseline_never_blocks_directory_change() {
+        assert_eq!(flush_reply(true, Err("bisync 失败（退出码 1）".into())), Ok(()));
+    }
+
+    #[test]
+    fn flush_with_baseline_reports_sync_failure() {
+        let failure: Result<(), String> = Err("bisync 失败（退出码 1）".into());
+        assert_eq!(flush_reply(false, failure.clone()), failure);
     }
 
     #[test]
