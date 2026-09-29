@@ -248,6 +248,34 @@ pub fn classify(exit_code: i32, stderr: &str) -> BisyncOutcome {
     BisyncOutcome::Failed(exit_code)
 }
 
+/// 结合本轮是否已带 `--resync` 的 [`classify`]。
+///
+/// 已带 `--resync` 的一轮失败，再归为 [`BisyncOutcome::NeedsResync`] 既不成立也无从恢复
+/// （上层会一直重跑 `--resync` 并提示「需重建」）；此时按普通失败上报，真实原因见失败日志。
+pub fn classify_run(resync: bool, exit_code: i32, stderr: &str) -> BisyncOutcome {
+    match classify(exit_code, stderr) {
+        BisyncOutcome::NeedsResync if resync => BisyncOutcome::Failed(exit_code),
+        other => other,
+    }
+}
+
+/// 最近一次 bisync 失败的 stderr 落盘文件名（与 rclone.conf 同目录，即 `~/.laifu/`）。
+pub const FAILURE_LOG_FILE: &str = "rclone-last-error.log";
+/// 失败日志只保留 stderr 末尾这么多字节：真正的错误总在最后，也避免大目录刷屏撑爆磁盘。
+pub const FAILURE_LOG_MAX_BYTES: usize = 16 * 1024;
+
+/// 把失败轮次的 stderr 末尾写到 rclone.conf 旁的 [`FAILURE_LOG_FILE`]（覆盖写）。
+///
+/// 分类只取关键词，原始错误此前无处可查；用户机器上排障全靠这份文件。写失败不影响同步。
+pub fn write_failure_log(config_path: &Path, exit_code: i32, stderr: &str) {
+    let mut start = stderr.len().saturating_sub(FAILURE_LOG_MAX_BYTES);
+    while !stderr.is_char_boundary(start) {
+        start += 1;
+    }
+    let content = format!("exit={exit_code}\n{}", &stderr[start..]);
+    let _ = std::fs::write(config_path.with_file_name(FAILURE_LOG_FILE), content);
+}
+
 /// 实际跑一次 rclone bisync 子进程（`app` feature；tokio::process 驱动）。
 ///
 /// 用 `rclone_bin` 路径（sidecar 二进制）+ `plan.to_args()` spawn，捕获 stderr，
@@ -264,7 +292,10 @@ pub async fn run_bisync(
         .await?;
     let code = output.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(classify(code, &stderr))
+    if code != 0 {
+        write_failure_log(Path::new(&plan.config_path), code, &stderr);
+    }
+    Ok(classify_run(plan.first_run, code, &stderr))
 }
 
 /// 单次同步编排决策：403 后刷新 SAS 并重试。
@@ -404,6 +435,58 @@ mod tests {
     #[test]
     fn classify_generic_failure() {
         assert_eq!(classify(7, "some other error"), BisyncOutcome::Failed(7));
+    }
+
+    /// 本轮已经带着 `--resync` 跑了，再报「需重建（--resync）」既不成立也无从恢复；
+    /// `--resilient` 给任何可重试错误都附带 "retryable without --resync"，最易触发误判。
+    #[test]
+    fn resync_run_failure_is_not_reported_as_needs_resync() {
+        let stderr = "ERROR : Bisync aborted. Error is retryable without --resync due to --resilient mode.\n";
+        assert_eq!(classify_run(true, 1, stderr), BisyncOutcome::Failed(1));
+    }
+
+    #[test]
+    fn incremental_run_still_reports_needs_resync() {
+        let stderr = "Bisync critical error: cannot find prior listing, run resync";
+        assert_eq!(classify_run(false, 2, stderr), BisyncOutcome::NeedsResync);
+    }
+
+    /// 走真实子进程：假 rclone 以 `--resilient` 的可重试提示退出 1。
+    #[cfg(all(feature = "app", unix))]
+    #[tokio::test]
+    async fn run_bisync_logs_failure_and_classifies_resync_run() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let fake_rclone = temp.path().join("rclone");
+        std::fs::write(
+            &fake_rclone,
+            "#!/bin/sh\necho 'ERROR : Bisync aborted. Error is retryable without --resync due to --resilient mode.' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_rclone, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = temp.path().join("rclone.conf");
+        let plan = BisyncPlan::new(&sample_sas(), temp.path(), &config, true);
+
+        let outcome = run_bisync(&fake_rclone, &plan).await.unwrap();
+
+        assert_eq!(outcome, BisyncOutcome::Failed(1));
+        let log = std::fs::read_to_string(temp.path().join(FAILURE_LOG_FILE)).unwrap();
+        assert!(log.contains("retryable without --resync"));
+    }
+
+    #[test]
+    fn failure_log_keeps_stderr_tail_next_to_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("rclone.conf");
+        let stderr = format!("{}\nERROR : real cause\n", "x".repeat(FAILURE_LOG_MAX_BYTES));
+
+        write_failure_log(&config, 7, &stderr);
+
+        let log = std::fs::read_to_string(temp.path().join(FAILURE_LOG_FILE)).unwrap();
+        assert!(log.contains("exit=7"));
+        assert!(log.ends_with("ERROR : real cause\n"));
+        assert!(log.len() <= FAILURE_LOG_MAX_BYTES + 200);
     }
 
     /// 真实复现样本：`D:\sync` 内仅 aa.txt.txt 一个文件，本地改其内容（0→12 字节）、
