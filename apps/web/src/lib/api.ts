@@ -6,8 +6,11 @@ import type {
   EntitlementChangeResponse,
   MessageRow,
   AgentLoopRow,
+  PasswordChangeRequest,
+  PasswordForgotRequest,
   PasswordLoginRequest,
   PasswordRegisterRequest,
+  PasswordResetRequest,
   PurchaseRequest,
   PurchaseResponse,
   StatusResponse,
@@ -114,6 +117,15 @@ export const login = (body: PasswordLoginRequest): Promise<AuthMeResponse> =>
 
 export const register = (body: PasswordRegisterRequest): Promise<AuthMeResponse> =>
   submitJson('/api/auth/password/register', body);
+
+export const changePassword = (body: PasswordChangeRequest): Promise<{ ok: true }> =>
+  submitJson('/api/auth/password/change', body);
+
+export const forgotPassword = (body: PasswordForgotRequest): Promise<{ ok: true }> =>
+  submitJson('/api/auth/password/forgot', body);
+
+export const resetPassword = (body: PasswordResetRequest): Promise<{ ok: true }> =>
+  submitJson('/api/auth/password/reset', body);
 
 export const logout = (): Promise<{ ok: true }> =>
   json('/api/auth/logout', { method: 'POST' });

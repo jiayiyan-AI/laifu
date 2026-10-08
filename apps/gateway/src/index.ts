@@ -26,6 +26,7 @@ import { buildSessionHandoffRouter } from './api/session-handoff.js';
 import { buildCloudRouter } from './api/cloud.js';
 import { buildEmailRouter, makeEmailEntitlementMiddleware } from './api/email.js';
 import { getEmailProvider } from './lib/email/index.js';
+import { makeSystemMailer, resetLinkBase } from './lib/email/system-mailer.js';
 import { claimEmailAddress } from './api/email-provision.js';
 import { makeContainerTokenMiddleware } from './auth/container-token.js';
 import { getBlobServiceClient, getUserDelegationKeyCache } from './lib/blob-service-client.js';
@@ -35,6 +36,7 @@ import { recoverProvisioning } from './provisioning/recovery.js';
 import { sweepReconcileAll } from './provisioning/reconcile.js';
 import * as azureModule from './provisioning/azure.js';
 import { requireSession } from './auth/middleware.js';
+import { sessionVersions } from './auth/session-version.js';
 import { buildSessionRoutes } from './auth/session-routes.js';
 import { buildOAuthRouter } from './auth/oauth-router.js';
 import { buildPasswordRoutes } from './auth/password-routes.js';
@@ -64,6 +66,8 @@ export interface CreateAppOptions {
 
 export const createApp = (opts: CreateAppOptions = {}): Express => {
   const app = express();
+  // App Service 前有一层 ARR 反代: 信任一跳 X-Forwarded-For, 让 req.ip 是真实客户端 IP(限流用)。
+  app.set('trust proxy', 1);
   app.use(express.json());
   app.use(cookieParser());
 
@@ -78,6 +82,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
   const sessionMw = requireSession({
     secret: config.session.secret,
     cookieName: config.session.cookieName,
+    versions: sessionVersions,
   });
 
   // try to resolve db without crashing healthz when env is missing
@@ -94,6 +99,21 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
     void loadPricing(getDb());
 
 
+    // 邮件 provider 全局共享一个实例: 系统邮件(找回密码)与下方 agent 邮件路由共用
+    const emailProvider = getEmailProvider({
+      provider: config.email.provider,
+      resendApiKey: config.email.resendApiKey,
+      domain: config.email.domain,
+    });
+    // 系统邮件: logLinks 按 env 值(EMAIL_PROVIDER=fake)切, 不按 NODE_ENV
+    const systemMailer = makeSystemMailer({
+      provider: emailProvider,
+      domain: config.email.domain,
+      linkBase: resetLinkBase(config.auth),
+      logLinks: config.email.provider === 'fake',
+    });
+
+
     // Session 路由(/me, /logout)
     app.use(buildSessionRoutes({
       sessionSecret: config.session.secret,
@@ -105,6 +125,7 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
       sessionSecret: config.session.secret,
       cookieName: config.session.cookieName,
       ttlHours: config.session.ttlHours,
+      mailer: systemMailer,
     }));
     // OAuth provider 路由(动态 :provider 分发到 registry)
     app.use(buildOAuthRouter({
@@ -197,11 +218,6 @@ export const createApp = (opts: CreateAppOptions = {}): Express => {
 
     // 邮件能力 (B1): inbound webhook (Basic-Auth) + 容器侧 list/get/send (containerAuth + email entitlement)
     {
-      const emailProvider = getEmailProvider({
-        provider: config.email.provider,
-        resendApiKey: config.email.resendApiKey,
-        domain: config.email.domain,
-      });
       const emailContainerAuth = makeContainerTokenMiddleware({
         secret: config.auth.gatewaySecret,
         tokenVersionFetcher: (uid: string) => dao.entitlements.getTokenVersion(uid),

@@ -21,6 +21,7 @@ import { makeEntitlementsDao, type EntitlementsDao } from './entitlements-dao.js
 import { makeUsageDao, type UsageDao } from './usage-dao.js';
 import { makeObservedStateDao, type ObservedStateDao } from './observed-state-dao.js';
 import { makeOauthConnectionsDao, type OauthConnectionsDao } from './oauth-connections-dao.js';
+import { makePasswordResetDao, type PasswordResetDao } from './password-reset-dao.js';
 import { ContainerMappingCache } from './cache.js';
 
 export interface Dao {
@@ -36,6 +37,7 @@ export interface Dao {
   usage: UsageDao;
   observedState: ObservedStateDao;
   oauthConnections: OauthConnectionsDao;
+  passwordResets: PasswordResetDao;
   cache: ContainerMappingCache;
 }
 
@@ -52,6 +54,7 @@ const factories: Record<keyof Dao, () => unknown> = {
   usage: () => makeUsageDao(getDb()),
   observedState: () => makeObservedStateDao(getDb()),
   oauthConnections: () => makeOauthConnectionsDao(getDb()),
+  passwordResets: () => makePasswordResetDao(getDb()),
   cache: () => new ContainerMappingCache(getDb()),
 };
 
@@ -89,5 +92,5 @@ export { ContainerMappingCache };
 export type {
   UsersDao, ContainerMappingDao, MessageDao, ThreadsDao,
   AgentLoopDao, WechatBindingDao, FeishuBindingDao, EmailDao, EntitlementsDao,
-  UsageDao, ObservedStateDao, OauthConnectionsDao,
+  UsageDao, ObservedStateDao, OauthConnectionsDao, PasswordResetDao,
 };

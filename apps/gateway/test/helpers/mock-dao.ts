@@ -14,6 +14,9 @@ export const createMockDao = () => ({
     upsertByProvider: vi.fn(async () => null),
     createPasswordUser: vi.fn(async () => ({ id: 'u_new' })),
     getPasswordUserByEmail: vi.fn(async () => null),
+    getSessionVersion: vi.fn(async () => 0),
+    getPasswordAuthById: vi.fn(async () => null),
+    updatePasswordAndBumpSession: vi.fn(async () => 1),
   },
   containerMapping: {
     insert: vi.fn(async () => {}),
@@ -81,6 +84,10 @@ export const createMockDao = () => ({
   observedState: {
     upsert: vi.fn(async () => {}),
     get: vi.fn(async () => null),
+  },
+  passwordResets: {
+    create: vi.fn(async () => {}),
+    consume: vi.fn(async () => null),
   },
   cache: {
     get: vi.fn(() => null),

@@ -2,6 +2,8 @@ import jwt from 'jsonwebtoken';
 
 export interface SessionPayload {
   user_id: string;
+  /** session_version 快照。缺省 = 0(本字段上线前签发的老 JWT)。 */
+  sv?: number;
 }
 
 export const signSession = (payload: SessionPayload, secret: string, ttlHours: number): string => {
@@ -16,7 +18,8 @@ export const verifySession = (token: string, secret: string): SessionPayload => 
   if (typeof decoded !== 'object' || decoded === null || typeof (decoded as { user_id?: unknown }).user_id !== 'string') {
     throw new Error('invalid session payload shape');
   }
-  return { user_id: (decoded as { user_id: string }).user_id };
+  const d = decoded as { user_id: string; sv?: unknown };
+  return typeof d.sv === 'number' ? { user_id: d.user_id, sv: d.sv } : { user_id: d.user_id };
 };
 
 export interface CookieOpts {

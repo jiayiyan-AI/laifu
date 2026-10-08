@@ -4,7 +4,7 @@
  */
 import type { Db } from '@lingxi/db';
 import { schema } from '@lingxi/db';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 
 export interface UserRow {
   id: string;
@@ -28,7 +28,12 @@ export interface UsersDao {
     email: string;
     hash: string;
   }): Promise<{ id: string } | null>;
-  getPasswordUserByEmail(email: string): Promise<(UserRow & { password_hash: string | null }) | null>;
+  getPasswordUserByEmail(email: string): Promise<(UserRow & { password_hash: string | null; session_version: number }) | null>;
+  /** 网页 session 吊销版本号; 用户不存在返回 null。 */
+  getSessionVersion(userId: string): Promise<number | null>;
+  getPasswordAuthById(userId: string): Promise<{ provider: string; password_hash: string | null } | null>;
+  /** 写入新密码 hash 并 session_version+1, 返回新 sv; 用户不存在返回 null。 */
+  updatePasswordAndBumpSession(userId: string, hash: string): Promise<number | null>;
 }
 
 export const makeUsersDao = (db: Db): UsersDao => {
@@ -92,10 +97,32 @@ export const makeUsersDao = (db: Db): UsersDao => {
         nickname: u.nickname,
         avatar_url: u.avatar_url,
         password_hash: u.password_hash,
+        session_version: u.session_version,
       }).from(u)
         .where(and(eq(u.provider, 'password'), eq(u.external_id, email.toLowerCase())))
         .limit(1);
       return rows[0] ?? null;
+    },
+
+    async getSessionVersion(userId) {
+      const rows = await db.select({ sv: u.session_version })
+        .from(u).where(eq(u.id, userId)).limit(1);
+      return rows[0]?.sv ?? null;
+    },
+
+    async getPasswordAuthById(userId) {
+      const rows = await db.select({ provider: u.provider, password_hash: u.password_hash })
+        .from(u).where(eq(u.id, userId)).limit(1);
+      return rows[0] ?? null;
+    },
+
+    async updatePasswordAndBumpSession(userId, hash) {
+      // 单条 UPDATE: 写 hash 与 sv+1 原子完成, 返回新 sv 供当前设备换发 cookie。
+      const rows = await db.update(u)
+        .set({ password_hash: hash, session_version: sql`${u.session_version} + 1` })
+        .where(eq(u.id, userId))
+        .returning({ sv: u.session_version });
+      return rows[0]?.sv ?? null;
     },
   };
 };

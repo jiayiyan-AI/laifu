@@ -11,14 +11,21 @@ export interface DeviceTokenDeps {
   secret: string;
 }
 
-/** 查 token_version 并签发设备 JWT；device-token 与 device-token/exchange 共用。 */
+/**
+ * 查 token_version 并签发设备 JWT；device-token 与 device-token/exchange 共用。
+ *
+ * `sessionVersion` 写进 claim `sv`: 设备 token 之后可经 session-code 换回网页 session,
+ * 若不绑定 sv, 一个被盗但仍有效的 web cookie 就能先换成长效设备 token, 等用户改完密码
+ * 再换回一张带最新 sv 的新 cookie, 吊销形同虚设。session-code 端点会比对这个 sv。
+ */
 const issueDeviceToken = async (
   userId: string,
   secret: string,
+  sessionVersion: number,
 ): Promise<DeviceTokenResponse | null> => {
   const version = await dao.entitlements.getTokenVersion(userId);
   if (version === null) return null;
-  const { token, expiresAt } = signLaifuUserTokenWithExpiry({ userId, tokenVersion: version, secret });
+  const { token, expiresAt } = signLaifuUserTokenWithExpiry({ userId, tokenVersion: version, secret, sessionVersion });
   return { token, expires_at: expiresAt };
 };
 
@@ -42,9 +49,11 @@ export const buildDeviceTokenRouter = (deps: DeviceTokenDeps): RouterType => {
 
   router.post('/api/auth/device-token', deps.sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
+    // 用发起请求的这张 web session 自己的 sv (sessionMw 已校验它与库一致)。
+    const sv = req.session!.sv ?? 0;
     let body: DeviceTokenResponse | null;
     try {
-      body = await issueDeviceToken(userId, deps.secret);
+      body = await issueDeviceToken(userId, deps.secret, sv);
     } catch (err) {
       console.error(`[device-token] getTokenVersion threw for ${userId}:`, err);
       res.status(500).json({ error: 'internal' });
@@ -66,9 +75,11 @@ export const buildDeviceTokenRouter = (deps: DeviceTokenDeps): RouterType => {
     }
     let body: DeviceTokenResponse | null;
     try {
-      body = await issueDeviceToken(userId, deps.secret);
+      // 交接码刚由一次真实登录签出, 这里取库里当前的 session_version。
+      const sv = await dao.users.getSessionVersion(userId);
+      body = sv === null ? null : await issueDeviceToken(userId, deps.secret, sv);
     } catch (err) {
-      console.error(`[device-token] getTokenVersion threw for ${userId}:`, err);
+      console.error(`[device-token] getTokenVersion/getSessionVersion threw for ${userId}:`, err);
       res.status(500).json({ error: 'internal' });
       return;
     }

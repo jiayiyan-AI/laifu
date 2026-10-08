@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { authAtom } from '../states/auth.atom.js';
 import { IconChevDown, IconUser, IconPower } from '../lib/icons.js';
+import { ChangePasswordDialog } from './ChangePasswordDialog.js';
 import { UsageWidget } from '../components/UsageWidget.js';
 import { useAssistantName } from '../states/assistant.atom.js';
 
@@ -16,6 +17,7 @@ export const Menubar = () => {
   const n = useAssistantName();
   const [clock, setClock] = useState(fmtClock());
   const [accountOpen, setAccountOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setClock(fmtClock()), 20_000);
@@ -63,6 +65,14 @@ export const Menubar = () => {
               </div>
             </div>
             <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+            {user.provider === 'password' && (
+              <button
+                onClick={() => { setAccountOpen(false); setPwOpen(true); }}
+                style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9, fontSize: 13.5 }}
+              >
+                <IconUser size={16} /> 修改密码
+              </button>
+            )}
             <button
               onClick={() => { setAccountOpen(false); void logout(); }}
               style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9, fontSize: 13.5, color: 'var(--bad)' }}
@@ -72,6 +82,7 @@ export const Menubar = () => {
           </div>
         )}
       </div>
+      {pwOpen && <ChangePasswordDialog onClose={() => setPwOpen(false)} />}
     </div>
   );
 };

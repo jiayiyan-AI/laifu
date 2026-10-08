@@ -40,4 +40,9 @@ describe('isValidEmailLocalpart', () => {
     // @ts-expect-error 故意传错类型
     expect(isValidEmailLocalpart(undefined)).toBe(false);
   });
+  it('拒绝系统保留前缀', () => {
+    for (const s of ['noreply', 'no-reply', 'postmaster', 'admin', 'support', 'security', 'abuse']) {
+      expect(isValidEmailLocalpart(s)).toBe(false);
+    }
+  });
 });

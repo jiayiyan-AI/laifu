@@ -62,12 +62,13 @@ export const buildAuthRefreshRouter = (deps: AuthRefreshDeps): RouterType => {
       return;
     }
 
+    let sessionVersion: number | undefined;
     try {
-      verifyLaifuUserToken(token, {
+      ({ sessionVersion } = verifyLaifuUserToken(token, {
         expectedTokenVersion: currentVersion,
         secret: deps.secret,
         allowExpiredWithinDays: GRACE_DAYS,
-      });
+      }));
     } catch (err) {
       if (err instanceof TokenVersionMismatchError) {
         res.status(401).json({ error: 'token revoked (version mismatch)' });
@@ -89,6 +90,10 @@ export const buildAuthRefreshRouter = (deps: AuthRefreshDeps): RouterType => {
       userId,
       tokenVersion: currentVersion,
       secret: deps.secret,
+      // 设备 token 带 sv 就原样续上, 容器 token 不带就继续不带。这里刻意不校验 sv:
+      // 容器和桌面同步盘 (云盘 SAS) 的访问权由 token_version 管, 改密码不应打断它们;
+      // sv 只在 session-code 换网页 session 时把关。
+      sessionVersion,
     });
     const body: RefreshTokenResponse = { token: newToken, expires_at: expiresAt };
     res.json(body);

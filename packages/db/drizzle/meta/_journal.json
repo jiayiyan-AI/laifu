@@ -50,6 +50,13 @@
       "when": 1782391528632,
       "tag": "0006_breezy_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791432649828,
+      "tag": "0007_password_reset",
+      "breakpoints": true
     }
   ]
 }

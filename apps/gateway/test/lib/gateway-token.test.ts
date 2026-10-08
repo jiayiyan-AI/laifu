@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import jwt from 'jsonwebtoken';
 import {
   signLaifuUserToken,
+  signLaifuUserTokenWithExpiry,
   verifyLaifuUserToken,
   TokenExpiredError,
   TokenVersionMismatchError,
@@ -93,6 +95,26 @@ describe('gateway-token', () => {
         }),
       ).toThrow(TokenExpiredError);
       vi.useRealTimers();
+    });
+  });
+
+  describe('可选 sessionVersion (sv) 声明', () => {
+    it('不传 sessionVersion → JWT 不含 sv, verify 返回 undefined (容器 token 不受影响)', () => {
+      const token = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: SECRET });
+      expect(jwt.decode(token)).not.toHaveProperty('sv');
+      const payload = verifyLaifuUserToken(token, { expectedTokenVersion: 0, secret: SECRET });
+      expect(payload.sessionVersion).toBeUndefined();
+      const { token: t2 } = signLaifuUserTokenWithExpiry({ userId: USER_ID, tokenVersion: 0, secret: SECRET });
+      expect(jwt.decode(t2)).not.toHaveProperty('sv');
+    });
+
+    it('传 sessionVersion → JWT 带 sv, verify 原样返回', () => {
+      const { token } = signLaifuUserTokenWithExpiry({ userId: USER_ID, tokenVersion: 0, secret: SECRET, sessionVersion: 4 });
+      expect(jwt.decode(token)).toMatchObject({ sv: 4 });
+      const payload = verifyLaifuUserToken(token, { expectedTokenVersion: 0, secret: SECRET });
+      expect(payload.sessionVersion).toBe(4);
+      const t3 = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: SECRET, sessionVersion: 0 });
+      expect(verifyLaifuUserToken(t3, { expectedTokenVersion: 0, secret: SECRET }).sessionVersion).toBe(0);
     });
   });
 });

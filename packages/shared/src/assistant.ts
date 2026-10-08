@@ -12,6 +12,11 @@ export const isValidAssistantName = (name: unknown): name is string => {
 export const EMAIL_LOCALPART_MIN = 3;
 export const EMAIL_LOCALPART_MAX = 32;
 
+/** 系统发件 / 运维用前缀, 不许用户占用(否则会收到系统邮件的退信与回复)。 */
+export const RESERVED_EMAIL_LOCALPARTS: readonly string[] = [
+  'noreply', 'no-reply', 'postmaster', 'admin', 'support', 'security', 'abuse',
+];
+
 /**
  * 用户自填的邮箱前缀（local part）是否合法。前端即时校验 + 后端兜底单一真源。
  * 规则：小写字母/数字开头结尾，中间可含 . _ -；长度 3..32。
@@ -20,5 +25,6 @@ export const EMAIL_LOCALPART_MAX = 32;
 export const isValidEmailLocalpart = (s: unknown): s is string => {
   if (typeof s !== 'string') return false;
   if (s.length < EMAIL_LOCALPART_MIN || s.length > EMAIL_LOCALPART_MAX) return false;
-  return /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/.test(s);
+  if (!/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/.test(s)) return false;
+  return !RESERVED_EMAIL_LOCALPARTS.includes(s);
 };

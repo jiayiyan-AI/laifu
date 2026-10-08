@@ -114,12 +114,34 @@ export interface PasswordRegisterRequest {
   password: string;
 }
 
-/** 注册/登录失败的稳定错误码。前端据此给精确提示，不靠英文文案字符串匹配。 */
+/** 已登录修改密码 */
+export interface PasswordChangeRequest {
+  current_password: string;
+  new_password: string;
+}
+
+/** 申请找回密码邮件 */
+export interface PasswordForgotRequest {
+  email: string;
+}
+
+/** 凭邮件链接 token 重置密码 */
+export interface PasswordResetRequest {
+  token: string;
+  new_password: string;
+}
+
+/** 认证类接口的稳定错误码。前端据此给精确提示，不靠英文文案字符串匹配。 */
 export type AuthErrorCode =
   | 'invalid_email'
   | 'password_too_short'
+  | 'password_too_long'
   | 'email_taken'
-  | 'invalid_credentials';
+  | 'invalid_credentials'
+  | 'not_password_account'
+  | 'wrong_password'
+  | 'invalid_or_expired_token'
+  | 'rate_limited';
 
 /** 认证类接口的错误响应体（400/401/409 等非 2xx 共用）。 */
 export interface AuthErrorResponse {

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import { MIN_PASSWORD_LENGTH } from '@lingxi/shared';
+import { MIN_PASSWORD_LENGTH, validateNewPassword } from '@lingxi/shared';
 import { Wallpaper } from '../lib/Wallpaper.js';
 import { IconSpark } from '../lib/icons.js';
 import { authAtom } from '../states/auth.atom.js';
@@ -15,6 +15,7 @@ const authErrorMessage = (e: unknown, mode: Mode): string => {
     switch (e.code) {
       case 'invalid_email': return '邮箱格式不正确';
       case 'password_too_short': return `密码至少 ${MIN_PASSWORD_LENGTH} 位`;
+      case 'password_too_long': return '密码过长';
       case 'email_taken': return '该邮箱已注册，请直接登录';
       case 'invalid_credentials': return '邮箱或密码错误';
       default: return `${mode === 'login' ? '登录' : '注册'}失败：${e.message}`;
@@ -30,6 +31,8 @@ const authErrorMessage = (e: unknown, mode: Mode): string => {
 export const LoginPage = () => {
   const [state, actions] = authAtom.use();
   const nav = useNavigate();
+  // 重置密码成功后跳转过来会带 notice
+  const notice = (useLocation().state as { notice?: string } | null)?.notice;
 
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
@@ -53,10 +56,11 @@ export const LoginPage = () => {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    // 客户端即时校验: 密码太短不必往返服务端 (与后端 MIN_PASSWORD_LENGTH 同源)。
-    if (mode === 'register' && password.length < MIN_PASSWORD_LENGTH) {
-      setError(`密码至少 ${MIN_PASSWORD_LENGTH} 位`);
-      return;
+    // 客户端即时校验: 密码太短/太长不必往返服务端 (与后端同源 validateNewPassword)。
+    if (mode === 'register') {
+      const code = validateNewPassword(password);
+      if (code === 'password_too_short') { setError(`密码至少 ${MIN_PASSWORD_LENGTH} 位`); return; }
+      if (code === 'password_too_long') { setError('密码过长'); return; }
     }
     setBusy(true);
     try {
@@ -114,6 +118,8 @@ export const LoginPage = () => {
           {segBtn('register', '注册')}
         </div>
 
+        {notice && <div style={{ color: '#16a34a', fontSize: 12.5, marginBottom: 10 }}>{notice}</div>}
+
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <input
             placeholder="邮箱" type="email" value={email} autoComplete="email"
@@ -124,6 +130,11 @@ export const LoginPage = () => {
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             onChange={(e) => setPassword(e.target.value)} style={inputStyle}
           />
+          {mode === 'login' && (
+            <div style={{ textAlign: 'right', fontSize: 12 }}>
+              <Link to="/forgot-password" className="dim">忘记密码？</Link>
+            </div>
+          )}
           {error && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{error}</div>}
           <button
             type="submit" disabled={busy}

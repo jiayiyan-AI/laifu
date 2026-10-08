@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -19,8 +20,8 @@ const SECRET = 'test-secret-do-not-use-in-prod-123456';
 const COOKIE_NAME = 'lingxi_sid';
 const USER_ID = '6e8b21f0-3a4c-4f3d-9b9e-1a2b3c4d5e6f';
 
-const validCookie = (userId: string): string => {
-  const token = signSession({ user_id: userId }, SECRET, 24);
+const validCookie = (userId: string, sv?: number): string => {
+  const token = signSession(sv === undefined ? { user_id: userId } : { user_id: userId, sv }, SECRET, 24);
   return `${COOKIE_NAME}=${token}`;
 };
 
@@ -78,6 +79,26 @@ describe('POST /api/auth/device-token', () => {
     ).toThrow(TokenVersionMismatchError);
   });
 
+  it('JWT 带上发起请求的 web session 的 sv', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const res = await request(makeApp())
+      .post('/api/auth/device-token')
+      .set('Cookie', validCookie(USER_ID, 3))
+      .send({});
+    expect(res.status).toBe(200);
+    expect(jwt.decode(res.body.token)).toMatchObject({ user_id: USER_ID, sv: 3 });
+  });
+
+  it('session 没有 sv (老 cookie) → JWT 的 sv=0', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const res = await request(makeApp())
+      .post('/api/auth/device-token')
+      .set('Cookie', validCookie(USER_ID))
+      .send({});
+    expect(res.status).toBe(200);
+    expect(jwt.decode(res.body.token)).toMatchObject({ sv: 0 });
+  });
+
   it('401 without a session cookie', async () => {
     const res = await request(makeApp()).post('/api/auth/device-token').send({});
     expect(res.status).toBe(401);
@@ -133,6 +154,28 @@ describe('POST /api/auth/device-token/exchange', () => {
       .post('/api/auth/device-token/exchange')
       .send({ code });
     expect(replay.status).toBe(401);
+  });
+
+  it('JWT 带上库里当前的 session_version', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(5);
+    const code = mintHandoffCode(USER_ID);
+    const res = await request(makeApp())
+      .post('/api/auth/device-token/exchange')
+      .send({ code });
+    expect(res.status).toBe(200);
+    expect(jwt.decode(res.body.token)).toMatchObject({ user_id: USER_ID, sv: 5 });
+  });
+
+  it('getSessionVersion 返回 null → 401 unknown user', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(null);
+    const code = mintHandoffCode(USER_ID);
+    const res = await request(makeApp())
+      .post('/api/auth/device-token/exchange')
+      .send({ code });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unknown user');
   });
 
   it('401 for an unknown/forged code', async () => {

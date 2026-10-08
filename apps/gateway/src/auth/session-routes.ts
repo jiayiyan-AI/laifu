@@ -5,6 +5,7 @@
  */
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import { requireSession } from './middleware.js';
+import { sessionVersions } from './session-version.js';
 import { toMeResponse } from './user-view.js';
 import { dao } from '../db/index.js';
 
@@ -16,7 +17,7 @@ export interface SessionRoutesOpts {
 
 export const buildSessionRoutes = (opts: SessionRoutesOpts): RouterType => {
   const r = Router();
-  const sessionMw = requireSession({ secret: opts.sessionSecret, cookieName: opts.cookieName });
+  const sessionMw = requireSession({ secret: opts.sessionSecret, cookieName: opts.cookieName, versions: sessionVersions });
 
   r.get('/api/auth/me', sessionMw, async (req: Request, res: Response) => {
     const userId = req.session!.user_id;
