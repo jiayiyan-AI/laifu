@@ -133,9 +133,16 @@ export const buildCloudRouter = (deps: CloudRouterDeps): RouterType => {
     const folders: CloudFolderItem[] = [];
     const files: CloudFileItem[] = [];
 
+    // recursive=1: 平铺列出前缀下所有层级的文件(桌面同步盘远端变更轮询用——只列一层时
+    // 子文件夹里的改动发现不了)。HNS 账户里目录本身也以 hdi_isfolder 空 blob 出现, 跳过。
+    // 不带时保持一层层级列举(web 云盘按文件夹浏览)。
+    const recursive = req.query['recursive'] === '1';
     try {
-      const iter = containerClient.listBlobsByHierarchy('/', { prefix: fullPrefix, includeMetadata: true } as any);
+      const iter = recursive
+        ? containerClient.listBlobsFlat({ prefix: fullPrefix, includeMetadata: true } as any)
+        : containerClient.listBlobsByHierarchy('/', { prefix: fullPrefix, includeMetadata: true } as any);
       for await (const item of iter as any) {
+        if (recursive && item.metadata?.hdi_isfolder === 'true') continue;
         if (item.kind === 'prefix') {
           const fullName = item.name as string;
           const rel = fullName.slice(`${userId}/`.length);
