@@ -10,6 +10,8 @@
 //! 401 单独建模为 `GatewayError::Unauthorized`，让上层状态机区分"该重登/重刷"
 //! 与普通失败（对齐 `sas_cache.py` 的 `AuthError` 语义）。
 
+use std::time::Duration;
+
 use crate::contracts::{CloudListResponse, CloudWriteSas, SessionCodeResponse, TokenResponse};
 
 /// Gateway 交互错误。`Unauthorized` 专指 401，驱动上层重登/吊销处理。
@@ -39,12 +41,31 @@ pub struct GatewayClient {
     http: reqwest::Client,
 }
 
+/// 建连超时：连不上就尽快失败，交给上层重试。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 读空闲超时：连续这么久收不到任何字节即失败。按"空闲"而非"总时长"计，
+/// 故大文件流式下载只要数据在流动就不受影响。
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// TCP keepalive：让 OS 尽早发现死连接（代理上游已断但本地 socket 仍活着的半开连接）。
+const TCP_KEEPALIVE: Duration = Duration::from_secs(30);
+
 impl GatewayClient {
+    /// 生产构造：带超时的客户端。**不能**用 `reqwest::Client::new()`——它没有任何超时，
+    /// 网络半开时请求会永久挂起，而同步编排是单飞的，一个挂住的 SAS 请求就会让同步
+    /// 停摆直到网络切换（2026-10-08 Maggie 桌面端停了 ~5 小时）。
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self {
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            http: reqwest::Client::new(),
-        }
+        Self::with_timeouts(base_url, CONNECT_TIMEOUT, READ_TIMEOUT)
+    }
+
+    /// 指定超时构造（测试用短超时）。
+    pub fn with_timeouts(base_url: impl Into<String>, connect: Duration, read: Duration) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(connect)
+            .read_timeout(read)
+            .tcp_keepalive(TCP_KEEPALIVE)
+            .build()
+            .expect("reqwest client 构造失败（TLS 后端初始化）");
+        Self::with_client(base_url, http)
     }
 
     /// 用已有 `reqwest::Client`（如带自定义 TLS/超时配置）构造。
@@ -127,14 +148,15 @@ impl GatewayClient {
     /// 该端点双鉴权（`cloud.ts` `jwtOrSession`）：有 Bearer 走 containerAuth，否则回落 session。
     /// 设备端持长效设备 JWT（90 天可续），故走 Bearer——避免依赖 7 天即过期且无续期的 session cookie。
     ///
-    /// ⚠️ `prefix` 必传且应为同步范围（`SYNC_SUBDIR` = `sync/`）。gateway 用
-    /// `listBlobsByHierarchy('/')` **只列一层**：不带 prefix 时只看到 `sync/` 文件夹、`files` 为空，
-    /// poller 永远发现不了 `sync/` 内的远端变更 → 下行失效。传 `sync/` 才列出其中的真文件。
+    /// ⚠️ `prefix` 必传且应为同步范围（`SYNC_SUBDIR` = `sync/`），并带 `recursive=1`：
+    /// gateway 默认 `listBlobsByHierarchy('/')` **只列一层**，子文件夹里的远端改动（如 agent
+    /// 写进 `sync/合同/x.pdf`）对 poller 不可见 → 下行迟迟不触发。`recursive=1` 让 gateway
+    /// 平铺列出全部层级的文件（目录条目已剔除）。旧 gateway 忽略该参数，退化为只列一层。
     pub async fn cloud_list(&self, jwt: &str, prefix: &str) -> Result<CloudListResponse> {
         let resp = self
             .http
             .get(self.url("/api/cloud/list"))
-            .query(&[("prefix", prefix)])
+            .query(&[("prefix", prefix), ("recursive", "1")])
             .bearer_auth(jwt)
             .send()
             .await?;
@@ -277,7 +299,10 @@ mod tests {
         server
             .mock("GET", "/api/cloud/list")
             .match_header("authorization", "Bearer devjwt")
-            .match_query(mockito::Matcher::UrlEncoded("prefix".into(), "sync/".into()))
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("prefix".into(), "sync/".into()),
+                mockito::Matcher::UrlEncoded("recursive".into(), "1".into()),
+            ]))
             .with_status(200)
             .with_body(r#"{"folders":[],"files":[{"virtual_path":"sync/a.txt","size":3,"last_modified":"2026-07-10T00:00:00Z","content_type":"text/plain","metadata":{"title":"a.txt","source":"agent"}}]}"#)
             .create_async()
@@ -332,5 +357,36 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, GatewayError::Unauthorized(_)));
         assert!(!dest.exists(), "失败时不应创建目标文件");
+    }
+
+    /// 起一个"黑洞"服务：接受 TCP 连接后一字不回、也不关。模拟代理(Clash TUN 等)
+    /// 上游已断而本地 socket 仍活着的半开连接——2026-10-08 Maggie 桌面端同步停摆 5 小时的现场。
+    fn black_hole_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for conn in listener.incoming() {
+                held.push(conn); // 持有连接不读不写，直到测试进程退出
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn stalled_connection_times_out_instead_of_hanging() {
+        let client = GatewayClient::with_timeouts(
+            black_hole_server(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let res = tokio::time::timeout(Duration::from_secs(5), client.cloud_sas("dev.jwt.y")).await;
+        let err = res
+            .expect("请求在 5s 内没有返回：网络卡住时会永久挂起")
+            .unwrap_err();
+        assert!(
+            matches!(err, GatewayError::Network(_)),
+            "应为网络错误: {err:?}"
+        );
     }
 }

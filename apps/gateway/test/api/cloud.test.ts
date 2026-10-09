@@ -129,7 +129,7 @@ describe('GET /api/cloud/list', () => {
     };
   }
 
-  function makeListApp(opts: { listFn?: () => AsyncIterable<unknown>; entitled?: boolean; sessionUserId?: string; sessionMw?: RequestHandler } = {}) {
+  function makeListApp(opts: { listFn?: () => AsyncIterable<unknown>; flatFn?: () => AsyncIterable<unknown>; entitled?: boolean; sessionUserId?: string; sessionMw?: RequestHandler } = {}) {
     const userId = opts.sessionUserId ?? USER_ID;
     const defaultSessionMw: RequestHandler = (req, _res, next) => { req.session = { user_id: userId }; next(); };
     vi.mocked(dao.entitlements.listActive).mockResolvedValue(opts.entitled === false ? [] : ['cloud']);
@@ -142,6 +142,7 @@ describe('GET /api/cloud/list', () => {
       blobServiceClient: {
         getContainerClient: () => ({
           listBlobsByHierarchy: opts.listFn ?? (() => fakeListBlobs([])()),
+          listBlobsFlat: opts.flatFn ?? (() => fakeListBlobs([])()),
           getBlobClient: () => ({ getProperties: vi.fn() }),
         }),
       } as any,
@@ -165,6 +166,33 @@ describe('GET /api/cloud/list', () => {
     expect(res.body.files[0].size).toBe(1024);
     expect(res.body.files[0].metadata.title).toBe('Q2 Sales');
     expect(res.body.files[0].metadata.session_id).toBe('main');
+  });
+
+  // 桌面同步盘的远端变更轮询: 只列一层时子文件夹里的改动发现不了, 故 recursive=1 平铺列出全部文件。
+  it('recursive=1 lists nested files flat and skips HNS directory entries', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([])());
+    const flatFn = vi.fn(() => fakeListBlobs([
+      { kind: 'blob', name: `${USER_ID}/sync/a.txt`, size: 1 },
+      { kind: 'blob', name: `${USER_ID}/sync/sub`, size: 0, meta: { hdi_isfolder: 'true' } },
+      { kind: 'blob', name: `${USER_ID}/sync/sub/deep/b.txt`, size: 2 },
+    ])());
+    const app = makeListApp({ listFn, flatFn });
+    const res = await request(app).get('/api/cloud/list?prefix=sync/&recursive=1');
+    expect(res.status).toBe(200);
+    expect(listFn).not.toHaveBeenCalled();
+    expect((flatFn.mock.calls[0] as any)[0].prefix).toBe(`${USER_ID}/sync/`);
+    expect(res.body.folders).toEqual([]);
+    expect(res.body.files.map((f: any) => f.virtual_path)).toEqual(['sync/a.txt', 'sync/sub/deep/b.txt']);
+  });
+
+  it('without recursive keeps one-level hierarchy listing', async () => {
+    const listFn = vi.fn(() => fakeListBlobs([])());
+    const flatFn = vi.fn(() => fakeListBlobs([])());
+    const app = makeListApp({ listFn, flatFn });
+    const res = await request(app).get('/api/cloud/list?prefix=sync/');
+    expect(res.status).toBe(200);
+    expect(listFn).toHaveBeenCalledOnce();
+    expect(flatFn).not.toHaveBeenCalled();
   });
 
   it('respects prefix query parameter', async () => {

@@ -216,6 +216,9 @@ async fn run_sync_session(
                 .await;
                 advance_initial_resync(&mut needs_initial_resync, &outcome, local_dir);
                 drop(run_guard);
+                if should_retry(&outcome) {
+                    schedule_retry(&trig_tx);
+                }
                 let result = record_sync_outcome(core, &outcome).await;
                 let _ = reply.send(flush_reply(baseline_missing, result));
             },
@@ -250,6 +253,9 @@ async fn run_sync_session(
                     drop(run_guard);
 
                     let _ = record_sync_outcome(core, &outcome).await;
+                    if should_retry(&outcome) {
+                        schedule_retry(&trig_tx);
+                    }
 
                     if !gate.on_finish() {
                         break; // 期间无新触发
@@ -274,6 +280,28 @@ fn flush_reply(baseline_missing: bool, sync_result: Result<(), String>) -> Resul
     } else {
         sync_result
     }
+}
+
+/// 临时性失败后多久自动补跑一轮。
+const RETRY_DELAY: Duration = Duration::from_secs(60);
+
+/// 哪些结果属于临时性失败、应自动重试：网络/SAS 获取失败、SAS 刷新后仍 403、rclone 泛化失败。
+/// 需用户确认的（基线丢失、全量变化）不重试——重试也只会得到同样结论。
+/// 不重试的话，失败后只能干等下一次本地改动/远端变化来触发，期间改动一直不同步。
+fn should_retry(outcome: &Result<BisyncOutcome, String>) -> bool {
+    matches!(
+        outcome,
+        Err(_) | Ok(BisyncOutcome::SasExpired) | Ok(BisyncOutcome::Failed(_))
+    )
+}
+
+/// `RETRY_DELAY` 后向编排主循环投一个触发。会话已结束则发送失败、静默丢弃。
+fn schedule_retry(trig_tx: &mpsc::Sender<()>) {
+    let tx = trig_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(RETRY_DELAY).await;
+        let _ = tx.try_send(());
+    });
 }
 
 /// rclone bisync 不能把两个空目录的 `--resync` 产物当作增量基线。只有首次 resync
@@ -513,5 +541,18 @@ mod tests {
         std::fs::write(temp.path().join("first.txt"), "content").unwrap();
         advance_initial_resync(&mut needs_resync, &success, temp.path());
         assert!(!needs_resync);
+    }
+
+    #[test]
+    fn transient_failures_are_retried_but_user_decisions_are_not() {
+        assert!(should_retry(&Err("network error: timed out".into())));
+        assert!(should_retry(&Ok(BisyncOutcome::SasExpired)));
+        assert!(should_retry(&Ok(BisyncOutcome::Failed(1))));
+        assert!(!should_retry(&Ok(BisyncOutcome::Success)));
+        assert!(!should_retry(&Ok(BisyncOutcome::NeedsResync)));
+        assert!(!should_retry(&Ok(BisyncOutcome::AllFilesChanged {
+            path1: Default::default(),
+            path2: Default::default(),
+        })));
     }
 }
