@@ -222,22 +222,20 @@ pub fn run() {
 
     app.run(move |app_handle, event| match event {
         // home/settings 关闭后只是 hide()；未显式走 tray「退出」的进程退出请求一律挡住。
-        tauri::RunEvent::ExitRequested { api, .. } => {
-            if !quitting.load(std::sync::atomic::Ordering::SeqCst) {
-                api.prevent_exit();
-            }
+        tauri::RunEvent::ExitRequested { api, .. }
+            if !quitting.load(std::sync::atomic::Ordering::SeqCst) =>
+        {
+            api.prevent_exit();
         }
         // macOS Dock 图标被点击且所有 surface 都隐藏时，唤出 home。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
-            has_visible_windows,
+            has_visible_windows: false,
             ..
         } => {
-            if !has_visible_windows {
-                if let Some(win) = app_handle.get_webview_window(HOME_WINDOW) {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+            if let Some(win) = app_handle.get_webview_window(HOME_WINDOW) {
+                let _ = win.show();
+                let _ = win.set_focus();
             }
         }
         _ => {}
