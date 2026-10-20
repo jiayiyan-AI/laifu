@@ -58,7 +58,7 @@ export const config = {
     // 禁用 :latest；每个 ACR 的 vN 序列独立递增。详见 dynamic-update-aca.md §5.2。
     environment: (process.env['LAIFU_ENV'] ?? 'dev').trim(),
     hermesImageTagDev: 'hermes:v27',
-    hermesImageTagProd: 'hermes:v24',
+    hermesImageTagProd: 'hermes:v28',
     // LLM provider 配置 — 容器内 entrypoint.sh 按这些 env 渲染 config.yaml,
     // 改 provider/model 不需要重 build 镜像。
     //   HERMES_PROVIDER  Hermes 一等公民 provider 名 (alibaba / anthropic / openai / deepseek / custom ...)

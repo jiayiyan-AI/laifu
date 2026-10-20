@@ -55,7 +55,7 @@ describe('GET /api/me/runtime-config', () => {
       api: 'openai-responses',
       authHeader: true,
       models: [{
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-sol',
         reasoning: true,
         input: ['text', 'image'],
         cost: {
@@ -81,7 +81,7 @@ describe('GET /api/me/runtime-config', () => {
         compat: { supportsOpenAIGrammarTools: true },
       }],
     });
-    expect(piAgentConfig).toMatchObject({ provider: 'scott', model: 'gpt-5.4' });
+    expect(piAgentConfig).toMatchObject({ provider: 'scott', model: 'gpt-5.6-sol' });
   });
 
   it('serves every manifest file from one authenticated endpoint', async () => {
