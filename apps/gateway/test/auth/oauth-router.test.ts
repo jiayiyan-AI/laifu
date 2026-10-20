@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import type { OAuthProvider } from '../../src/auth/providers/types.js';
 import { signSession } from '../../src/auth/session.js';
 import { redeemHandoffCode } from '../../src/auth/desktop-handoff.js';
+import { sessionVersions } from '../../src/auth/session-version.js';
 
 vi.mock('../../src/db/index.js', async () => {
   const { mockDaoModule } = await import('../helpers/mock-dao.js');
@@ -52,6 +53,7 @@ const makeApp = (providers: Record<string, OAuthProvider>) => {
 describe('oauth-router', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    sessionVersions.invalidate('u_alice');
     vi.mocked(dao.users.upsertByProvider).mockResolvedValue({ id: 'u_alice' });
   });
 
@@ -242,6 +244,36 @@ describe('oauth-router', () => {
       const match = res.headers['location']!.match(/\/desktop-oauth-complete\?code=([a-f0-9]+)&channel=canary$/);
       expect(match).not.toBeNull();
       expect(redeemHandoffCode(match![1]!)).toBe('u_already_logged_in');
+    });
+
+    it('session_version 一致 → 复用 session, 直接签 handoff code', async () => {
+      vi.mocked(dao.users.getSessionVersion).mockResolvedValue(3);
+      const app = makeApp({ mock: makeMockProvider() });
+      const cookie = signSession({ user_id: 'u_alice', sv: 3 }, SECRET, 24);
+      const res = await request(app).get('/api/auth/mock/start').query({ client: 'desktop' })
+        .set('Cookie', `${COOKIE_NAME}=${cookie}`);
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toMatch(/\/desktop-oauth-complete\?code=[a-f0-9]+&channel=stable$/);
+    });
+
+    it('session_version 不一致(已吊销) → 不签 handoff, 走 provider 授权页', async () => {
+      vi.mocked(dao.users.getSessionVersion).mockResolvedValue(4);
+      const app = makeApp({ mock: makeMockProvider() });
+      const cookie = signSession({ user_id: 'u_alice', sv: 3 }, SECRET, 24);
+      const res = await request(app).get('/api/auth/mock/start').query({ client: 'desktop' })
+        .set('Cookie', `${COOKIE_NAME}=${cookie}`);
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toContain('mock.example/authorize');
+    });
+
+    it('查 session_version 抛错 → fail-closed, 走 provider 授权页', async () => {
+      vi.mocked(dao.users.getSessionVersion).mockRejectedValue(new Error('db down'));
+      const app = makeApp({ mock: makeMockProvider() });
+      const cookie = signSession({ user_id: 'u_alice', sv: 0 }, SECRET, 24);
+      const res = await request(app).get('/api/auth/mock/start').query({ client: 'desktop' })
+        .set('Cookie', `${COOKIE_NAME}=${cookie}`);
+      expect(res.status).toBe(302);
+      expect(res.headers['location']).toContain('mock.example/authorize');
     });
 
     it('falls back to normal OAuth flow when the session cookie is invalid/expired', async () => {

@@ -24,11 +24,26 @@ export const users = pgTable('users', {
   avatar_url: text('avatar_url'),
   token_version: integer('token_version').notNull().default(0),
   password_hash: text('password_hash'),   // 仅 provider='password' 用户有值;OAuth 用户为 null
+  // 网页 session 吊销版本号。改密码 / 重置密码时 +1, session JWT 里的 sv 不等即失效。
+  // 与 token_version(容器 / 设备 token)刻意分开: 改密码不能让用户的 hermes 容器掉线。
+  session_version: integer('session_version').notNull().default(0),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   uniqueIndex('users_provider_external_id_unique').on(t.provider, t.external_id),
   // email 部分唯一索引 (lower(email))：drizzle-kit 暂不完美表达 lower() 表达式索引，
   // 保留在 SQL migration 中即可。迁移期不依赖 drizzle 生成它。
+]);
+
+// ── password_reset_tokens (0007) ────────────────────────────────────────
+// 找回密码一次性 token。只存 sha256(token), 原文只出现在邮件里。
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  token_hash: text('token_hash').primaryKey(),
+  user_id: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+  used_at: timestamp('used_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('password_reset_tokens_user_id_idx').on(t.user_id),
 ]);
 
 // ── container_mapping (0001) ────────────────────────────────────────────

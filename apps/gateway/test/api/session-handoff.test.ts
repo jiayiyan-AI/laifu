@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -13,6 +13,7 @@ import { buildSessionHandoffRouter } from '../../src/api/session-handoff.js';
 import { signLaifuUserToken } from '../../src/lib/gateway-token.js';
 import { verifySession } from '../../src/auth/session.js';
 import { mintHandoffCode } from '../../src/auth/desktop-handoff.js';
+import { sessionVersions } from '../../src/auth/session-version.js';
 
 const DEVICE_SECRET = 'device-secret-1234567890';
 const SESSION_SECRET = 'session-secret-0987654321';
@@ -35,6 +36,58 @@ const makeApp = () => {
 };
 
 describe('POST /api/auth/session-code', () => {
+  beforeEach(() => {
+    sessionVersions.invalidate(USER_ID);
+    vi.mocked(dao.users.getSessionVersion).mockReset().mockResolvedValue(0);
+  });
+
+  const codeFor = (sessionVersion?: number) => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const t = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: DEVICE_SECRET, sessionVersion });
+    return request(makeApp()).post('/api/auth/session-code').set('Authorization', `Bearer ${t}`);
+  };
+
+  it('设备 token 的 sv 与库一致 → 200 发码', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(2);
+    const res = await codeFor(2);
+    expect(res.status).toBe(200);
+    expect(typeof res.body.code).toBe('string');
+  });
+
+  it('sv 不一致 (改过密码) → 401 session revoked, 不发码', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(3);
+    const res = await codeFor(2);
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'session revoked' });
+  });
+
+  it('老设备 token 无 sv, 库 sv=0 → 200 (兼容存量)', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(0);
+    const res = await codeFor(undefined);
+    expect(res.status).toBe(200);
+  });
+
+  it('老设备 token 无 sv, 库 sv=1 → 401', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(1);
+    const res = await codeFor(undefined);
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'session revoked' });
+  });
+
+  it('库里查不到 session_version (null) → 401 session revoked', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockResolvedValue(null);
+    const res = await codeFor(0);
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'session revoked' });
+  });
+
+  it('session_version 查询抛错 → 500 (fail-closed, 不发码)', async () => {
+    vi.mocked(dao.users.getSessionVersion).mockRejectedValue(new Error('db down'));
+    const res = await codeFor(0);
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'internal' });
+  });
+
   it('mints a one-time code for a valid device JWT', async () => {
     vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
     const jwt = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: DEVICE_SECRET });

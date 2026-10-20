@@ -19,7 +19,8 @@
  */
 import { Router, type Request, type Response, type Router as RouterType } from 'express';
 import { randomBytes } from 'node:crypto';
-import { signSession, verifySession, sessionCookieOpts } from './session.js';
+import { verifySession } from './session.js';
+import { issueSessionCookie, sessionVersions } from './session-version.js';
 import { mintHandoffCode } from './desktop-handoff.js';
 import type { OAuthProvider, NormalizedUser } from './providers/types.js';
 import { dao } from '../db/index.js';
@@ -59,26 +60,30 @@ const redirectUriFor = (publicBaseUrl: string, provider: string): string =>
 export const buildOAuthRouter = (opts: OAuthRouterOpts): RouterType => {
   const r = Router();
 
-  r.get('/api/auth/:provider/start', (req: Request, res: Response) => {
+  r.get('/api/auth/:provider/start', async (req: Request, res: Response) => {
     const providerName = req.params['provider']!;
     const provider = opts.providers[providerName];
     if (!provider) return res.status(404).json({ error: `unknown provider: ${providerName}` });
 
     // 桌面「系统浏览器走 OAuth」发起：若该浏览器已持有一份有效 session（比如用户之前在
     // 这个浏览器登过 web 版），直接复用——不逼用户在已登录的浏览器里重新过一遍 Google 授权。
-    // 只做签名+shape校验（跟 requireSession 中间件同一信任级别，不查 token_version/revocation，
-    // 与站内其它 session 消费点一致）。cookie 缺失/过期/被篡改都静默落回正常 OAuth 流程。
+    // 除签名+shape 校验外还要比对 users.session_version（防止改密码后已吊销/被盗的 cookie
+    // 被换成新的 handoff code）。cookie 缺失/过期/被篡改/已吊销/用户不存在，以及查库出错
+    // （此处刻意 fail-closed），都静默落回正常 OAuth 流程。
     if (req.query['client'] === 'desktop') {
       const channel = normalizeDesktopChannel(req.query['channel']);
       const existing = (req as Request & { cookies?: Record<string, string> }).cookies?.[opts.cookieName];
       if (existing) {
         try {
-          const { user_id } = verifySession(existing, opts.sessionSecret);
-          const handoffCode = mintHandoffCode(user_id);
-          res.redirect(`${opts.frontendBaseUrl}/desktop-oauth-complete?code=${encodeURIComponent(handoffCode)}&channel=${channel}`);
-          return;
+          const { user_id, sv } = verifySession(existing, opts.sessionSecret);
+          const current = await sessionVersions.get(user_id);
+          if (current !== null && (sv ?? 0) === current) {
+            const handoffCode = mintHandoffCode(user_id);
+            res.redirect(`${opts.frontendBaseUrl}/desktop-oauth-complete?code=${encodeURIComponent(handoffCode)}&channel=${channel}`);
+            return;
+          }
         } catch {
-          // 过期/篡改/坏格式：忽略，继续走下面的正常 OAuth 流程。
+          // 过期/篡改/坏格式/查库出错：忽略，继续走下面的正常 OAuth 流程。
         }
       }
     }
@@ -159,8 +164,12 @@ export const buildOAuthRouter = (opts: OAuthRouterOpts): RouterType => {
       return;
     }
 
-    const token = signSession({ user_id: row.id }, opts.sessionSecret, opts.ttlHours);
-    res.cookie(opts.cookieName, token, sessionCookieOpts(opts.ttlHours));
+    try {
+      await issueSessionCookie(res, row.id, opts);
+    } catch (e) {
+      console.error(`[oauth-router] ${providerName} issue session failed:`, e);
+      return res.status(500).json({ error: 'session issue failed' });
+    }
     res.redirect(`${opts.frontendBaseUrl}/desktop`);
   });
 

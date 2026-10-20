@@ -28,6 +28,12 @@ export interface SignInput {
   userId: string;
   tokenVersion: number;
   secret: string;
+  /**
+   * 可选: 签发该设备 token 时对应的 users.session_version, 写成 claim `sv`。
+   * 只有设备 token 传 (session-code 换网页 session 时据此判断是否改过密码);
+   * 容器 token 不传, 签出的 payload 跟以前完全一样。
+   */
+  sessionVersion?: number;
 }
 
 export interface VerifyInput {
@@ -46,6 +52,8 @@ export interface DecodedPayload {
   tokenVersion: number;
   iat: number;
   exp: number;
+  /** claim `sv` 为数字时返回, 否则 undefined (容器 token / 老设备 token)。 */
+  sessionVersion?: number;
 }
 
 interface JwtPayload {
@@ -53,16 +61,24 @@ interface JwtPayload {
   token_version: number;
   iat: number;
   exp: number;
+  sv?: number;
 }
 
-export function signLaifuUserToken(input: SignInput): string {
-  const now = Math.floor(Date.now() / 1000);
+/** 组装 payload; sv 仅在调用方显式提供时出现, 不传则 payload 与旧版逐字段一致。 */
+const buildPayload = (input: SignInput, iat: number, exp: number): JwtPayload => {
   const payload: JwtPayload = {
     user_id: input.userId,
     token_version: input.tokenVersion,
-    iat: now,
-    exp: now + TOKEN_LIFETIME_SECONDS,
+    iat,
+    exp,
   };
+  if (input.sessionVersion !== undefined) payload.sv = input.sessionVersion;
+  return payload;
+};
+
+export function signLaifuUserToken(input: SignInput): string {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = buildPayload(input, now, now + TOKEN_LIFETIME_SECONDS);
   // We control iat/exp ourselves (jsonwebtoken's `expiresIn` would also work, but
   // explicit control is clearer for tests + the grace logic below).
   // Note: omit noTimestamp so jsonwebtoken preserves our explicit iat field in the token.
@@ -80,12 +96,7 @@ export function signLaifuUserToken(input: SignInput): string {
 export function signLaifuUserTokenWithExpiry(input: SignInput): { token: string; expiresAt: string } {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + TOKEN_LIFETIME_SECONDS;
-  const payload: JwtPayload = {
-    user_id: input.userId,
-    token_version: input.tokenVersion,
-    iat: now,
-    exp,
-  };
+  const payload = buildPayload(input, now, exp);
   const token = jwt.sign(payload, input.secret, { algorithm: ALGORITHM });
   return { token, expiresAt: new Date(exp * 1000).toISOString() };
 }
@@ -126,10 +137,12 @@ export function verifyLaifuUserToken(token: string, input: VerifyInput): Decoded
     );
   }
 
-  return {
+  const decoded: DecodedPayload = {
     userId: raw.user_id,
     tokenVersion: raw.token_version,
     iat: raw.iat,
     exp: raw.exp,
   };
+  if (typeof raw.sv === 'number') decoded.sessionVersion = raw.sv;
+  return decoded;
 }

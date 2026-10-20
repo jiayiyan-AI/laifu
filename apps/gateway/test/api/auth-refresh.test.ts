@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 
 vi.mock('../../src/db/index.js', async () => {
   const { mockDaoModule } = await import('../helpers/mock-dao.js');
@@ -77,6 +78,28 @@ describe('POST /api/auth/refresh-token', () => {
       .set('Authorization', `Bearer ${old}`)
       .send({});
     expect(res.status).toBe(401);
+  });
+
+  it('带 sv 的设备 token 续期后 sv 原样带过去', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const old = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: SECRET, sessionVersion: 2 });
+    const res = await request(makeApp())
+      .post('/api/auth/refresh-token')
+      .set('Authorization', `Bearer ${old}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(jwt.decode(res.body.token)).toMatchObject({ sv: 2 });
+  });
+
+  it('不带 sv 的 token (容器) 续期后仍不带 sv', async () => {
+    vi.mocked(dao.entitlements.getTokenVersion).mockResolvedValue(0);
+    const old = signLaifuUserToken({ userId: USER_ID, tokenVersion: 0, secret: SECRET });
+    const res = await request(makeApp())
+      .post('/api/auth/refresh-token')
+      .set('Authorization', `Bearer ${old}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(jwt.decode(res.body.token)).not.toHaveProperty('sv');
   });
 
   it('401 without Authorization header', async () => {

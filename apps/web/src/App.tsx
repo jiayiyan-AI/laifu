@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { WithStore } from '@lingxi/atom';
 import { LoginPage } from './auth/LoginPage.js';
+import { ForgotPasswordPage } from './auth/ForgotPasswordPage.js';
+import { ResetPasswordPage } from './auth/ResetPasswordPage.js';
 import { ProtectedRoute } from './auth/ProtectedRoute.js';
 import { DesktopOAuthComplete } from './auth/DesktopOAuthComplete.js';
 import { Desktop } from './desktop/Desktop.js';
@@ -10,6 +12,8 @@ const App = () => (
     <WithStore>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/desktop-oauth-complete" element={<DesktopOAuthComplete />} />
         <Route path="/desktop" element={<ProtectedRoute><Desktop /></ProtectedRoute>} />
         <Route path="/" element={<Navigate to="/desktop" replace />} />
