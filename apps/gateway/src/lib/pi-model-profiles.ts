@@ -49,8 +49,8 @@ const providers: PiModelProfiles['providers'] = [
     authHeader: true,
     models: [
       {
-        model: 'gpt-5.4',
-        name: 'GPT-5.4 (GitHub Copilot)',
+        model: 'gpt-5.6-sol',
+        name: 'GPT-5.6 Sol (GitHub Copilot)',
         reasoning: true,
         input: ['text', 'image'],
         cost: {
@@ -86,7 +86,7 @@ export const piModelProfiles: PiModelProfiles = {
 
 export const piAgentConfig = {
   provider: 'scott',
-  model: 'gpt-5.4',
+  model: 'gpt-5.6-sol',
   timeoutSeconds: 14_400,
   apiKey: "71d9d1918a48cc624c0bdb3c01af392624c10cd66fe6f6a2",
 } satisfies RuntimeConfig['pi_config'];
