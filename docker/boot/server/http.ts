@@ -34,6 +34,7 @@ export function createHandler(runtime: AgentRuntime): (req: Request) => Promise<
     if (req.method === 'POST' && url.pathname === '/inbox/image') return handleInboxImage(req);
     if (req.method === 'POST' && url.pathname === '/inbox/file') return handleInboxFile(req);
     if (req.method === 'DELETE' && url.pathname === '/session') return handleDeleteSession(runtime, url);
+    if (req.method === 'POST' && url.pathname === '/session/compact') return handleCompactSession(runtime, url);
     return Response.json({ error: 'not found' }, { status: 404 });
   };
 }
@@ -80,6 +81,24 @@ async function handleDeleteSession(runtime: AgentRuntime, url: URL): Promise<Res
       : {};
     log.error({ event: 'session.delete', session: sessionId, status: 'error', err: message });
     return Response.json({ error: message, ...stderr }, { status });
+  }
+}
+
+/**
+ * 同步压缩: 大会话的摘要调用可能要几分钟。调用方超时断开不影响这里继续跑完并落盘,
+ * 压缩结果写进 session 文件, 下一轮自动生效。
+ */
+async function handleCompactSession(runtime: AgentRuntime, url: URL): Promise<Response> {
+  const sessionId = (url.searchParams.get('session_id') ?? '').trim();
+  if (!sessionId) return Response.json({ error: "missing 'session_id'" }, { status: 400 });
+
+  try {
+    const result = await runtime.compactSession(sessionId);
+    return Response.json({ ok: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error({ event: 'session.compact', session: sessionId, status: 'error', err: message });
+    return Response.json({ error: message }, { status: 500 });
   }
 }
 

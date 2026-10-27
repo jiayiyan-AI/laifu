@@ -13,10 +13,11 @@ vi.mock('../../src/db/index.js', async () => {
   return mockDaoModule();
 });
 
-const { dispatchHermesChat } = vi.hoisted(() => ({
+const { dispatchHermesChat, compactHermesSession } = vi.hoisted(() => ({
   dispatchHermesChat: vi.fn(async () => ({ ok: true, status: 202 })),
+  compactHermesSession: vi.fn(async () => ({ ok: true, status: 'compacted', tokensBefore: 900_000, tokensAfter: 30_000 })),
 }));
-vi.mock('../../src/lib/aca-call.js', () => ({ dispatchHermesChat }));
+vi.mock('../../src/lib/aca-call.js', () => ({ dispatchHermesChat, compactHermesSession }));
 
 const { dropThreadSilently } = vi.hoisted(() => ({ dropThreadSilently: vi.fn() }));
 vi.mock('../../src/lib/drop-thread.js', () => ({ dropThreadSilently }));
@@ -185,6 +186,40 @@ describe('makeFeishuInbound', () => {
     await handle(evt({ messageId: 'sh1', text: '/help' }));
     expect(dispatchHermesChat).not.toHaveBeenCalled();
     expect(dao.messages.insert).not.toHaveBeenCalled();
+    expect(client.im.message.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('slash /compact → 回受理回执, 排在进行中的 loop 之后压缩, 完成后回结果', async () => {
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    const sentTexts = () => client.im.message.create.mock.calls.map((c: any[]) => JSON.parse(c[0].data.content).text as string);
+
+    await handle(evt({ messageId: 'cp0', text: '长任务' }));
+    await __whenDispatchedForTests();
+    await handle(evt({ messageId: 'cp1', text: '/compact' }));
+
+    // 车道被长任务占着: 只回了受理回执, 还没调容器
+    expect(sentTexts()).toEqual([expect.stringContaining('正在压缩')]);
+    expect(compactHermesSession).not.toHaveBeenCalled();
+
+    const loopId = (dispatchHermesChat.mock.calls[0]![0] as { loopId: string }).loopId;
+    emitLoopEvent(loopId, { type: 'done', reply: '完成', completion: 'success' });
+    await __whenDispatchedForTests();
+
+    expect(compactHermesSession).toHaveBeenCalledTimes(1);
+    expect(compactHermesSession.mock.calls[0]![0]).toMatchObject({
+      userId: 'u_alice', threadId: 'thr_1', source: 'feishu', sessionId: 'feishu:thr_1', containerUrl: 'http://container:8080',
+    });
+    expect(sentTexts()[1]).toContain('已压缩会话上下文：约 90.0万 → 约 3.0万 tokens');
+    expect(dao.messages.insert).toHaveBeenCalledTimes(1); // 只有长任务那条, /compact 不入库
+  });
+
+  it('slash /compact 容器未就绪 → 提示, 不调容器', async () => {
+    vi.mocked(dao.cache.get).mockReturnValue(undefined as any);
+    const client = mockClient();
+    const handle = makeFeishuInbound()(mockBinding(), client);
+    await handle(evt({ messageId: 'cp2', text: '/compact' }));
+    expect(compactHermesSession).not.toHaveBeenCalled();
     expect(client.im.message.create).toHaveBeenCalledTimes(1);
   });
 

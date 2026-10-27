@@ -23,7 +23,8 @@ import type { InboxAttachmentRef } from '@lingxi/shared';
 import { ensureContainerWarm } from '../lib/container-warm-cache.js';
 import { uploadInboxStream } from '../lib/inbox-uploader.js';
 import { buildInboxPrompt } from '../lib/inbox-image-prompt.js';
-import { classifyMessage, runIntercept } from '../lib/slash-filter.js';
+import { classifyMessage, runIntercept, COMPACT_LOG_TAG } from '../lib/slash-filter.js';
+import { compactThreadSession, COMPACT_STARTED_TEXT } from '../lib/compact-session.js';
 import { dropThreadSilently } from '../lib/drop-thread.js';
 import { enqueueThreadTask } from '../lib/thread-serializer.js';
 import {
@@ -333,6 +334,31 @@ const handleFeishuNew = async (
   }));
 };
 
+/**
+ * 飞书 `/compact`: 先回受理回执, 压缩进该 thread 的串行车道 (排在进行中的轮次之后,
+ * 压缩期间后到的消息也排在它后面), 完成后回结果。fire-and-forget, 不阻塞 WS 事件循环。
+ */
+const handleFeishuCompact = async (
+  binding: FeishuBinding,
+  client: Lark.Client,
+  senderOpenId: string,
+): Promise<void> => {
+  const threadId = binding.thread_id;
+  if (!threadId) return;
+  const mapping = dao.cache.get(binding.user_id);
+  if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
+    await safeSend(client, senderOpenId, CONTAINER_NOT_READY_TEXT);
+    return;
+  }
+  const containerUrl = mapping.container_url;
+  const accepted = enqueueThreadTask(threadId, async () => {
+    const reply = await compactThreadSession({ userId: binding.user_id, threadId, source: 'feishu', containerUrl });
+    await safeSend(client, senderOpenId, reply);
+    return null;
+  });
+  await safeSend(client, senderOpenId, accepted ? COMPACT_STARTED_TEXT : BUSY_QUEUE_TEXT);
+};
+
 export const makeFeishuInbound = () => {
   return (binding: FeishuBinding, client: Lark.Client) => async (raw: unknown): Promise<void> => {
     const evt = raw as FeishuInboundEvent;
@@ -385,6 +411,11 @@ export const makeFeishuInbound = () => {
       }
       if (slash.cmd === 'drop') {
         await handleFeishuNew(binding, client, senderOpenId, slash.args, true);
+        return;
+      }
+      if (slash.logTag === COMPACT_LOG_TAG) {
+        log.info({ event: 'feishu.slash.compact', user_id: binding.user_id, thread_id: binding.thread_id });
+        await handleFeishuCompact(binding, client, senderOpenId);
         return;
       }
       const reply = await runIntercept(slash, { userId: binding.user_id, threadId: binding.thread_id ?? '' });

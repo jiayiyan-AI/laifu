@@ -466,6 +466,8 @@ export interface RuntimeConfig {
     baseUrl?: string;
     apiKey: string;
     timeoutSeconds: number;
+    /** 上下文超过该 token 数即自动压缩 (容器换算成 Pi compaction.reserveTokens); 缺省走 Pi 默认。 */
+    compactionThresholdTokens?: number;
   };
 }
 

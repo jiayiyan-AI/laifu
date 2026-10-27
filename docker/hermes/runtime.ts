@@ -6,7 +6,7 @@ import { delHermesId, getHermesId, putHermesId } from './session-map.ts';
 import { snapshotSession, usageDelta } from './state-db.ts';
 import type { Snapshot } from './state-db.ts';
 import { log } from '../boot/server/logger.ts';
-import type { AgentDeleteSessionResult, AgentRunInput, AgentRunResult, AgentRuntime, ContainerChatUsage, RuntimeConfig } from '../runtime/types.ts';
+import type { AgentCompactSessionResult, AgentDeleteSessionResult, AgentRunInput, AgentRunResult, AgentRuntime, ContainerChatUsage, RuntimeConfig } from '../runtime/types.ts';
 
 
 class HermesProcessError extends Error {
@@ -101,6 +101,10 @@ export class HermesRuntime implements AgentRuntime {
     return { deleted: true, sessionId: hermesSessionId };
   }
 
+  /** hermes CLI 的上下文压缩由其自身管理, 不提供手动入口。 */
+  async compactSession(_sessionId: string): Promise<AgentCompactSessionResult> {
+    return { status: 'unsupported' };
+  }
 
   async abort(loopId: string): Promise<void> {
     this.activeRuns.get(loopId)?.abort();

@@ -218,6 +218,26 @@ describe('POST /api/chat', () => {
     expect(dao.messages.insert).not.toHaveBeenCalled();
   });
 
+  it('/compact → 同步调容器压缩, inline 回结果, 不入库', async () => {
+    vi.mocked(dao.users.getTokenVersion).mockResolvedValue(1);
+    fetchSpy.mockResolvedValueOnce(new Response(
+      JSON.stringify({ ok: true, status: 'compacted', tokensBefore: 600_000, tokensAfter: 25_000 }),
+      { status: 200 },
+    ));
+    const res = await request(makeApp())
+      .post('/api/chat')
+      .set('Cookie', validCookie('u1'))
+      .send({ thread_id: 'thr_1', message: '/compact' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ kind: 'inline', reply: expect.stringContaining('约 60.0万 → 约 2.5万 tokens') });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('http://localhost:8080/session/compact?session_id=web%3Athr_1');
+    expect(init.method).toBe('POST');
+    expect(dao.messages.insert).not.toHaveBeenCalled();
+  });
+
   it('intercepts /usage inline with balance from DAO', async () => {
     vi.mocked(dao.usage.getBalance).mockResolvedValueOnce({
       balance_cny: 12.34, free_quota_cny_month: 50, used_cny_month: 7.89, period_start: '2026-06-01',

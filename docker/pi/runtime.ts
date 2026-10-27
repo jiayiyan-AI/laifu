@@ -10,6 +10,7 @@ import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { readDynamicFile, SYSTEM_PROMPT_FILE } from '../boot/scripts/dynamic-files.ts';
 import { log } from '../boot/server/logger.ts';
 import type {
+  AgentCompactSessionResult,
   AgentDeleteSessionResult,
   AgentRunInput,
   AgentRunResult,
@@ -24,6 +25,7 @@ import {
   deletePiSessionManager,
   openPiSessionManager,
 } from './session-locator.ts';
+import { getPiSession } from './session-map.ts';
 import { ensurePiWorkspace } from './workspace.ts';
 
 function timeoutMs(seconds: number): number {
@@ -32,6 +34,12 @@ function timeoutMs(seconds: number): number {
   }
   return Math.floor(seconds * 1000);
 }
+
+/** Pi 默认的压缩预留 token (见 pi-coding-agent settings: compaction.reserveTokens)。 */
+const PI_DEFAULT_RESERVE_TOKENS = 16_384;
+
+/** session.compact() 在「无需压缩」时抛的错误前缀, 当作正常结果而非失败。 */
+const NOTHING_TO_COMPACT_ERRORS = ['Nothing to compact', 'Already compacted'];
 
 
 export class PiRuntime implements AgentRuntime {
@@ -136,6 +144,30 @@ export class PiRuntime implements AgentRuntime {
     });
   }
 
+  /**
+   * 手动压缩。与 run 共用 session 生命周期锁: 有正在跑的轮次时排在其后, 压缩期间新轮次也排队。
+   */
+  async compactSession(sessionId: string): Promise<AgentCompactSessionResult> {
+    const modelRuntime = await this.ensureModelRuntime();
+    return this.withSessionLifecycleLock(sessionId, async () => {
+      if (!this.sessions.has(sessionId) && !(await getPiSession(sessionId))) return { status: 'no_session' };
+      const session = await this.getSession(sessionId, modelRuntime);
+      try {
+        const result = await session.compact();
+        const tokensAfter = result.estimatedTokensAfter ?? null;
+        log.info({ event: 'session.compact', session: sessionId, status: 'ok', tokens_before: result.tokensBefore, tokens_after: tokensAfter });
+        return { status: 'compacted', tokensBefore: result.tokensBefore, tokensAfter };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (NOTHING_TO_COMPACT_ERRORS.some((prefix) => message.startsWith(prefix))) {
+          log.info({ event: 'session.compact', session: sessionId, status: 'nothing', reason: message });
+          return { status: 'nothing' };
+        }
+        throw error;
+      }
+    });
+  }
+
   async abort(loopId: string): Promise<void> {
     await this.activeRuns.get(loopId)?.abort();
   }
@@ -219,6 +251,8 @@ export class PiRuntime implements AgentRuntime {
       appendSystemPrompt: managedPrompt ? [managedPrompt] : [],
     });
     await resourceLoader.reload();
+    // reload 会按文件重建 settings、丢掉 override, 所以每次 reload 后重新施加。
+    this.applyCompactionThreshold(settingsManager, model);
 
     const { session } = await createAgentSession({
       agentDir,
@@ -231,6 +265,18 @@ export class PiRuntime implements AgentRuntime {
     });
     this.sessions.set(gatewaySessionId, session);
     return session;
+  }
+
+  /**
+   * Pi 自动压缩条件是 `context > contextWindow - reserveTokens`。contextWindow 是模型真实上限,
+   * 不能为了提前压缩而调小 (会把 max_tokens 夹到极小, 大会话连摘要都生成不了), 所以通过
+   * reserveTokens 把触发线放到 compactionThresholdTokens。
+   */
+  private applyCompactionThreshold(settingsManager: SettingsManager, model: { contextWindow: number }): void {
+    const threshold = this.config?.pi_config?.compactionThresholdTokens;
+    if (!threshold || threshold <= 0 || model.contextWindow <= 0) return;
+    const reserveTokens = Math.max(PI_DEFAULT_RESERVE_TOKENS, model.contextWindow - threshold);
+    settingsManager.applyOverrides({ compaction: { reserveTokens } });
   }
 
   private getSettingsManager(workspace: string): SettingsManager {

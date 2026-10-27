@@ -34,6 +34,9 @@ test('passes the complete Gateway runtime configuration to the runtime', async (
     async deleteSession(): Promise<{ deleted: false; sessionId: null }> {
       return { deleted: false, sessionId: null };
     },
+    async compactSession(): Promise<{ status: 'unsupported' }> {
+      return { status: 'unsupported' };
+    },
     async abort(): Promise<void> {},
   };
 
