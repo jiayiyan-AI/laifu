@@ -1,5 +1,5 @@
 /**
- * Gateway → 每用户 hermes ACA 的出站调用 (异步 /chat dispatch + DELETE /session)
+ * Gateway → 每用户 hermes ACA 的出站调用 (异步 /chat dispatch + DELETE /session + POST /session/compact)
  * 与共用的 per-user Bearer 签发 (getContainerToken)。
  *
  * 每次出站前 checkAndReconcileACA(userId): spec 漂移则后台拉齐 (幂等去重, 非阻塞,
@@ -8,6 +8,7 @@
  * 日志: 单行 JSON → stdout → App Service → Log Analytics。
  *  - aca.chat.dispatch: status=202 ack / http_<code> / 0 (error)
  *  - aca.session.delete: status=ok / http_<code> / error, deleted 标记幂等命中
+ *  - aca.session.compact: status=compacted / nothing / ... / http_<code> / timeout / error
  *
  * 不做指数退避 / 重试; 调用方 (chat.ts / threads.ts / inbound-handler) 已有兜底文案。
  */
@@ -171,5 +172,66 @@ export const deleteHermesSession = async (args: DeleteSessionArgs): Promise<Dele
       err,
     });
     return { ok: false, status: 0, error: err };
+  }
+};
+
+// === Session compact (gateway → container POST /session/compact) ===
+
+interface CompactSessionArgs {
+  containerUrl: string;
+  userId: string;
+  threadId: string;
+  source: string;
+  sessionId: string;
+  timeoutMs: number;
+}
+
+/** 容器侧 AgentCompactSessionResult 的线上形状 (见 docker/runtime/types.ts)。 */
+export type CompactSessionOutcome =
+  | { status: 'compacted'; tokensBefore: number; tokensAfter: number | null }
+  | { status: 'nothing' | 'no_session' | 'unsupported' };
+
+export type CompactSessionResult =
+  | ({ ok: true } & CompactSessionOutcome)
+  /** timedOut: 等不及, 容器仍在后台压缩 (连接断开不影响容器跑完落盘)。 */
+  | { ok: false; timedOut: boolean; status: number; error: string };
+
+/**
+ * 调容器 `POST /session/compact?session_id=...` 手动压缩会话上下文。同步等结果:
+ * 大会话摘要要几分钟, 超过 timeoutMs 就放弃等待 (ok=false, timedOut=true)。
+ */
+export const compactHermesSession = async (args: CompactSessionArgs): Promise<CompactSessionResult> => {
+  const { containerUrl, userId, threadId, source, sessionId, timeoutMs } = args;
+  checkAndReconcileACA(userId);   // ACA 出口层统一触发 reconcile (幂等去重, 非阻塞, 本次仍走老 revision)
+  const start = Date.now();
+  try {
+    const token = await getContainerToken(userId);
+    const resp = await fetch(`${containerUrl}/session/compact?session_id=${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, ...traceHeader() },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) {
+      log.warn({ event: 'aca.session.compact', user_id: userId, thread_id: threadId, source, status: `http_${resp.status}`, dur_ms: Date.now() - start });
+      return { ok: false, timedOut: false, status: resp.status, error: `http ${resp.status}` };
+    }
+    noteContainerActivity(userId);   // 2xx → 续 warm-cache
+    const body = await resp.json() as CompactSessionOutcome;
+    log.info({
+      event: 'aca.session.compact',
+      user_id: userId,
+      thread_id: threadId,
+      source,
+      status: body.status,
+      tokens_before: body.status === 'compacted' ? body.tokensBefore : undefined,
+      tokens_after: body.status === 'compacted' ? body.tokensAfter : undefined,
+      dur_ms: Date.now() - start,
+    });
+    return { ok: true, ...body };
+  } catch (e) {
+    const timedOut = e instanceof Error && e.name === 'TimeoutError';
+    const err = e instanceof Error ? e.message : String(e);
+    log.warn({ event: 'aca.session.compact', user_id: userId, thread_id: threadId, source, status: timedOut ? 'timeout' : 'error', err, dur_ms: Date.now() - start });
+    return { ok: false, timedOut, status: 0, error: err };
   }
 };

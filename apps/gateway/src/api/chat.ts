@@ -13,7 +13,8 @@ import {
 } from '../lib/pending-loops.js';
 import { tryReserveThread, releaseThread } from '../lib/thread-inflight.js';
 import { log } from '../lib/logger.js';
-import { classifyMessage, runIntercept, type SlashAction } from '../lib/slash-filter.js';
+import { classifyMessage, runIntercept, COMPACT_LOG_TAG, type SlashAction } from '../lib/slash-filter.js';
+import { compactThreadSession } from '../lib/compact-session.js';
 
 const SSE_HEARTBEAT_MS = 10_000; // gateway→web 心跳间隔（独立于 ACA→gateway 的 2 分钟心跳）
 
@@ -65,6 +66,17 @@ export const buildChatRouter = (
     //   - 网关自答(/help /version /usage /status):网关查 DB 给确定回复
     //   - 透传(其余 /<word>):落入下方原流程喂给 Hermes
     const slash = classifyMessage(message);
+    if (slash.kind === 'intercept' && slash.logTag === COMPACT_LOG_TAG) {
+      // /compact: 同步等容器压缩完 (上限 COMPACT_TIMEOUT_MS), 结果作 inline 回复
+      const m = dao.cache.get(userId);
+      if (!m || m.status !== 'ready' || !m.container_url) {
+        return res.status(503).json({ error: 'assistant not ready' });
+      }
+      log.info({ event: 'chat.slash.compact', user_id: userId, thread_id });
+      const reply = await compactThreadSession({ userId, threadId: thread_id, source: thread.source, containerUrl: m.container_url });
+      const body: WebChatResponse = { kind: 'inline', reply };
+      return res.json(body);
+    }
     if (slash.kind === 'intercept') {
       return await replyInterceptedSlash(res, { userId, threadId: thread_id, action: slash });
     }

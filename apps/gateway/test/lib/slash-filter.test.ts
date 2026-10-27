@@ -6,7 +6,7 @@ vi.mock('../../src/db/index.js', async () => {
 });
 
 import { dao } from '../../src/db/index.js';
-import { classifyMessage, runIntercept } from '../../src/lib/slash-filter.js';
+import { classifyMessage, runIntercept, COMPACT_LOG_TAG } from '../../src/lib/slash-filter.js';
 
 describe('classifyMessage', () => {
   it('forwards plain text', () => {
@@ -30,7 +30,7 @@ describe('classifyMessage', () => {
   });
 
   it('intercepts /model and config-class commands', () => {
-    for (const cmd of ['model', 'personality', 'yolo', 'compress', 'snapshot']) {
+    for (const cmd of ['model', 'personality', 'yolo', 'snapshot']) {
       const r = classifyMessage(`/${cmd}`);
       expect(r.kind).toBe('intercept');
       if (r.kind === 'intercept') expect(r.logTag).toBe('reject_config');
@@ -50,6 +50,14 @@ describe('classifyMessage', () => {
     expect((classifyMessage('/version') as { logTag?: string }).logTag).toBe('gateway_version');
     expect((classifyMessage('/usage') as { logTag?: string }).logTag).toBe('gateway_usage');
     expect((classifyMessage('/status') as { logTag?: string }).logTag).toBe('gateway_status');
+  });
+
+  it('intercepts /compact and its /compress alias with gateway_compact tag', () => {
+    for (const cmd of ['compact', 'compress', 'COMPACT']) {
+      const r = classifyMessage(`/${cmd}`);
+      expect(r.kind).toBe('intercept');
+      if (r.kind === 'intercept') expect(r.logTag).toBe(COMPACT_LOG_TAG);
+    }
   });
 
   it('forwards unknown /<word> commands so Hermes can self-handle', () => {

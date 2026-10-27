@@ -38,7 +38,9 @@ const server = Bun.serve({
   port: PORT,
   hostname: '0.0.0.0',
   // 包一层访问日志 + 末端兜底 — handle() 内部已 try/catch 各 handler, 这里防漏
-  async fetch(req) {
+  async fetch(req, srv) {
+    // 手动压缩是同步长请求 (大会话摘要要几分钟), Bun 默认 10s idle 会把连接掐断, 单独关掉。
+    if (req.method === 'POST' && new URL(req.url).pathname === '/session/compact') srv.timeout(req, 0);
     // 续用 gateway 注入的 X-Trace-Id (缺则现签), 包住整个请求 → 含 http.request 在内的所有日志都带 trace。
     const traceId = req.headers.get('x-trace-id')?.trim() || newTraceId();
     return runWithTrace({ trace_id: traceId }, async () => {

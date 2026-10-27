@@ -11,7 +11,8 @@ import { dispatchHermesChat } from '../lib/aca-call.js';
 import { genId } from '@lingxi/db';
 import { storePendingLoop, emitLoopEvent, HARD_DEADLINE_MS } from '../lib/pending-loops.js';
 import { log } from '../lib/logger.js';
-import { classifyMessage, runIntercept } from '../lib/slash-filter.js';
+import { classifyMessage, runIntercept, COMPACT_LOG_TAG } from '../lib/slash-filter.js';
+import { compactThreadSession, COMPACT_STARTED_TEXT } from '../lib/compact-session.js';
 import { dropThreadSilently } from '../lib/drop-thread.js';
 import type { InboundPart } from './inbound.js';
 import type { InboxAttachmentRef } from '@lingxi/shared';
@@ -292,6 +293,34 @@ const handleWechatNew = async (
   );
 };
 
+/**
+ * 微信 `/compact`: 先回受理回执, 压缩进该 thread 的串行车道 (排在进行中的轮次之后,
+ * 压缩期间后到的消息也排在它后面), 完成后回结果。fire-and-forget, 不阻塞长轮询。
+ */
+const handleWechatCompact = async (
+  binding: { user_id: string; thread_id: string | null },
+  client: WechatClient,
+  msg: ParsedMsg,
+): Promise<void> => {
+  const threadId = binding.thread_id;
+  if (!threadId) {
+    await safeSendText(client, msg, '当前还没有会话，无需压缩。');
+    return;
+  }
+  const mapping = dao.cache.get(binding.user_id);
+  if (!mapping || mapping.status !== 'ready' || !mapping.container_url) {
+    await safeSendText(client, msg, CONTAINER_NOT_READY_TEXT);
+    return;
+  }
+  const containerUrl = mapping.container_url;
+  const accepted = enqueueThreadTask(threadId, async () => {
+    const reply = await compactThreadSession({ userId: binding.user_id, threadId, source: 'wechat', containerUrl });
+    await safeSendText(client, msg, reply);
+    return null;
+  });
+  await safeSendText(client, msg, accepted ? COMPACT_STARTED_TEXT : BUSY_QUEUE_TEXT);
+};
+
 type WechatClient = Parameters<typeof safeSendText>[0];
 type ParsedMsg = NonNullable<ReturnType<typeof parseInbound>>;
 
@@ -334,6 +363,10 @@ async function onWechatInbound(
     }
     if (slash.cmd === 'drop') {
       return await handleWechatNew(binding, client, msg, slash.args, true);
+    }
+    if (slash.logTag === COMPACT_LOG_TAG) {
+      log.info({ event: 'wechat.slash.compact', user_id: binding.user_id, thread_id: binding.thread_id });
+      return await handleWechatCompact(binding, client, msg);
     }
     const reply = await runIntercept(slash, {
       userId: binding.user_id,

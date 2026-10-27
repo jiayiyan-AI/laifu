@@ -88,5 +88,8 @@ export const piAgentConfig = {
   provider: 'scott',
   model: 'gpt-5.6-sol',
   timeoutSeconds: 14_400,
+  // 自动压缩触发线。contextWindow(1M) 是模型真实上限, 只用于 max_tokens 夹取, 不能拿来调阈值;
+  // 200k 留在 gpt-5.6-sol 272k 长上下文计价档以下, 且单次往返不至于被几十万 token 拖慢。
+  compactionThresholdTokens: 200_000,
   apiKey: "71d9d1918a48cc624c0bdb3c01af392624c10cd66fe6f6a2",
 } satisfies RuntimeConfig['pi_config'];

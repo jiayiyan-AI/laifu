@@ -63,7 +63,7 @@ const PI_CONFIG = {
   apiKey: 'test-key',
   baseUrl: `http://127.0.0.1:${server.port}/v1`,
 };
-const [{ PiRuntime }, { SessionManager, getAgentDir }, { ensurePiWorkspace }, { delPiSession, getPiSession, getPiSessionMapFile, putPiSession }, { savePiModelProfiles }] = await Promise.all([
+const [{ PiRuntime }, { SessionManager, SettingsManager, getAgentDir }, { ensurePiWorkspace }, { delPiSession, getPiSession, getPiSessionMapFile, putPiSession }, { savePiModelProfiles }] = await Promise.all([
   import('./runtime.ts'),
   import('@earendil-works/pi-coding-agent'),
   import('./workspace.ts'),
@@ -256,4 +256,41 @@ test('does not retain a session history while deleting it', async () => {
   const mapped = await getPiSession('thread-2');
   const session = sessions.find(({ path: sessionPath }) => sessionPath === mapped?.path);
   expect(session?.firstMessage).toBe('after delete');
+}, 20_000);
+
+test('reports no_session when compacting an unknown session', async () => {
+  const runtime = await createPiRuntime();
+  expect(await runtime.compactSession('thread-compact-missing')).toEqual({ status: 'no_session' });
+}, 20_000);
+
+test('reports nothing when the session is too small to compact', async () => {
+  const runtime = await createPiRuntime();
+  await runtime.run({ message: 'hello', sessionId: 'thread-compact-small', source: 'web', loopId: 'loop-c1' });
+  expect(await runtime.compactSession('thread-compact-small')).toEqual({ status: 'nothing' });
+}, 20_000);
+
+test('compacts a large session and keeps chatting on the compacted context', async () => {
+  const runtime = await createPiRuntime();
+  // Pi 按 chars/4 估 token; 两轮各 ~30k token 才能越过 keepRecentTokens(20k) 留出可摘要的旧轮次。
+  const big = 'x'.repeat(120_000);
+  await runtime.run({ message: big, sessionId: 'thread-compact-big', source: 'web', loopId: 'loop-c2a' });
+  await runtime.run({ message: big, sessionId: 'thread-compact-big', source: 'web', loopId: 'loop-c2b' });
+  await runtime.run({ message: 'small', sessionId: 'thread-compact-big', source: 'web', loopId: 'loop-c2c' });
+
+  const result = await runtime.compactSession('thread-compact-big');
+  expect(result).toMatchObject({ status: 'compacted' });
+  if (result.status !== 'compacted') throw new Error('expected compaction');
+  expect(result.tokensBefore).toBeGreaterThan(50_000);
+
+  expect(await runtime.run({ message: 'after', sessionId: 'thread-compact-big', source: 'web', loopId: 'loop-c2d' }))
+    .toMatchObject({ reply: 'Pi says hello.', exitCode: 0 });
+}, 30_000);
+
+test('moves the auto-compaction trigger to compactionThresholdTokens', async () => {
+  const runtime = await createPiRuntime({ ...PI_CONFIG, compactionThresholdTokens: 200_000 });
+  await runtime.run({ message: 'hello', sessionId: 'thread-threshold', source: 'web', loopId: 'loop-t1' });
+
+  const settings = (runtime as unknown as { settingsManager: InstanceType<typeof SettingsManager> }).settingsManager;
+  // qwen3-coder-plus contextWindow = 1M → 触发线 = 1M - reserve = 200k
+  expect(settings.getCompactionSettings().reserveTokens).toBe(800_000);
 }, 20_000);

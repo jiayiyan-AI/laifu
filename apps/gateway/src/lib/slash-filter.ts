@@ -35,6 +35,7 @@
  */
 
 import { dao } from '../db/index.js';
+import { COMPACT_STARTED_TEXT } from './compact-session.js';
 
 // ─── 公共类型 ─────────────────────────────────────────────────────────
 
@@ -105,7 +106,6 @@ const REJECT_CONFIG = {
   'indicator':     '该选项仅适用于命令行界面。',
   'footer':        '该选项仅适用于命令行界面。',
   'codex-runtime': '运行时由后端统一配置。',
-  'compress':      '会话上下文压缩由后端自动管理,无需手动触发。',
   'snapshot':      '灵犀暂不支持配置快照(/snapshot)。',
   'snap':          '灵犀暂不支持配置快照(/snap)。',
   'rollback':      '灵犀暂不支持文件回滚(/rollback)。',
@@ -166,6 +166,7 @@ const HELP_TEXT = [
   '  /version  查看灵犀版本',
   '  /usage    查看本月用量与余额',
   '  /status   查看当前会话与容器状态',
+  '  /compact  压缩当前会话上下文(对话变慢时使用)',
   '',
   '【操作提示】',
   '  · 新建/切换/删除会话: 请使用页面左侧"新对话"按钮和会话列表',
@@ -232,6 +233,11 @@ registerOrThrow('help',    { render: Static(HELP_TEXT),    logTag: 'gateway_help
 registerOrThrow('version', { render: Static(VERSION_TEXT), logTag: 'gateway_version' });
 registerOrThrow('usage',   { render: renderUsage,          logTag: 'gateway_usage' });
 registerOrThrow('status',  { render: renderStatus,         logTag: 'gateway_status' });
+// /compact (/compress 别名): 需要容器 + 串行车道, 由各渠道按 COMPACT_LOG_TAG 特判执行
+// (见 lib/compact-session.ts); render 文案是渠道先回给用户的受理回执。
+export const COMPACT_LOG_TAG = 'gateway_compact';
+registerOrThrow('compact',  { render: Static(COMPACT_STARTED_TEXT), logTag: COMPACT_LOG_TAG });
+registerOrThrow('compress', { render: Static(COMPACT_STARTED_TEXT), logTag: COMPACT_LOG_TAG });
 registerOrThrow('start',   { render: Static('欢迎使用灵犀。请直接发送消息开始对话。'), logTag: 'gateway_start' });
 
 // ─── 分类入口 ─────────────────────────────────────────────────────────

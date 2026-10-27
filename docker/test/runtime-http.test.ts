@@ -25,6 +25,7 @@ function createRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
       };
     },
     async deleteSession() { return { deleted: false, sessionId: null }; },
+    async compactSession() { return { status: 'nothing' as const }; },
     async abort() {},
     ...overrides,
   };
@@ -104,4 +105,33 @@ test('routes entitlement resync through the injected runtime', async () => {
 
   expect(seen).toEqual([['email', 'cloud']]);
   expect(await response.json()).toEqual({ observed: ['email'], token_version: 7 });
+});
+
+test('compacts a session through the injected runtime', async () => {
+  const seen: string[] = [];
+  const handler = createHandler(createRuntime({
+    async compactSession(sessionId) {
+      seen.push(sessionId);
+      return { status: 'compacted', tokensBefore: 900_000, tokensAfter: 30_000 };
+    },
+  }));
+
+  const response = await handler(new Request('http://x/session/compact?session_id=feishu%3Athr_1', { method: 'POST' }));
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: true, status: 'compacted', tokensBefore: 900_000, tokensAfter: 30_000 });
+  expect(seen).toEqual(['feishu:thr_1']);
+});
+
+test('rejects compaction without a session ID and surfaces runtime errors', async () => {
+  const handler = createHandler(createRuntime({
+    async compactSession() { throw new Error('model down'); },
+  }));
+
+  const missing = await handler(new Request('http://x/session/compact', { method: 'POST' }));
+  expect(missing.status).toBe(400);
+
+  const failed = await handler(new Request('http://x/session/compact?session_id=s', { method: 'POST' }));
+  expect(failed.status).toBe(500);
+  expect(await failed.json()).toEqual({ error: 'model down' });
 });
