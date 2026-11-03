@@ -21,22 +21,44 @@ await writeFile(path.join(agentDir, 'extensions', 'noop.ts'), [
 ].join('\n'));
 
 let streamDelayMs = 0;
+/** >0 时流式响应末尾带 usage.prompt_tokens, 让 Pi 按真实上下文判断是否自动压缩。 */
+let streamPromptTokens = 0;
+/** >0 时模型先连续发起 N 次 bash 工具调用 (本轮已有 N 条 tool 结果后才给最终文本), 模拟一轮多步任务。 */
+let streamToolCallRounds = 0;
+let toolCallSeq = 0;
 let activeStreamRequests = 0;
 let maxConcurrentStreamRequests = 0;
 
 const server = Bun.serve({
   port: 0,
   async fetch(request): Promise<Response> {
-    const body = await request.json() as { stream?: boolean; model?: string };
+    const body = await request.json() as { stream?: boolean; model?: string; messages?: { role: string }[] };
     if (body.stream) {
       activeStreamRequests++;
       maxConcurrentStreamRequests = Math.max(maxConcurrentStreamRequests, activeStreamRequests);
       try {
         if (streamDelayMs) await Bun.sleep(streamDelayMs);
         const model = body.model ?? 'qwen3-coder-plus';
+        const usageChunk = streamPromptTokens
+          ? [`data: ${JSON.stringify({ id: 'chatcmpl-test', object: 'chat.completion.chunk', created: 0, model, choices: [], usage: { prompt_tokens: streamPromptTokens, completion_tokens: 3, total_tokens: streamPromptTokens + 3 } })}\n\n`]
+          : [];
+        const messages = body.messages ?? [];
+        const lastUser = messages.findLastIndex((m) => m.role === 'user');
+        const toolResultsThisTurn = messages.slice(lastUser + 1).filter((m) => m.role === 'tool').length;
+        if (streamToolCallRounds && toolResultsThisTurn < streamToolCallRounds) {
+          const toolCall = { index: 0, id: `call_${++toolCallSeq}`, type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: `echo step ${toolResultsThisTurn + 1}` }) } };
+          const toolStream = [
+            `data: ${JSON.stringify({ id: 'chatcmpl-test', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [toolCall] }, finish_reason: null }] })}\n\n`,
+            `data: ${JSON.stringify({ id: 'chatcmpl-test', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`,
+            ...usageChunk,
+            'data: [DONE]\n\n',
+          ].join('');
+          return new Response(toolStream, { headers: { 'content-type': 'text/event-stream' } });
+        }
         const stream = [
           `data: ${JSON.stringify({ id: 'chatcmpl-test', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta: { role: 'assistant', content: 'Pi says hello.' }, finish_reason: null }] })}\n\n`,
           `data: ${JSON.stringify({ id: 'chatcmpl-test', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+          ...usageChunk,
           'data: [DONE]\n\n',
         ].join('');
         return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
@@ -105,6 +127,17 @@ await savePiModelProfiles({
           contextWindow: 1_000_000,
           maxTokens: 65_536,
           compat: { thinkingFormat: 'qwen', supportsDeveloperRole: false, supportsStore: false },
+        },
+        {
+          // 与 prod gpt-5.6-sol 同窗口 (922k), 走 completions 协议便于假服务器模拟。
+          model: 'prod-922k',
+          name: 'Prod-like 922k window',
+          reasoning: false,
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 922_000,
+          maxTokens: 128_000,
+          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
         },
         {
           model: 'qwen3.7-plus',
@@ -294,3 +327,41 @@ test('moves the auto-compaction trigger to compactionThresholdTokens', async () 
   // qwen3-coder-plus contextWindow = 1M → 触发线 = 1M - reserve = 200k
   expect(settings.getCompactionSettings().reserveTokens).toBe(800_000);
 }, 20_000);
+
+test('returns the reply when Pi auto-compacts after a multi-step turn (prod doro 处理失败 复现)', async () => {
+  // 场景照搬 prod 2026-11-03 doro: contextWindow 922k + 阈值 260k; 长会话 (几十条历史) 上来一个多步任务,
+  // 本轮连续 5 次工具调用后给出结论, 末次上下文 27 万 > 阈值 → 本轮结束后 Pi 自动压缩,
+  // 把 session.messages 整个换成「摘要 + 最近若干条」(远短于本轮开始时的长度)。
+  // 修复前: 按旧下标找 assistant 落空 → 回 "处理失败，请稍后再试。" + usage 全 0。
+  const profile = { provider: 'dashscope', model: 'prod-922k' };
+  const runtime = await createPiRuntime({ ...PI_CONFIG, ...profile, compactionThresholdTokens: 260_000 });
+  const sessionId = 'thread-prod-repro';
+  for (let i = 0; i < 20; i++) {
+    await runtime.run({ message: `历史对话 ${i}`, sessionId, source: 'feishu', loopId: `loop-pr-h${i}` });
+  }
+  // 两轮大附件 (Pi 按 chars/4 估 token, 各 ~3 万) 让压缩有可摘要的旧轮次。
+  const big = '合同正文'.repeat(30_000);
+  await runtime.run({ message: big, sessionId, source: 'feishu', loopId: 'loop-pr-b1' });
+  await runtime.run({ message: big, sessionId, source: 'feishu', loopId: 'loop-pr-b2' });
+
+  streamPromptTokens = 270_000;
+  streamToolCallRounds = 5;
+  try {
+    const result = await runtime.run({ message: '审查待审查里的新合同', sessionId, source: 'feishu', loopId: 'loop-pr-task' });
+    expect(result).toMatchObject({ reply: 'Pi says hello.', exitCode: 0, timedOut: false });
+    expect(result.usage.input_tokens).toBe(270_000);
+  } finally {
+    streamPromptTokens = 0;
+    streamToolCallRounds = 0;
+  }
+
+  // 前提校验: 这一轮确实带了工具调用, 且确实触发了自动压缩 (否则测试没打到 bug 场景)。
+  const mapped = await getPiSession(sessionId);
+  const file = await readFile(mapped!.path, 'utf8');
+  expect(file.match(/"type":"compaction"/g)?.length).toBe(1);
+  expect(file.match(/"role":"toolResult"/g)?.length).toBe(5);
+
+  // 压缩后同一会话继续正常对话。
+  expect(await runtime.run({ message: '继续', sessionId, source: 'feishu', loopId: 'loop-pr-next' }))
+    .toMatchObject({ reply: 'Pi says hello.', exitCode: 0 });
+}, 60_000);

@@ -80,7 +80,12 @@ export class PiRuntime implements AgentRuntime {
   }
 
   private async runSession(session: AgentSession, input: AgentRunInput): Promise<AgentRunResult> {
-    const firstNewMessage = session.messages.length;
+    // 用事件记本轮最后一条 assistant, 不按 session.messages 下标找: 本轮结束后 Pi 若自动压缩,
+    // 会用「摘要 + 最近若干条」整个替换 messages 数组, 旧下标可能越界 → 误判无回复 (prod doro "处理失败")。
+    const latest: { assistant: AssistantMessage | null } = { assistant: null };
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === 'message_end' && event.message.role === 'assistant') latest.assistant = event.message;
+    });
     this.activeRuns.set(input.loopId, session);
 
     let timedOut = false;
@@ -94,7 +99,7 @@ export class PiRuntime implements AgentRuntime {
 
     try {
       await session.prompt(input.message);
-      const assistant = this.lastAssistantMessage(session, firstNewMessage);
+      const { assistant } = latest;
       const usage = this.toUsage(assistant);
 
       if (timedOut) {
@@ -125,6 +130,7 @@ export class PiRuntime implements AgentRuntime {
         timedOut: false,
       };
     } finally {
+      unsubscribe();
       clearTimeout(timeout);
       if (this.activeRuns.get(input.loopId) === session) this.activeRuns.delete(input.loopId);
     }
@@ -281,14 +287,6 @@ export class PiRuntime implements AgentRuntime {
 
   private getSettingsManager(workspace: string): SettingsManager {
     return this.settingsManager ??= SettingsManager.create(workspace, getAgentDir(), { projectTrusted: true });
-  }
-
-  private lastAssistantMessage(session: AgentSession, firstNewMessage: number): AssistantMessage | null {
-    for (let i = session.messages.length - 1; i >= firstNewMessage; i--) {
-      const message = session.messages[i];
-      if (message.role === 'assistant') return message;
-    }
-    return null;
   }
 
   private toUsage(message: AssistantMessage | null): ContainerChatUsage {

@@ -62,7 +62,8 @@ const providers: PiModelProfiles['providers'] = [
             { inputTokensAbove: 272_000, input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 0 },
           ],
         },
-        contextWindow: 1_000_000,
+        // 桥实测输入上限 922k (95 万回 400 model_max_prompt_tokens_exceeded, 2026-11-03)。
+        contextWindow: 922_000,
         maxTokens: 128_000,
         thinkingLevelMap: {
           off: null,
@@ -88,8 +89,9 @@ export const piAgentConfig = {
   provider: 'scott',
   model: 'gpt-5.6-sol',
   timeoutSeconds: 14_400,
-  // 自动压缩触发线。contextWindow(1M) 是模型真实上限, 只用于 max_tokens 夹取, 不能拿来调阈值;
-  // 200k 留在 gpt-5.6-sol 272k 长上下文计价档以下, 且单次往返不至于被几十万 token 拖慢。
-  compactionThresholdTokens: 200_000,
+  // 自动压缩触发线。contextWindow(922k) 是模型真实上限, 只用于 max_tokens 夹取, 不能拿来调阈值;
+  // 260k 留在 gpt-5.6-sol 272k 长上下文计价档以下。压缩后基线 (系统提示+工具+摘要+保留消息) 实测
+  // 7~13 万, 200k 只剩 7~13 万任务空间, 长任务一天压好几次, 故上调。
+  compactionThresholdTokens: 260_000,
   apiKey: "71d9d1918a48cc624c0bdb3c01af392624c10cd66fe6f6a2",
 } satisfies RuntimeConfig['pi_config'];
