@@ -67,7 +67,7 @@ describe('GET /api/me/runtime-config', () => {
             { inputTokensAbove: 272_000, input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 0 },
           ],
         },
-        contextWindow: 1_000_000,
+        contextWindow: 922_000,
         maxTokens: 128_000,
         thinkingLevelMap: {
           off: null,
