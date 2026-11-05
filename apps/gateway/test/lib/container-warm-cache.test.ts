@@ -99,6 +99,37 @@ describe('ensureContainerWarm', () => {
   });
 });
 
+/** 假时钟下的 AbortSignal.timeout + 尊重 signal 的 fetch: /health 在 delayMs 后才 200 (null = 永不响应)。 */
+const stubSlowHealth = (delayMs: number | null): void => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+    const c = new AbortController();
+    setTimeout(() => c.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), ms);
+    return c.signal;
+  });
+  vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+    const t = delayMs === null ? undefined : setTimeout(() => resolve(new Response(null, { status: 200 })), delayMs);
+    init?.signal?.addEventListener('abort', () => { clearTimeout(t); reject(init.signal?.reason); });
+  })) as unknown as typeof fetch);
+};
+
+describe('ensureContainerWarm 冷启动等待 (prod 2026-11-05 doro 附件失败)', () => {
+  it('冷启动 62s (镜像 2.46GB 实测 55~61s) 仍能唤醒成功', async () => {
+    stubSlowHealth(62_000);
+    const p = ensureContainerWarm('u1', URL);
+    const settled = p.then(() => 'ok', (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(await settled).toBe('ok');
+  });
+
+  it('容器始终不响应 → 有上限地失败 (ContainerWakeError), 不无限挂住', async () => {
+    stubSlowHealth(null);
+    const settled = ensureContainerWarm('u1', URL).then(() => 'ok', (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(await settled).toBeInstanceOf(ContainerWakeError);
+  });
+});
+
 describe('keepContainerWarm (心跳保活)', () => {
   it('每次都无条件 GET /health (不走 60s TTL dedupe)', async () => {
     const f = okFetch();

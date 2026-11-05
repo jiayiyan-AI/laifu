@@ -16,8 +16,10 @@ import { checkAndReconcileACA } from '../provisioning/reconcile.js';
 // ACA scale-to-zero cooldown 默认 5 min, 实测 8-10 min; 60s TTL 给 10x 安全余量,
 // 真冷启动只多 1 个 health 往返。
 const WARM_TTL_MS = 60_000;
-// ACA cold start P99 < 30s, 60s 留余量。
-const WAKE_TIMEOUT_MS = 60_000;
+// ACA 冷启动实测 55~61s (2026-10 起, 镜像 2.46GB / 1C2G), 旧值 60s 恰好卡线: 30 天 doro 飞书附件
+// 冷唤醒 51 次失败 / 16 次成功, gateway 放弃的那一刻容器刚 listening。150s 留 2.5x 余量,
+// 仍低于 ACA ingress 240s 上限; 真挂的容器照样有上限地失败。
+const WAKE_TIMEOUT_MS = 150_000;
 // wake_ms 超此阈值判定为真冷启动 (埋点 cold=true)。
 const COLD_THRESHOLD_MS = 1_500;
 
@@ -68,7 +70,7 @@ export const keepContainerWarm = (userId: string, containerUrl: string): void =>
 
 /**
  * 确保容器已唤醒。命中 60s warm-cache → 0 RTT 直接返回; 否则串行 GET /health,
- * 成功续 cache, 失败抛 ContainerWakeError (60s 还没起来的容器是真挂, 不再硬等)。
+ * 成功续 cache, 失败抛 ContainerWakeError (WAKE_TIMEOUT_MS 还没起来的容器是真挂, 不再硬等)。
  * 同 user 并发只折成一次 /health。
  */
 export const ensureContainerWarm = async (
